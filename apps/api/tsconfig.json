@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node", "vitest/globals"],
+
+    /* NestJS dùng decorator kiểu cũ và đọc metadata kiểu lúc runtime để làm DI. */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    /* Thuộc tính được gán qua DI/decorator nên trình biên dịch không thấy được. */
+    "strictPropertyInitialization": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

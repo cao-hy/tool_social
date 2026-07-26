@@ -1,0 +1,968 @@
+// SocialHub Manager — Prisma schema
+//
+// Nguyên tắc thiết kế (xem docs/ARCHITECTURE.md và docs/PROJECT_PLAN.md §7):
+//  1. MỌI bảng nghiệp vụ đều mang `workspaceId`, kể cả khi có thể suy ra qua
+//     join. Đây là điều kiện tiên quyết để enforce tenant isolation ở một chỗ
+//     duy nhất và để bật Postgres RLS về sau.
+//  2. ID dùng cuid, không dùng số tự tăng — không đoán được ID của tenant khác.
+//  3. Xóa mềm (`deletedAt`) cho dữ liệu chính; xóa cứng làm mất audit trail.
+//  4. Token luôn ở dạng đã mã hóa, kèm `encryptionKeyVersion` để rotate được.
+//  5. Metric luôn đi kèm `MetricSource` — không suy diễn ở tầng hiển thị.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================ ENUMS
+
+enum Platform {
+  FACEBOOK
+  INSTAGRAM
+  PINTEREST
+  YOUTUBE
+  TIKTOK
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  EDITOR
+  ANALYST
+  VIEWER
+}
+
+enum SocialAccountStatus {
+  CONNECTED
+  NEEDS_RECONNECT
+  DISCONNECTED
+  ERROR
+}
+
+enum PostStatus {
+  DRAFT
+  SCHEDULED
+  QUEUED
+  PROCESSING
+  PUBLISHED
+  PARTIALLY_PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+// Cố ý KHÔNG có PARTIALLY_PUBLISHED: khái niệm "một phần" chỉ tồn tại khi tổng
+// hợp nhiều nền tảng. Một bản đăng đơn lẻ thì hoặc thành công hoặc không.
+enum PlatformPostStatus {
+  PENDING
+  QUEUED
+  PROCESSING
+  PUBLISHED
+  FAILED
+  CANCELLED
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+}
+
+enum MediaStatus {
+  PENDING_UPLOAD
+  UPLOADED
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum CommentStatus {
+  OPEN
+  PENDING
+  RESOLVED
+}
+
+enum ReplyStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum MetricSource {
+  PLATFORM_API
+  DERIVED
+  UNSUPPORTED
+  NOT_SYNCED
+}
+
+enum NotificationType {
+  POST_PUBLISHED
+  POST_FAILED
+  TOKEN_EXPIRING
+  ACCOUNT_DISCONNECTED
+  NEW_COMMENT
+  COMMENT_UNANSWERED
+  RATE_LIMITED
+  SYNC_JOB_FAILED
+  COMMENT_ASSIGNED
+  MEMBER_INVITED
+}
+
+enum AuditAction {
+  USER_LOGIN
+  USER_LOGIN_FAILED
+  USER_LOGOUT
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  SOCIAL_ACCOUNT_CONNECTED
+  SOCIAL_ACCOUNT_DISCONNECTED
+  SOCIAL_TOKEN_REFRESHED
+  SOCIAL_TOKEN_ACCESSED
+  POST_CREATED
+  POST_UPDATED
+  POST_DELETED
+  POST_PUBLISHED
+  POST_SCHEDULED
+  COMMENT_REPLIED
+  COMMENT_DELETED
+  COMMENT_HIDDEN
+  MEMBER_INVITED
+  MEMBER_REMOVED
+  ROLE_CHANGED
+  OWNERSHIP_TRANSFERRED
+  WORKSPACE_SETTINGS_CHANGED
+  PERMISSION_DENIED
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  DEAD
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+// ============================================================ AUTH & USERS
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  avatarUrl     String?
+
+  // Null với tài khoản chỉ đăng nhập bằng OAuth. Hash bằng Argon2id.
+  passwordHash String?
+
+  // Dự trù cho 2FA ở phase sau — thêm cột từ đầu để tránh migration lớn
+  // trên bảng User khi đã có dữ liệu production.
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  accounts            Account[]
+  sessions            Session[]
+  memberships         WorkspaceMember[]
+  passwordResets      PasswordResetToken[]
+  auditLogs           AuditLog[]
+  notifications       Notification[]
+  createdPosts        ContentPost[]        @relation("PostCreator")
+  uploadedMedia       MediaAsset[]
+  sentReplies         CommentReply[]
+  assignedComments    CommentAssignment[]  @relation("AssignedTo")
+  assignedByComments  CommentAssignment[]  @relation("AssignedBy")
+  commentNotes        CommentNote[]
+  sentInvitations     WorkspaceInvitation[]
+
+  @@index([email])
+  @@index([deletedAt])
+}
+
+/// Tài khoản đăng nhập bên thứ ba (Google...). KHÔNG dùng cho social account
+/// của nền tảng mạng xã hội — cái đó là model SocialAccount.
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  provider          String
+  providerAccountId String
+  type              String
+  refreshToken      String? @db.Text
+  accessToken       String? @db.Text
+  expiresAt         Int?
+  tokenType         String?
+  scope             String?
+  idToken           String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+/// Database session, không phải JWT — để thu hồi được NGAY khi đăng xuất hoặc
+/// khi user bị gỡ khỏi workspace (ARCHITECTURE.md §8.1).
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expiresAt    DateTime
+  ipAddress    String?
+  userAgent    String?  @db.Text
+  createdAt    DateTime @default(now())
+  lastActiveAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+/// Token lưu ở dạng HASH (SECURITY.md §3) — rò rỉ DB không cho phép dùng lại.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ============================================================ WORKSPACE & TEAM
+
+model Workspace {
+  id       String  @id @default(cuid())
+  name     String
+  slug     String  @unique
+  imageUrl String?
+
+  /// Timezone dùng để hiển thị lịch và tính khoảng thời gian analytics.
+  /// Dữ liệu trong DB luôn là UTC (rủi ro R10).
+  timezone String @default("UTC")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  members        WorkspaceMember[]
+  invitations    WorkspaceInvitation[]
+  socialAccounts SocialAccount[]
+  contentPosts   ContentPost[]
+  platformPosts  PlatformPost[]
+  mediaAssets    MediaAsset[]
+  comments       Comment[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+  replyTemplates ReplyTemplate[]
+  commentTags    CommentTag[]
+  backgroundJobs BackgroundJob[]
+
+  @@index([slug])
+  @@index([deletedAt])
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        WorkspaceRole @default(VIEWER)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace   Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments CommentAssignment[]
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([workspaceId, role])
+}
+
+model WorkspaceInvitation {
+  id          String           @id @default(cuid())
+  workspaceId String
+  email       String
+  role        WorkspaceRole    @default(VIEWER)
+  tokenHash   String           @unique
+  status      InvitationStatus @default(PENDING)
+  invitedById String
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy User      @relation(fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, email, status])
+  @@index([workspaceId])
+  @@index([email])
+}
+
+// ============================================================ SOCIAL ACCOUNTS
+
+model SocialAccount {
+  id          String   @id @default(cuid())
+  workspaceId String
+  platform    Platform
+
+  /// ID tài khoản/user trên nền tảng.
+  externalAccountId String
+  /// ID của page/channel/board cụ thể — có nền tảng phân biệt hai cấp này.
+  externalPageId    String?
+
+  name      String
+  username  String?
+  avatarUrl String?
+  profileUrl String?
+
+  status           SocialAccountStatus @default(CONNECTED)
+  scopes           String[]
+  lastSyncedAt     DateTime?
+  lastErrorAt      DateTime?
+  lastErrorMessage String?             @db.Text
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  token           SocialToken?
+  platformPosts   PlatformPost[]
+  comments        Comment[]
+  metricSnapshots MetricSnapshot[]
+
+  @@unique([workspaceId, platform, externalAccountId, externalPageId])
+  @@index([workspaceId])
+  @@index([workspaceId, platform])
+  @@index([status])
+  @@index([deletedAt])
+}
+
+/// Tách khỏi SocialAccount có chủ đích (PROJECT_PLAN.md §7 ghi chú 3):
+/// áp quyền đọc chặt hơn, log riêng, và rotate khóa mã hóa mà không đụng
+/// bảng chính.
+///
+/// accessToken/refreshToken LUÔN ở dạng "version:iv:authTag:ciphertext"
+/// (AES-256-GCM). KHÔNG BAO GIỜ lưu plaintext ở đây.
+model SocialToken {
+  id              String @id @default(cuid())
+  socialAccountId String @unique
+
+  accessToken           String    @db.Text
+  refreshToken          String?   @db.Text
+  encryptionKeyVersion  String
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+
+  lastRefreshedAt    DateTime?
+  refreshFailedCount Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  /// Dùng cho job refresh token định kỳ và cho tiến trình rotate khóa.
+  @@index([accessTokenExpiresAt])
+  @@index([encryptionKeyVersion])
+}
+
+// ============================================================ MEDIA
+
+model MediaAsset {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  type   MediaType
+  status MediaStatus @default(PENDING_UPLOAD)
+
+  /// Key trong bucket. Sinh ngẫu nhiên, KHÔNG dùng tên file người dùng đặt
+  /// (SECURITY.md §7.2).
+  storageKey       String  @unique
+  originalFileName String?
+
+  /// MIME xác định bằng magic bytes ở bước xác nhận upload, không tin
+  /// Content-Type do client khai.
+  mimeType      String?
+  sizeBytes     Int?
+  width         Int?
+  height        Int?
+  durationSec   Float?
+  checksumSha256 String?
+
+  thumbnailKey String?
+  uploadedById String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy User?              @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  posts      ContentPostMedia[]
+
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+  @@index([deletedAt])
+}
+
+// ============================================================ CONTENT
+
+/// Một "bài đăng" ở góc nhìn người dùng: nội dung gốc, có thể đăng lên nhiều
+/// nền tảng. Trạng thái của nó được SUY RA từ các PlatformPost con
+/// (xem deriveContentPostStatus trong @socialhub/shared).
+model ContentPost {
+  id          String     @id @default(cuid())
+  workspaceId String
+  status      PostStatus @default(DRAFT)
+
+  /// Nội dung mặc định, dùng cho nền tảng nào không có caption riêng.
+  title       String?
+  body        String?    @db.Text
+  linkUrl     String?
+  hashtags    String[]
+
+  scheduledAt DateTime?
+  publishedAt DateTime?
+
+  createdById String
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy     User               @relation("PostCreator", fields: [createdById], references: [id])
+  platformPosts PlatformPost[]
+  media         ContentPostMedia[]
+  schedule      PostSchedule?
+
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, scheduledAt])
+  @@index([workspaceId, createdAt])
+  @@index([deletedAt])
+}
+
+/// Bảng nối, có thứ tự — thứ tự ảnh trong carousel là dữ liệu nghiệp vụ.
+model ContentPostMedia {
+  id            String @id @default(cuid())
+  contentPostId String
+  mediaAssetId  String
+  position      Int    @default(0)
+
+  contentPost ContentPost @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
+  mediaAsset  MediaAsset  @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([contentPostId, mediaAssetId])
+  @@index([contentPostId, position])
+}
+
+/// Một bản đăng lên MỘT nền tảng cụ thể. Có trạng thái ĐỘC LẬP với anh em của
+/// nó — đây là điều kiện để retry chỉ tác động lên nền tảng thất bại mà không
+/// đăng lại nền tảng đã thành công (rủi ro R9: double post).
+model PlatformPost {
+  id              String   @id @default(cuid())
+  workspaceId     String
+  contentPostId   String
+  socialAccountId String
+  platform        Platform
+
+  status PlatformPostStatus @default(PENDING)
+
+  /// Nội dung riêng cho nền tảng này; null nghĩa là dùng nội dung của ContentPost.
+  caption     String? @db.Text
+  title       String?
+  description String? @db.Text
+
+  /// ID bài đăng trên nền tảng. Có giá trị ngay khi publish thành công và là
+  /// lớp phòng thủ cuối cùng chống đăng trùng: có externalPostId nghĩa là đã
+  /// đăng rồi, tuyệt đối không gọi API publish lần nữa.
+  externalPostId String?
+  externalUrl    String?
+
+  publishedAt  DateTime?
+  attemptCount Int       @default(0)
+  lastAttemptAt DateTime?
+
+  errorCode    String?
+  errorMessage String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentPost     ContentPost      @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
+  socialAccount   SocialAccount    @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  metric          PostMetric?
+  metricSnapshots MetricSnapshot[]
+  comments        Comment[]
+
+  /// Chống lưu trùng khi sync lại: một externalPostId chỉ tồn tại một lần
+  /// trên mỗi social account.
+  @@unique([socialAccountId, externalPostId])
+  @@index([workspaceId])
+  @@index([contentPostId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, platform])
+  @@index([socialAccountId, publishedAt])
+}
+
+/// Tách khỏi ContentPost để giữ lịch sử thay đổi lịch (drag & drop trên
+/// calendar) và để job scheduler quét một bảng nhỏ thay vì quét ContentPost.
+model PostSchedule {
+  id            String @id @default(cuid())
+  contentPostId String @unique
+
+  scheduledAt DateTime
+  timezone    String   @default("UTC")
+
+  enqueuedAt  DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contentPost ContentPost @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
+
+  @@index([scheduledAt, enqueuedAt])
+}
+
+// ============================================================ METRICS
+
+/// Giá trị MỚI NHẤT của mỗi chỉ số (quan hệ 1-1 với PlatformPost).
+///
+/// Tồn tại song song với MetricSnapshot là CÓ CHỦ ĐÍCH (PROJECT_PLAN.md §7
+/// ghi chú 1): danh sách bài đăng cần sort theo views mà không phải aggregate
+/// toàn bộ chuỗi thời gian.
+///
+/// Mỗi chỉ số có cột `*Source` đi kèm. null + UNSUPPORTED nghĩa là nền tảng
+/// không cung cấp; null + NOT_SYNCED nghĩa là chưa đồng bộ. Cả hai KHÔNG BAO
+/// GIỜ được hiển thị thành 0.
+model PostMetric {
+  id             String @id @default(cuid())
+  platformPostId String @unique
+  workspaceId    String
+
+  views       Int?
+  viewsSource MetricSource @default(NOT_SYNCED)
+
+  likes       Int?
+  likesSource MetricSource @default(NOT_SYNCED)
+
+  comments       Int?
+  commentsSource MetricSource @default(NOT_SYNCED)
+
+  shares       Int?
+  sharesSource MetricSource @default(NOT_SYNCED)
+
+  reach       Int?
+  reachSource MetricSource @default(NOT_SYNCED)
+
+  impressions       Int?
+  impressionsSource MetricSource @default(NOT_SYNCED)
+
+  saves       Int?
+  savesSource MetricSource @default(NOT_SYNCED)
+
+  engagementRate       Float?
+  engagementRateSource MetricSource @default(NOT_SYNCED)
+
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  platformPost PlatformPost @relation(fields: [platformPostId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([workspaceId, views])
+  @@index([lastSyncedAt])
+}
+
+/// Chuỗi thời gian, append-only. Dùng để vẽ biểu đồ tăng trưởng.
+/// Gắn với PlatformPost (metric bài đăng) HOẶC SocialAccount (metric tài khoản
+/// như follower) — đúng một trong hai.
+model MetricSnapshot {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  platformPostId  String?
+  socialAccountId String?
+
+  capturedAt DateTime
+  /// Ngày mà số liệu này thuộc về (khác capturedAt khi nền tảng trả dữ liệu trễ).
+  metricDate DateTime @db.Date
+
+  views       Int?
+  likes       Int?
+  comments    Int?
+  shares      Int?
+  reach       Int?
+  impressions Int?
+  saves       Int?
+  followers   Int?
+
+  source MetricSource @default(PLATFORM_API)
+  /// Payload thô đã redact, giữ lại để đối chiếu khi nghi ngờ mapping sai.
+  raw    Json?
+
+  createdAt DateTime @default(now())
+
+  platformPost  PlatformPost?  @relation(fields: [platformPostId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount? @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  /// Idempotency cho job sync: chạy lại cùng một ngày không tạo bản ghi trùng.
+  @@unique([platformPostId, metricDate])
+  @@unique([socialAccountId, metricDate])
+  @@index([workspaceId, metricDate])
+  @@index([platformPostId, capturedAt])
+  @@index([socialAccountId, capturedAt])
+}
+
+// ============================================================ COMMENTS
+
+/// Comment lấy về TỪ nền tảng.
+///
+/// Phân biệt với CommentReply: model này là dữ liệu đọc được từ nền tảng
+/// (bao gồm cả reply của người khác, qua `parentId`), còn CommentReply là
+/// hành động TRẢ LỜI do người dùng hệ thống thực hiện — có vòng đời riêng
+/// (pending → sent → failed) vì nó là một lời gọi API có thể thất bại.
+model Comment {
+  id              String @id @default(cuid())
+  workspaceId     String
+  platformPostId  String
+  socialAccountId String
+  platform        Platform
+
+  externalCommentId String
+  parentId          String?
+
+  authorExternalId String?
+  authorName       String?
+  authorAvatarUrl  String?
+
+  message   String?  @db.Text
+  likeCount Int?
+  postedAt  DateTime
+
+  status     CommentStatus @default(OPEN)
+  isHidden   Boolean       @default(false)
+  isFromPage Boolean       @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  platformPost  PlatformPost        @relation(fields: [platformPostId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount       @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  parent        Comment?            @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  children      Comment[]           @relation("CommentThread")
+  replies       CommentReply[]
+  assignment    CommentAssignment?
+  tags          CommentTagOnComment[]
+  notes         CommentNote[]
+
+  /// Idempotency cho job sync-comments: chạy 2 lần không tạo bản ghi trùng.
+  @@unique([socialAccountId, externalCommentId])
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, platform])
+  @@index([platformPostId])
+  @@index([workspaceId, postedAt])
+  @@index([parentId])
+}
+
+/// Lời trả lời do NGƯỜI DÙNG HỆ THỐNG gửi đi. Có trạng thái vì đây là một lời
+/// gọi API ra ngoài và nó có thể thất bại (nền tảng không hỗ trợ, token hỏng,
+/// rate limit).
+model CommentReply {
+  id          String @id @default(cuid())
+  workspaceId String
+  commentId   String
+
+  message  String      @db.Text
+  status   ReplyStatus @default(PENDING)
+  sentById String
+
+  externalReplyId String?
+  sentAt          DateTime?
+  errorCode       String?
+  errorMessage    String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  sentBy  User    @relation(fields: [sentById], references: [id])
+
+  @@index([workspaceId])
+  @@index([commentId])
+  @@index([status])
+}
+
+model CommentAssignment {
+  id          String @id @default(cuid())
+  workspaceId String
+  commentId   String @unique
+
+  /// Chỉ gán được cho thành viên TRONG cùng workspace — ràng buộc này được
+  /// enforce ở tầng service; khóa ngoại tới WorkspaceMember để DB cũng chặn.
+  memberId     String
+  assignedToId String
+  assignedById String
+
+  assignedAt DateTime  @default(now())
+  resolvedAt DateTime?
+
+  comment    Comment         @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  member     WorkspaceMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  assignedTo User            @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: Cascade)
+  assignedBy User            @relation("AssignedBy", fields: [assignedById], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([assignedToId])
+  @@index([memberId])
+}
+
+model CommentTag {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  color       String @default("#6b7280")
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  comments  CommentTagOnComment[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model CommentTagOnComment {
+  commentId String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  comment Comment    @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  tag     CommentTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([commentId, tagId])
+  @@index([tagId])
+}
+
+model CommentNote {
+  id          String @id @default(cuid())
+  workspaceId String
+  commentId   String
+  authorId    String
+
+  body String @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  author  User    @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([commentId])
+  @@index([workspaceId])
+}
+
+model ReplyTemplate {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String
+  body        String @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+// ============================================================ OPS
+
+model Notification {
+  id          String @id @default(cuid())
+  workspaceId String
+  userId      String
+
+  type    NotificationType
+  title   String
+  body    String?          @db.Text
+  linkUrl String?
+  /// Ngữ cảnh bổ sung (postId, socialAccountId...). KHÔNG chứa secret.
+  data    Json?
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@index([workspaceId])
+  @@index([createdAt])
+}
+
+/// Append-only. KHÔNG có endpoint sửa/xóa (SECURITY.md §11).
+/// `before`/`after` đã đi qua redactSensitive() trước khi ghi.
+model AuditLog {
+  id          String  @id @default(cuid())
+  workspaceId String?
+  actorUserId String?
+
+  action       AuditAction
+  resourceType String?
+  resourceId   String?
+
+  actorIp        String?
+  actorUserAgent String? @db.Text
+  requestId      String?
+
+  before   Json?
+  after    Json?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  actor     User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action])
+  @@index([resourceType, resourceId])
+}
+
+/// Lưu raw event + chống xử lý trùng qua unique(platform, externalEventId).
+model WebhookEvent {
+  id       String   @id @default(cuid())
+  platform Platform
+
+  /// ID event do nền tảng cấp. Đây là hàng rào chống replay
+  /// (SECURITY.md §6 bước 4).
+  externalEventId String
+  eventType       String?
+
+  status       WebhookEventStatus @default(RECEIVED)
+  payload      Json
+  headers      Json?
+  signatureOk  Boolean            @default(false)
+
+  receivedAt   DateTime  @default(now())
+  processedAt  DateTime?
+  attemptCount Int       @default(0)
+  errorMessage String?   @db.Text
+
+  @@unique([platform, externalEventId])
+  @@index([status, receivedAt])
+  @@index([platform, receivedAt])
+}
+
+/// Theo dõi vòng đời job để có dead-letter, thống kê và điều tra sự cố.
+/// BullMQ giữ trạng thái trong Redis; bảng này là bản ghi bền vững tồn tại
+/// lâu hơn TTL của Redis.
+model BackgroundJob {
+  id          String  @id @default(cuid())
+  workspaceId String?
+
+  queueName String
+  jobId     String
+  status    JobStatus @default(QUEUED)
+
+  payload Json?
+  /// Số lần thử, để phân biệt lỗi thoáng qua với lỗi có hệ thống.
+  attempts   Int       @default(0)
+  maxAttempts Int      @default(1)
+
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  durationMs  Int?
+
+  errorCode    String?
+  errorMessage String? @db.Text
+  /// true khi đã hết retry và bị chuyển sang dead-letter.
+  isDead       Boolean @default(false)
+
+  correlationId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([queueName, jobId])
+  @@index([status, createdAt])
+  @@index([queueName, status])
+  @@index([workspaceId])
+  @@index([isDead])
+}
+
+/// Log mọi lời gọi ra platform API — phục vụ phân tích quota và điều tra sự cố
+/// (ARCHITECTURE.md §10). KHÔNG chứa token: `requestSummary` đã redact.
+model ApiRequestLog {
+  id              String  @id @default(cuid())
+  workspaceId     String?
+  socialAccountId String?
+  platform        Platform
+
+  method   String
+  endpoint String
+  /// Chỉ path + tên tham số, KHÔNG chứa giá trị của tham số nhạy cảm.
+  requestSummary String? @db.Text
+
+  statusCode Int?
+  durationMs Int?
+  success    Boolean @default(false)
+
+  errorCode    String?
+  errorMessage String? @db.Text
+
+  /// Quota còn lại do nền tảng báo — cho phép chủ động giảm tốc trước khi bị chặn.
+  rateLimitRemaining Int?
+  rateLimitResetAt   DateTime?
+
+  correlationId String?
+  createdAt     DateTime @default(now())
+
+  @@index([platform, createdAt])
+  @@index([socialAccountId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([success, createdAt])
+}

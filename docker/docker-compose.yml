@@ -1,0 +1,92 @@
+# Hạ tầng cho LOCAL DEVELOPMENT.
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# Cố ý CHỈ dựng hạ tầng (Postgres, Redis, MinIO), không dựng api/worker/web.
+# Ba app đó chạy trên host bằng `npm run dev` vì hot-reload nhanh hơn nhiều so
+# với chạy trong container, và đó là thứ ảnh hưởng trực tiếp tới tốc độ làm
+# việc hằng ngày. Dockerfile cho production nằm ở cùng thư mục này.
+
+name: socialhub
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: socialhub-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: socialhub
+      # Mật khẩu local, khớp với .env.example. KHÔNG dùng ở bất kỳ môi trường
+      # nào khác — production lấy secret từ secret manager (SECURITY.md §10).
+      POSTGRES_PASSWORD: socialhub_dev_password
+      POSTGRES_DB: socialhub
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # Healthcheck là bắt buộc, không phải trang trí: `depends_on` chỉ đợi
+      # container KHỞI ĐỘNG, không đợi Postgres SẴN SÀNG nhận kết nối.
+      test: ['CMD-SHELL', 'pg_isready -U socialhub -d socialhub']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: socialhub-redis
+    restart: unless-stopped
+    # appendonly: mất Redis = mất toàn bộ job đang chờ trong hàng đợi, bao gồm
+    # cả những bài đã lên lịch đăng. Persistence không phải tùy chọn.
+    command: redis-server --appendonly yes --appendfsync everysec
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: socialhub-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000' # S3 API
+      - '9001:9001' # Web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Tạo bucket một lần rồi thoát. Không có bước này, lần upload đầu tiên sẽ
+  # thất bại với lỗi "NoSuchBucket" rất khó đoán nguyên nhân.
+  minio-init:
+    image: minio/mc:latest
+    container_name: socialhub-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/socialhub-media &&
+      mc anonymous set none local/socialhub-media &&
+      echo 'Bucket socialhub-media đã sẵn sàng (private).'
+      "
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

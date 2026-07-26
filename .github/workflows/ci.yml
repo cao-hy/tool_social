@@ -1,0 +1,158 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  verify:
+    name: Typecheck · Lint · Test · Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: socialhub
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: socialhub_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U socialhub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cài dependency
+        run: npm ci
+
+      # Prisma cần DATABASE_URL để generate client, và các script db:* đọc file
+      # .env ở thư mục gốc. Tạo .env từ .env.example rồi ghi đè bằng giá trị của
+      # service container — không có secret thật nào ở đây.
+      - name: Chuẩn bị file môi trường
+        run: |
+          cp .env.example .env
+          {
+            echo "DATABASE_URL=postgresql://socialhub:ci_password@localhost:5432/socialhub_test?schema=public"
+            echo "REDIS_URL=redis://localhost:6379"
+            echo "ENCRYPTION_KEYS=v1:$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")"
+            echo "ENCRYPTION_ACTIVE_KEY=v1"
+          } >> .env
+
+      - name: Kiểm tra .env KHÔNG bị commit
+        run: |
+          if git ls-files --error-unmatch .env 2>/dev/null; then
+            echo "::error::.env đã bị commit vào repository. Xem SECURITY.md §10."
+            exit 1
+          fi
+          echo "OK: .env không nằm trong repository."
+
+      - name: Kiểm tra Prisma schema
+        run: npm run db:validate -w @socialhub/db
+
+      - name: Sinh Prisma client
+        run: npm run db:generate -w @socialhub/db
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Kiểm tra định dạng
+        run: npm run format:check
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:4000
+
+  security:
+    name: Quét bảo mật
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Cài dependency
+        run: npm ci
+
+      # Chỉ chặn ở mức high/critical. Đặt ngưỡng thấp hơn sẽ khiến CI đỏ liên
+      # tục vì lỗ hổng trong dev dependency, và đội ngũ sẽ học cách phớt lờ nó —
+      # đúng thứ mà một cổng bảo mật không được phép trở thành.
+      - name: Kiểm tra lỗ hổng dependency
+        run: npm audit --audit-level=high
+
+      - name: Quét secret bị commit
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Build image tốn thời gian; chỉ chạy trên PR và nhánh chính, không chạy
+    # cho mọi push nhánh phụ.
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image api
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          push: false
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build image worker
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/worker.Dockerfile
+          push: false
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker

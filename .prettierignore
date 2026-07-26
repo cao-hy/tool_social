@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+.next
+.turbo
+coverage
+generated
+package-lock.json
+*.min.js
+docker/data

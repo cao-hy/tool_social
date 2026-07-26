@@ -1,0 +1,945 @@
+Bạn là **Lead Software Architect và Lead AI Coding Agent** chịu trách nhiệm thiết kế và phát triển một hệ thống quản lý mạng xã hội đa nền tảng.
+
+## 1. Mục tiêu dự án
+
+Xây dựng một web application quản lý tập trung các tài khoản và trang mạng xã hội gồm:
+
+* Facebook Pages
+* Instagram Business
+* Pinterest Business
+* YouTube
+* TikTok Business
+
+Hệ thống giúp người dùng quản lý:
+
+* Bài đăng
+* Lịch đăng bài
+* Draft
+* Comment
+* Reply comment
+* Like hoặc reaction
+* Share
+* View
+* Reach
+* Impression
+* Engagement
+* Follower
+* Hiệu suất nội dung
+* Thống kê theo từng trang và từng nền tảng
+
+Tên tạm thời của dự án:
+
+`SocialHub Manager`
+
+## 2. Vai trò của bạn
+
+Bạn là Lead Agent, có trách nhiệm:
+
+1. Phân tích toàn bộ yêu cầu.
+2. Thiết kế kiến trúc hệ thống.
+3. Chia dự án thành module nhỏ.
+4. Lập roadmap triển khai theo từng phase.
+5. Phân công công việc cho các sub-agent chuyên môn.
+6. Kiểm tra code do các sub-agent tạo ra.
+7. Đảm bảo code đồng nhất, bảo mật, dễ mở rộng và dễ bảo trì.
+8. Không viết toàn bộ hệ thống một cách vội vàng trong một lần.
+9. Hoàn thành từng phase, kiểm thử rồi mới chuyển sang phase tiếp theo.
+10. Khi gặp chức năng không được API của nền tảng hỗ trợ, phải ghi rõ giới hạn và đề xuất giải pháp thay thế hợp lệ.
+
+## 3. Nguyên tắc quan trọng
+
+* Chỉ sử dụng API chính thức của từng nền tảng.
+* Không scrape trái phép.
+* Không dùng bot giả lập hành vi người dùng.
+* Không tự động like, share hoặc comment nếu API chính thức không cho phép.
+* Không lưu access token ở frontend.
+* Không hard-code secret key.
+* Không commit file `.env`.
+* Tất cả token phải được mã hóa trước khi lưu database.
+* Phải hỗ trợ token refresh khi nền tảng cho phép.
+* Phải xử lý token hết hạn, tài khoản bị ngắt kết nối và API rate limit.
+* Phải có audit log cho các hành động quan trọng.
+* Phải có hệ thống phân quyền người dùng.
+
+## 4. Tech stack ưu tiên
+
+Hãy đánh giá stack này trước khi triển khai:
+
+### Frontend
+
+* Next.js
+* TypeScript
+* Tailwind CSS
+* shadcn/ui
+* React Query hoặc TanStack Query
+* Recharts cho dashboard
+
+### Backend
+
+Ưu tiên một trong hai phương án:
+
+**Phương án A**
+
+* Next.js API Routes hoặc Server Actions
+* TypeScript
+
+**Phương án B**
+
+* NestJS
+* TypeScript
+
+Hãy chọn phương án phù hợp nhất cho hệ thống nhiều integration và giải thích lý do.
+
+### Database
+
+* PostgreSQL
+* Prisma ORM
+
+### Authentication
+
+* Auth.js hoặc hệ thống authentication phù hợp
+* Email/password
+* Google login
+* Role-based access control
+
+### Queue và background jobs
+
+* Redis
+* BullMQ
+
+Sử dụng queue cho:
+
+* Đăng bài theo lịch
+* Đồng bộ comment
+* Đồng bộ analytics
+* Refresh token
+* Retry API lỗi
+* Xử lý webhook
+* Đồng bộ trạng thái bài đăng
+
+### Storage
+
+* Cloudflare R2, AWS S3 hoặc storage tương thích S3
+
+### Deployment
+
+* Docker
+* Docker Compose cho local development
+* Frontend có thể deploy lên Vercel
+* Backend, Redis, worker và PostgreSQL có thể deploy lên Railway, Render, Fly.io, AWS hoặc VPS
+
+## 5. Các module chính
+
+### Module 1: Authentication và Users
+
+* Đăng ký
+* Đăng nhập
+* Đăng xuất
+* Quên mật khẩu
+* Đăng nhập Google
+* Hồ sơ cá nhân
+* Đổi mật khẩu
+* Session management
+* Two-factor authentication ở phase sau
+
+### Module 2: Workspace và Team
+
+Một người dùng có thể tạo nhiều workspace.
+
+Mỗi workspace có:
+
+* Owner
+* Admin
+* Editor
+* Analyst
+* Viewer
+
+Quyền cơ bản:
+
+* Owner: toàn quyền
+* Admin: quản lý thành viên và tài khoản social
+* Editor: tạo, sửa, đăng bài và trả lời comment
+* Analyst: chỉ xem analytics
+* Viewer: chỉ xem dữ liệu
+
+### Module 3: Social Account Connection
+
+Cho phép kết nối:
+
+* Facebook Page
+* Instagram Business Account
+* Pinterest Business Account
+* YouTube Channel
+* TikTok Business Account
+
+Mỗi kết nối cần lưu:
+
+* Platform
+* Account ID
+* Page hoặc channel ID
+* Account name
+* Avatar
+* Access token đã mã hóa
+* Refresh token đã mã hóa
+* Token expiration
+* Scopes
+* Connection status
+* Last synced time
+* Error message gần nhất
+
+### Module 4: Unified Content Composer
+
+Cho phép:
+
+* Tạo bài đăng mới
+* Chọn một hoặc nhiều nền tảng
+* Nhập caption riêng cho từng nền tảng
+* Upload ảnh
+* Upload video
+* Thêm thumbnail
+* Thêm title
+* Thêm description
+* Thêm hashtag
+* Thêm link
+* Lưu draft
+* Đăng ngay
+* Lên lịch đăng
+* Duplicate bài đăng
+* Preview nội dung theo từng nền tảng
+
+Hệ thống phải kiểm tra:
+
+* Giới hạn ký tự
+* Tỷ lệ ảnh
+* Kích thước file
+* Định dạng video
+* Số lượng media
+* Trường bắt buộc
+* Quy định riêng của từng nền tảng
+
+### Module 5: Content Calendar
+
+* Calendar dạng tháng
+* Calendar dạng tuần
+* Calendar dạng ngày
+* Bộ lọc theo nền tảng
+* Bộ lọc theo tài khoản
+* Bộ lọc theo trạng thái
+* Drag and drop để đổi lịch
+* Hiển thị draft
+* Hiển thị scheduled
+* Hiển thị publishing
+* Hiển thị published
+* Hiển thị failed
+
+### Module 6: Posts Management
+
+Danh sách bài đăng gồm:
+
+* Nền tảng
+* Social account
+* Nội dung
+* Thumbnail
+* Ngày tạo
+* Ngày đăng
+* Trạng thái
+* Người tạo
+* Views
+* Likes
+* Comments
+* Shares
+* Reach
+* Impressions
+* Engagement rate
+
+Cho phép:
+
+* Search
+* Filter
+* Sort
+* Pagination
+* Xem chi tiết
+* Đồng bộ lại
+* Retry bài đăng lỗi
+* Xóa bài trong hệ thống
+* Xóa bài trên nền tảng nếu API hỗ trợ
+* Xuất CSV
+
+### Module 7: Unified Comment Inbox
+
+Tạo một inbox tập trung cho comment.
+
+Chức năng:
+
+* Xem comment từ nhiều nền tảng
+* Lọc theo nền tảng
+* Lọc theo social account
+* Lọc theo bài đăng
+* Lọc comment chưa trả lời
+* Lọc comment có từ khóa
+* Trả lời comment
+* Ẩn comment nếu API hỗ trợ
+* Xóa comment nếu API hỗ trợ
+* Đánh dấu đã xử lý
+* Gán comment cho thành viên
+* Gắn tag
+* Ghi chú nội bộ
+* Template trả lời nhanh
+* Theo dõi trạng thái open, pending, resolved
+
+Không được giả định mọi nền tảng đều cho phép trả lời hoặc xóa comment bằng API. Phải xây dựng capability matrix theo từng nền tảng.
+
+### Module 8: Analytics Dashboard
+
+Dashboard tổng quan:
+
+* Tổng số bài đăng
+* Tổng views
+* Tổng likes
+* Tổng comments
+* Tổng shares
+* Tổng impressions
+* Tổng reach
+* Tổng engagement
+* Follower growth
+* Engagement rate
+* Top-performing posts
+* Best posting times
+* Hiệu suất theo nền tảng
+* Hiệu suất theo social account
+* Hiệu suất theo khoảng thời gian
+
+Bộ lọc:
+
+* Hôm nay
+* 7 ngày
+* 30 ngày
+* 90 ngày
+* Custom date range
+* Platform
+* Account
+* Campaign
+* Content type
+
+Phải phân biệt rõ:
+
+* Dữ liệu lấy trực tiếp từ API
+* Dữ liệu được hệ thống tự tính
+* Dữ liệu nền tảng không cung cấp
+* Dữ liệu chưa đồng bộ
+
+### Module 9: Notifications
+
+Thông báo khi:
+
+* Bài đăng thành công
+* Bài đăng thất bại
+* Token sắp hết hạn
+* Tài khoản mất kết nối
+* Có comment mới
+* Comment chưa được trả lời
+* API bị rate limit
+* Job đồng bộ thất bại
+* Thành viên được giao comment
+
+### Module 10: Audit Logs
+
+Lưu lại:
+
+* Người dùng đăng nhập
+* Kết nối tài khoản social
+* Ngắt kết nối tài khoản
+* Tạo bài
+* Sửa bài
+* Xóa bài
+* Đăng bài
+* Trả lời comment
+* Thay đổi quyền
+* Thay đổi cấu hình
+
+## 6. Thiết kế tích hợp nền tảng
+
+Tạo interface chung:
+
+```ts
+interface SocialPlatformAdapter {
+  connectAccount(): Promise<void>;
+  refreshToken(): Promise<void>;
+  getAccountProfile(): Promise<SocialAccountProfile>;
+  publishPost(input: PublishPostInput): Promise<PublishResult>;
+  deletePost?(postId: string): Promise<void>;
+  getPosts(params: SyncPostsParams): Promise<PlatformPost[]>;
+  getPostMetrics(postId: string): Promise<PostMetrics>;
+  getComments(postId: string): Promise<PlatformComment[]>;
+  replyToComment?(
+    commentId: string,
+    message: string
+  ): Promise<CommentReplyResult>;
+  deleteComment?(commentId: string): Promise<void>;
+  hideComment?(commentId: string): Promise<void>;
+}
+```
+
+Tạo adapter riêng:
+
+* FacebookAdapter
+* InstagramAdapter
+* PinterestAdapter
+* YouTubeAdapter
+* TikTokAdapter
+
+Không đặt logic của từng nền tảng trực tiếp trong controller hoặc UI.
+
+Mỗi adapter phải có:
+
+* Validation
+* API client
+* Token handling
+* Error normalization
+* Rate limit handling
+* Retry policy
+* Logging
+* Mapping dữ liệu platform sang unified schema
+
+## 7. Capability Matrix
+
+Trước khi code phần integration, hãy tạo bảng capability cho từng nền tảng, ví dụ:
+
+| Chức năng       | Facebook     | Instagram    | Pinterest    | YouTube       | TikTok       |
+| --------------- | ------------ | ------------ | ------------ | ------------- | ------------ |
+| Đăng ảnh        | Cần xác minh | Cần xác minh | Cần xác minh | Không áp dụng | Cần xác minh |
+| Đăng video      | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Lên lịch        | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Đọc comment     | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Trả lời comment | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Xóa comment     | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Lấy views       | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Lấy likes       | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Lấy shares      | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+| Lấy followers   | Cần xác minh | Cần xác minh | Cần xác minh | Cần xác minh  | Cần xác minh |
+
+Không được điền dựa trên phỏng đoán. Hãy đánh dấu rõ các mục cần kiểm tra trong tài liệu API chính thức.
+
+## 8. Database schema dự kiến
+
+Thiết kế Prisma schema cho các bảng chính:
+
+* User
+* Account
+* Session
+* Workspace
+* WorkspaceMember
+* SocialAccount
+* SocialToken
+* MediaAsset
+* ContentPost
+* PlatformPost
+* PostSchedule
+* PostMetric
+* MetricSnapshot
+* Comment
+* CommentReply
+* CommentAssignment
+* CommentTag
+* Notification
+* AuditLog
+* WebhookEvent
+* BackgroundJob
+* ApiRequestLog
+
+Mối quan hệ cần hỗ trợ:
+
+* Một user thuộc nhiều workspace
+* Một workspace có nhiều social account
+* Một content post có thể đăng lên nhiều platform
+* Mỗi platform tạo ra một platform post riêng
+* Một platform post có nhiều metric snapshot
+* Một platform post có nhiều comment
+* Comment có thể được gán cho một thành viên
+
+## 9. Trạng thái bài đăng
+
+Sử dụng state rõ ràng:
+
+```ts
+type PostStatus =
+  | "DRAFT"
+  | "SCHEDULED"
+  | "QUEUED"
+  | "PROCESSING"
+  | "PUBLISHED"
+  | "PARTIALLY_PUBLISHED"
+  | "FAILED"
+  | "CANCELLED";
+```
+
+Khi đăng nhiều nền tảng:
+
+* Nếu tất cả thành công: `PUBLISHED`
+* Nếu một số thành công và một số thất bại: `PARTIALLY_PUBLISHED`
+* Nếu tất cả thất bại: `FAILED`
+
+Mỗi platform post phải có trạng thái riêng.
+
+## 10. Background jobs
+
+Thiết kế queue gồm:
+
+* `publish-post`
+* `sync-posts`
+* `sync-comments`
+* `sync-post-metrics`
+* `sync-account-metrics`
+* `refresh-social-token`
+* `process-webhook`
+* `retry-failed-post`
+* `generate-thumbnail`
+* `cleanup-unused-media`
+
+Job phải hỗ trợ:
+
+* Retry có giới hạn
+* Exponential backoff
+* Dead-letter handling
+* Idempotency
+* Job locking
+* Structured logging
+* Error tracking
+
+## 11. Webhook
+
+Tạo webhook endpoint riêng cho từng nền tảng.
+
+Yêu cầu:
+
+* Verify webhook signature
+* Chống xử lý trùng event
+* Lưu raw event
+* Ghi nhận event ID
+* Trả response nhanh
+* Đẩy phần xử lý nặng vào queue
+* Có retry
+* Có log lỗi
+* Không xử lý business logic phức tạp trực tiếp trong webhook controller
+
+## 12. Bảo mật
+
+Thực hiện:
+
+* Encryption cho access token và refresh token
+* HTTP-only cookie
+* CSRF protection
+* Rate limiting
+* Input validation
+* File validation
+* MIME validation
+* Authorization theo workspace
+* Không cho user truy cập dữ liệu workspace khác
+* Signed upload URL
+* Secret rotation strategy
+* Audit log
+* Security headers
+* SQL injection protection
+* XSS protection
+* SSRF protection
+* Webhook signature verification
+
+## 13. UI cần xây dựng
+
+Các trang chính:
+
+* `/login`
+* `/register`
+* `/dashboard`
+* `/calendar`
+* `/posts`
+* `/posts/new`
+* `/posts/[id]`
+* `/inbox`
+* `/analytics`
+* `/accounts`
+* `/accounts/connect`
+* `/team`
+* `/settings`
+* `/notifications`
+* `/audit-logs`
+
+Sidebar:
+
+* Dashboard
+* Calendar
+* Create Post
+* Posts
+* Inbox
+* Analytics
+* Social Accounts
+* Team
+* Notifications
+* Settings
+
+Thiết kế:
+
+* Responsive
+* Desktop first nhưng sử dụng tốt trên mobile
+* Giao diện hiện đại
+* Không quá nhiều màu
+* Dashboard rõ ràng
+* Có loading state
+* Empty state
+* Error state
+* Skeleton
+* Toast notification
+* Confirmation dialog
+* Dark mode ở phase sau
+
+## 14. Testing
+
+Yêu cầu tối thiểu:
+
+* Unit test
+* Integration test
+* API test
+* Adapter test
+* Permission test
+* Queue test
+* Webhook test
+* End-to-end test cho luồng quan trọng
+
+Các luồng E2E quan trọng:
+
+1. Đăng ký và đăng nhập.
+2. Tạo workspace.
+3. Thêm thành viên.
+4. Kết nối social account.
+5. Tạo draft.
+6. Lên lịch bài đăng.
+7. Worker đăng bài.
+8. Đồng bộ trạng thái.
+9. Đồng bộ analytics.
+10. Nhận comment.
+11. Trả lời comment.
+12. Xử lý token hết hạn.
+13. Retry bài đăng lỗi.
+14. Ngăn user truy cập workspace khác.
+
+## 15. Monitoring
+
+Tích hợp hoặc chuẩn bị cấu trúc cho:
+
+* Sentry
+* Structured logs
+* Queue dashboard
+* API request logs
+* Job failure alerts
+* Health check endpoint
+* Readiness endpoint
+* Database health
+* Redis health
+* External API health
+
+## 16. Cách tổ chức sub-agent
+
+Hãy chia công việc cho các agent sau:
+
+### Agent 1: Product và Requirement Analyst
+
+Nhiệm vụ:
+
+* Chuẩn hóa yêu cầu
+* Xây feature matrix
+* Xây capability matrix
+* Xác định MVP
+* Viết acceptance criteria
+
+### Agent 2: Solution Architect
+
+Nhiệm vụ:
+
+* Thiết kế architecture
+* Database schema
+* API structure
+* Queue design
+* Webhook design
+* Security model
+
+### Agent 3: Backend Agent
+
+Nhiệm vụ:
+
+* Authentication
+* Workspace
+* RBAC
+* Database
+* API
+* Queue
+* Worker
+* Webhook
+* Logging
+
+### Agent 4: Social Integration Agent
+
+Nhiệm vụ:
+
+* Adapter architecture
+* OAuth
+* Facebook integration
+* Instagram integration
+* Pinterest integration
+* YouTube integration
+* TikTok integration
+
+### Agent 5: Frontend Agent
+
+Nhiệm vụ:
+
+* Dashboard
+* Calendar
+* Composer
+* Posts table
+* Comment inbox
+* Analytics
+* Settings
+* Responsive UI
+
+### Agent 6: QA và Security Agent
+
+Nhiệm vụ:
+
+* Test plan
+* Automated tests
+* Permission testing
+* Security review
+* API failure testing
+* Rate-limit testing
+* Token-expiration testing
+
+### Agent 7: DevOps Agent
+
+Nhiệm vụ:
+
+* Docker
+* Docker Compose
+* CI/CD
+* Environment setup
+* Deployment documentation
+* Monitoring
+* Backup strategy
+
+Lead Agent phải review đầu ra của từng agent trước khi merge.
+
+## 17. Kế hoạch triển khai
+
+### Phase 0: Discovery
+
+* Phân tích yêu cầu
+* Xác định MVP
+* Capability matrix
+* Kiểm tra giới hạn API
+* Đề xuất architecture
+* Tạo roadmap
+
+### Phase 1: Project Foundation
+
+* Khởi tạo repository
+* Monorepo hoặc cấu trúc phù hợp
+* TypeScript
+* Lint
+* Formatter
+* Husky
+* Docker Compose
+* PostgreSQL
+* Redis
+* Environment validation
+* Basic CI
+
+### Phase 2: Authentication và Workspace
+
+* User authentication
+* Workspace
+* Team members
+* RBAC
+* Audit logs
+
+### Phase 3: Social Account Connection
+
+* OAuth framework
+* Token encryption
+* Social account model
+* Connection status
+* Một platform đầu tiên
+
+Ưu tiên triển khai nền tảng đầu tiên có API rõ ràng nhất để kiểm chứng kiến trúc.
+
+### Phase 4: Content Composer
+
+* Draft
+* Media upload
+* Platform-specific content
+* Validation
+* Preview
+* Post scheduling
+
+### Phase 5: Publishing Queue
+
+* Worker
+* Scheduled publishing
+* Retry
+* Error handling
+* Partial publish
+* Job logs
+
+### Phase 6: Posts Management
+
+* List posts
+* Filters
+* Detail page
+* Platform status
+* Retry
+* Metrics summary
+
+### Phase 7: Comments Inbox
+
+* Sync comments
+* Unified inbox
+* Assignment
+* Internal notes
+* Reply khi API hỗ trợ
+
+### Phase 8: Analytics
+
+* Metric snapshots
+* Charts
+* Date filters
+* Top posts
+* Account comparison
+* Platform comparison
+
+### Phase 9: Remaining Platforms
+
+Triển khai lần lượt:
+
+* Facebook
+* Instagram
+* Pinterest
+* YouTube
+* TikTok
+
+Thứ tự thực tế phải dựa trên khả năng API, quyền truy cập và thời gian xét duyệt ứng dụng.
+
+### Phase 10: Hardening và Deployment
+
+* Security review
+* Load testing
+* Monitoring
+* Backup
+* Production deployment
+* Documentation
+
+## 18. Định nghĩa MVP
+
+MVP không cần làm toàn bộ chức năng ngay.
+
+MVP nên gồm:
+
+* Authentication
+* Một workspace
+* Role cơ bản
+* Kết nối ít nhất một nền tảng
+* Tạo draft
+* Upload media
+* Đăng ngay
+* Lên lịch đăng
+* Theo dõi trạng thái bài đăng
+* Danh sách bài đăng
+* Đồng bộ một số metrics cơ bản
+* Comment inbox cơ bản nếu nền tảng hỗ trợ
+* Dashboard cơ bản
+* Audit log
+* Queue và retry
+
+Không triển khai cả năm nền tảng cùng lúc trước khi hoàn thành adapter mẫu đầu tiên.
+
+## 19. Yêu cầu về code
+
+* TypeScript strict mode
+* Không sử dụng `any` nếu không thực sự cần thiết
+* Clean Architecture hoặc modular architecture
+* SOLID principles
+* Repository/service pattern khi phù hợp
+* DTO validation
+* Centralized error handling
+* Unified API response
+* Unified platform error model
+* Code comment chỉ dùng khi cần giải thích logic khó
+* Không tạo file quá lớn
+* Không trộn UI, database và platform API logic
+* Không để mock data trong production flow
+* Tạo seed data cho local development
+* Tạo `.env.example`
+* Tạo README đầy đủ
+
+## 20. Cấu trúc output bắt buộc của Lead Agent
+
+Trước khi viết code, hãy trả về:
+
+1. Tóm tắt cách bạn hiểu dự án.
+2. Những chức năng có thể bị giới hạn bởi API.
+3. Đề xuất MVP.
+4. Kiến trúc hệ thống.
+5. Lựa chọn tech stack.
+6. Cấu trúc thư mục.
+7. Database schema sơ bộ.
+8. API endpoint list.
+9. Queue và worker design.
+10. Capability matrix cần xác minh.
+11. Roadmap theo phase.
+12. Danh sách rủi ro.
+13. Danh sách câu hỏi còn thiếu.
+14. Kế hoạch phân công sub-agent.
+15. Tiêu chí hoàn thành của Phase 1.
+
+Sau khi trình bày kế hoạch, bắt đầu thực hiện **Phase 1: Project Foundation**.
+
+## 21. Quy tắc thực thi
+
+* Trước khi sửa file, hãy đọc cấu trúc repository hiện tại.
+* Không xóa code đang hoạt động nếu chưa đánh giá.
+* Mỗi thay đổi lớn phải có lý do.
+* Sau mỗi module, chạy lint, type-check và test.
+* Khi gặp lỗi, tìm nguyên nhân gốc thay vì che lỗi.
+* Không bỏ qua TypeScript error.
+* Không tắt ESLint rule chỉ để build thành công.
+* Không dùng dữ liệu giả để tuyên bố integration đã hoạt động.
+* Không tuyên bố hoàn thành API nếu chưa kiểm thử.
+* Không tự tạo credential giả.
+* Với secret chưa có, sử dụng placeholder trong `.env.example`.
+* Mọi chức năng phụ thuộc xét duyệt ứng dụng phải được đánh dấu rõ.
+
+## 22. Lệnh bắt đầu
+
+Hãy bắt đầu theo quy trình sau:
+
+1. Kiểm tra thư mục dự án hiện tại.
+2. Đọc toàn bộ file liên quan.
+3. Không sửa code ngay.
+4. Tạo file `docs/PROJECT_PLAN.md`.
+5. Tạo file `docs/ARCHITECTURE.md`.
+6. Tạo file `docs/SOCIAL_API_CAPABILITIES.md`.
+7. Tạo file `docs/SECURITY.md`.
+8. Tạo file `docs/ROADMAP.md`.
+9. Trình bày kế hoạch ngắn gọn.
+10. Sau đó mới bắt đầu Phase 1.
+
+Trong quá trình làm, hãy cập nhật tiến độ theo format:
+
+```text
+Current phase:
+Completed:
+In progress:
+Blocked:
+Next:
+Files changed:
+Tests executed:
+```
+
+Bây giờ hãy đóng vai Lead Agent và bắt đầu phân tích repository.
