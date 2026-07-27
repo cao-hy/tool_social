@@ -1,6 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { loadApiEnv } from '@socialhub/config';
-import { AdapterRegistry } from '@socialhub/platform-adapters';
+import { AdapterRegistry, createRuntimeAdapterRegistry } from '@socialhub/platform-adapters';
 import { Keyring } from '@socialhub/security';
 import { ENV, type ApiEnv } from './env.provider';
 import { PrismaService } from './prisma/prisma.service';
@@ -30,10 +30,17 @@ export const ADAPTER_REGISTRY = Symbol('ADAPTER_REGISTRY');
         Keyring.fromEnv(env.ENCRYPTION_KEYS, env.ENCRYPTION_ACTIVE_KEY),
     },
     {
-      // Registry rỗng ở Phase 1 — adapter thật được đăng ký từ Phase 3, sau khi
-      // capability matrix được xác minh (docs/SOCIAL_API_CAPABILITIES.md).
       provide: ADAPTER_REGISTRY,
-      useFactory: (): AdapterRegistry => new AdapterRegistry(),
+      inject: [ENV],
+      useFactory: (env: ApiEnv): AdapterRegistry =>
+        createRuntimeAdapterRegistry({
+          nodeEnv: env.NODE_ENV,
+          facebook: {
+            appId: env.FACEBOOK_APP_ID,
+            appSecret: env.FACEBOOK_APP_SECRET,
+            apiVersion: env.FACEBOOK_API_VERSION,
+          },
+        }),
     },
     PrismaService,
     RedisService,

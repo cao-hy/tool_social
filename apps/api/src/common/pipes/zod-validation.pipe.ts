@@ -1,5 +1,5 @@
 import { Injectable, type PipeTransform } from '@nestjs/common';
-import { ZodError, type ZodSchema } from 'zod';
+import { ZodError, type ZodType, type ZodTypeDef } from 'zod';
 import { AppError } from '../errors/app-error';
 
 /**
@@ -11,7 +11,7 @@ import { AppError } from '../errors/app-error';
  */
 @Injectable()
 export class ZodValidationPipe<T> implements PipeTransform<unknown, T> {
-  constructor(private readonly schema: ZodSchema<T>) {}
+  constructor(private readonly schema: ZodType<T, ZodTypeDef, unknown>) {}
 
   transform(value: unknown): T {
     try {
@@ -31,6 +31,6 @@ export class ZodValidationPipe<T> implements PipeTransform<unknown, T> {
   }
 }
 
-export function zodPipe<T>(schema: ZodSchema<T>): ZodValidationPipe<T> {
+export function zodPipe<T>(schema: ZodType<T, ZodTypeDef, unknown>): ZodValidationPipe<T> {
   return new ZodValidationPipe(schema);
 }

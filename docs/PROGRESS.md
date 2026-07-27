@@ -1,0 +1,53 @@
+# SocialHub Manager — Progress
+
+> Nhật ký tiến độ kỹ thuật. Cập nhật: 2026-07-28.
+
+## 2026-07-27
+
+- Phase 2 backend/frontend đã có: auth, workspace, RBAC, members, invitations, audit log.
+- Phase 3 khung OAuth đã được thêm:
+  - API quản lý social accounts theo workspace.
+  - OAuth state lưu Redis, TTL 10 phút, dùng một lần.
+  - PKCE được sinh và lưu cùng state.
+  - Token nền tảng được mã hóa AES-256-GCM qua keyring trước khi lưu `SocialToken`.
+  - Không endpoint nào trả access token/refresh token về frontend.
+  - Worker đã có processor `refresh-social-token` tối thiểu.
+  - UI `/accounts` hiển thị kết nối/ngắt social account và ghi rõ local dev đang dùng development fixture.
+  - Facebook Pages có adapter thật cho bước OAuth/connect: đổi authorization code lấy user token, đổi sang long-lived user token, lấy Page access token qua Graph API, rồi lưu token đã mã hóa.
+  - Khi cấu hình đủ `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_API_VERSION`, registry ưu tiên Facebook adapter thật; các nền tảng còn lại vẫn dùng development fixture trong local dev.
+- Chưa có smoke test end-to-end với credential thật. Capability matrix vẫn `UNVERIFIED` theo `SOCIAL_API_CAPABILITIES.md`; publish/read nâng cao chưa được tuyên bố là hỗ trợ thật.
+- Phase 4/5 lát MVP đã được thêm:
+  - API `posts`: tạo draft, cập nhật draft, chọn social accounts, publish ngay, lên lịch, retry platform post thất bại.
+  - UI `/posts/new`: composer text/link/hashtags, chọn social account, lưu draft, publish ngay, lên lịch.
+  - UI `/posts`: theo dõi queue/trạng thái từng `PlatformPost`, xem lỗi, retry.
+  - UI `/calendar`: xem các bài đã lên lịch.
+  - Draft CRUD đã đủ create/update/delete ở lát text composer:
+    - `PATCH /workspaces/:workspaceId/posts/:postId`
+    - `DELETE /workspaces/:workspaceId/posts/:postId`
+    - UI `/posts/[id]/edit`
+    - UI `/posts` có Edit/Delete; delete chỉ cho `DRAFT`, `FAILED`, `SCHEDULED`.
+  - Phase 3 UX/ops bổ sung:
+    - OAuth callback có timeout và redirect 303 về `/accounts` cho success/fail/timeout.
+    - UI `/accounts` hiển thị lỗi OAuth rõ hơn và có nút `Test connection`.
+    - Disconnect dọn token local, đánh dấu account disconnected, xóa token, hủy job refresh/publish pending liên quan.
+    - Remote revoke chỉ chạy nếu adapter cung cấp `revokeToken`; Facebook hiện chưa tuyên bố remote revoke vì hệ thống đang lưu Page access token, không lưu user permission token.
+  - Phase 4 media upload lát đầu:
+    - API tạo signed upload URL lên S3/MinIO.
+    - API confirm upload đọc lại object từ storage, xác định MIME bằng magic bytes, reject SVG.
+    - Ảnh được xử lý qua `sharp` để strip metadata/EXIF trước khi đánh dấu `READY`.
+    - Composer `/posts/new` upload trực tiếp bằng signed URL, confirm media, gắn media vào draft và preview local.
+    - Draft update giữ/gỡ media đã gắn.
+    - Duplicate post tạo bản nháp mới kèm targets và media.
+    - API trả signed read URL cho media `READY`; UI hiển thị preview ở Create/Edit/Posts/Calendar.
+    - Facebook adapter thật đã có publish ảnh: worker đọc bytes từ MinIO private. Một ảnh dùng trực tiếp `/{pageId}/photos` với `published=true`; nhiều ảnh upload unpublished rồi publish feed kèm `attached_media`.
+    - Facebook adapter có nhánh video cơ bản qua `/{pageId}/videos`; video lớn/resumable upload vẫn cần hardening thêm.
+  - Worker processor `publish-post`: chống đăng trùng bằng jobId + Redis lock + kiểm tra `externalPostId`, gọi adapter publish, cập nhật trạng thái cha/con, ghi audit + notification.
+  - Processor `publish-post` ghi `BackgroundJob` bền vững trong Postgres: `RUNNING`, `COMPLETED`, `FAILED`, `DEAD`, attempts, duration, error và correlation id.
+  - Worker đã có scheduled post scanner: định kỳ quét `PostSchedule` đã đến hạn hoặc sắp đến hạn và bù lại job `publish-post` theo cùng idempotent `jobId` nếu delayed job trong Redis bị mất.
+  - UI `/notifications` đã gọi API thật để xem notification do worker tạo, mark read một notification hoặc mark all.
+  - Frontend composer/edit đã có validation sớm cho rule publish hiện tại: cần target khi publish/schedule, cần text/link/media, media phải `READY`, Facebook không trộn ảnh/video và không publish nhiều video trong một bài.
+  - Với adapter dev fixture, publish end-to-end có thể thành công local. Với Facebook thật, publish text/link/ảnh đã đi qua adapter thật khi app/token có đủ quyền.
+- Phase 4/5 chưa đạt acceptance đầy đủ:
+  - Facebook media publish mới hỗ trợ ảnh và nhánh video đơn giản; chưa có resumable video upload, alt text, thumbnail video, hoặc cleanup ảnh tạm khi feed publish thất bại.
+  - Chưa có test tích hợp với DB thật cho toàn bộ processor publish/job log.
+  - Các E2E #4, #5, #6, #7, #8, #12, #13 chưa được tự động hóa đầy đủ trong repo; hiện mới có smoke test thủ công với credential thật cho Facebook.

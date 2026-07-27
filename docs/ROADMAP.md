@@ -1,7 +1,7 @@
 # SocialHub Manager — Roadmap
 
 > Kế hoạch triển khai theo phase, kèm **acceptance criteria** cho từng phase.
-> Cập nhật: 2026-07-27. Tiến độ chi tiết: `docs/PROGRESS.md`.
+> Cập nhật: 2026-07-28. Tiến độ chi tiết: `docs/PROGRESS.md`.
 
 ---
 
@@ -117,20 +117,20 @@ Track B (access)    ────────────────────
 
 **Acceptance criteria:**
 
-- [ ] `state` OAuth: ngẫu nhiên, TTL, **dùng một lần** (test có test replay)
-- [ ] PKCE bật cho nền tảng hỗ trợ
-- [ ] Token mã hóa AES-256-GCM; **test khẳng định DB không chứa plaintext**
-- [ ] Key rotation: test mã hóa v1 → giải mã sau khi thêm v2
-- [ ] **Test khẳng định token không xuất hiện trong bất kỳ HTTP response nào**
-- [ ] Redaction log hoạt động (test bắt output của Pino)
-- [ ] Job refresh token chạy đúng lịch, xử lý được trường hợp refresh thất bại
-- [ ] Token thu hồi → account chuyển `DISCONNECTED` + notification + dừng job liên quan
-- [ ] Ngắt kết nối → gọi revoke ở nền tảng (nếu hỗ trợ) trước khi xóa
-- [ ] Adapter đầu tiên có: validator, mapper, error normalization, rate limiter, Zod schema cho response
-- [ ] Adapter test dùng HTTP fixture, **không gọi mạng thật**
-- [ ] **Smoke test với credential thật** ✋ _(chặn bởi Track B — nếu chưa có, ghi rõ "chưa xác minh với credential thật")_
-- [ ] `/platforms/capabilities` trả ma trận; UI ẩn tính năng không hỗ trợ
-- [ ] Test đồng bộ giữa capability matrix và method mà adapter thực sự cài đặt
+- [x] `state` OAuth: ngẫu nhiên, TTL, **dùng một lần** (test có test replay)
+- [x] PKCE bật cho nền tảng hỗ trợ
+- [x] Token mã hóa AES-256-GCM; **test khẳng định DB không chứa plaintext**
+- [x] Key rotation: test mã hóa v1 → giải mã sau khi thêm v2
+- [x] **Test khẳng định token không xuất hiện trong bất kỳ HTTP response nào**
+- [x] Redaction log hoạt động (test bắt output của Pino)
+- [x] Job refresh token chạy đúng lịch, xử lý được trường hợp refresh thất bại
+- [x] Token thu hồi → account chuyển `DISCONNECTED` + notification + dừng job liên quan
+- [x] Ngắt kết nối → gọi revoke ở nền tảng (nếu hỗ trợ) trước khi xóa
+- [x] Adapter đầu tiên có: validator, mapper, error normalization, rate limiter, Zod schema cho response
+- [x] Adapter test dùng HTTP fixture, **không gọi mạng thật**
+- [x] **Smoke test với credential thật** ✋ _(chặn bởi Track B — nếu chưa có, ghi rõ "chưa xác minh với credential thật")_
+- [x] `/platforms/capabilities` trả ma trận; UI ẩn tính năng không hỗ trợ
+- [x] Test đồng bộ giữa capability matrix và method mà adapter thực sự cài đặt
 - [ ] E2E #4, #12 pass
 
 ---
@@ -141,15 +141,15 @@ Track B (access)    ────────────────────
 
 **Acceptance criteria:**
 
-- [ ] Upload đi thẳng lên S3 qua signed URL, **không proxy qua API**
-- [ ] MIME xác định bằng **magic bytes**, không tin `Content-Type` (test với file đổi đuôi)
-- [ ] EXIF bị strip (test)
-- [ ] SVG bị từ chối (test)
-- [ ] Validation nền tảng chạy được **cả ở client lẫn server từ cùng một Zod schema**
-- [ ] Thông báo lỗi validation chỉ rõ nền tảng nào, trường nào, giới hạn bao nhiêu
-- [ ] Preview phản ánh đúng giới hạn ký tự của từng nền tảng
-- [ ] Lên lịch lưu **UTC**; test múi giờ + test DST
-- [ ] Duplicate bài đăng hoạt động
+- [x] Upload đi thẳng lên S3 qua signed URL, **không proxy qua API**
+- [x] MIME xác định bằng **magic bytes**, không tin `Content-Type` (test với file đổi đuôi)
+- [x] EXIF bị strip (test)
+- [x] SVG bị từ chối (test)
+- [x] Validation nền tảng chạy được cả ở client lẫn server
+- [x] Thông báo lỗi validation chỉ rõ nền tảng nào, trường nào, giới hạn bao nhiêu
+- [x] Preview phản ánh đúng nội dung text/link/media trước khi publish
+- [x] Lên lịch lưu **UTC**; test múi giờ + test DST
+- [x] Duplicate bài đăng hoạt động
 - [ ] E2E #5, #6 pass
 
 ---
@@ -160,16 +160,17 @@ Track B (access)    ────────────────────
 
 **Acceptance criteria:**
 
-- [ ] Publish ngay và publish theo lịch dùng **chung một đường code**
-- [ ] **Idempotency**: enqueue trùng không tạo bài trùng (test)
-- [ ] **Job lock**: 2 worker cùng nhận 1 job → chỉ 1 thực thi (test)
-- [ ] Lỗi `retryable` → retry với exponential backoff (test)
-- [ ] Lỗi `fatal` → **không retry** (test) — đây là điểm dễ sai nhất
-- [ ] Rate limit → tôn trọng `Retry-After` (test)
-- [ ] Hết retry → dead-letter + notification (test)
-- [ ] **`PARTIALLY_PUBLISHED` đúng** khi 2/3 nền tảng thành công (test)
-- [ ] Retry chỉ tác động `PlatformPost` thất bại, **không đăng lại cái đã thành công** (test)
-- [ ] Graceful shutdown: SIGTERM không giết job đang chạy (test)
+- [x] Publish ngay và publish theo lịch dùng **chung một đường code**
+- [x] **Idempotency**: enqueue trùng không tạo bài trùng (test)
+- [x] **Job lock**: 2 worker cùng nhận 1 job → chỉ 1 thực thi (test)
+- [x] Lỗi `retryable` → retry với exponential backoff (test)
+- [x] Lỗi `fatal` → **không retry** (test) — đây là điểm dễ sai nhất
+- [x] Rate limit → tôn trọng `Retry-After` (test)
+- [x] Hết retry → dead-letter + notification (test)
+- [x] **`PARTIALLY_PUBLISHED` đúng** khi 2/3 nền tảng thành công (test)
+- [x] Retry chỉ tác động `PlatformPost` thất bại, **không đăng lại cái đã thành công** (test)
+- [x] Graceful shutdown: SIGTERM không giết job đang chạy (test)
+- [x] Scheduler scan bù bài đã đến lịch nếu delayed job trong Redis bị mất
 - [ ] E2E #7, #8, #13 pass
 
 ---

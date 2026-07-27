@@ -6,6 +6,7 @@ import { useEffect, type ReactNode } from 'react';
 import { CURRENT_PHASE, isAvailable, NAV_ITEMS } from '@/lib/navigation';
 import { useAuth } from '@/lib/auth-store';
 import { SecondaryButton, SelectInput } from './form-controls';
+import { NotificationToasts } from './notification-toasts';
 import { RoleBadge } from './role-badge';
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -107,6 +108,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <main className="min-w-0 px-5 py-6 sm:px-8 lg:px-10">{children}</main>
+      <NotificationToasts />
     </div>
   );
 }

@@ -22,7 +22,7 @@ export async function createApp(env: ApiEnv): Promise<NestFastifyApplication> {
     AppModule,
     new FastifyAdapter({
       trustProxy: env.TRUST_PROXY,
-      bodyLimit: 2 * 1024 * 1024,
+      bodyLimit: 110 * 1024 * 1024,
       // Cần cho webhook: chữ ký được tính trên byte thô (SECURITY.md §6 bước 1).
       // Route webhook sẽ đăng ký content-type parser riêng ở Phase 3.
       genReqId: () => undefined as unknown as string,
@@ -33,6 +33,22 @@ export async function createApp(env: ApiEnv): Promise<NestFastifyApplication> {
   app.setGlobalPrefix(API_PREFIX, { exclude: UNVERSIONED_ROUTES });
 
   const fastify = app.getHttpAdapter().getInstance();
+
+  fastify.addContentTypeParser(
+    [
+      'application/octet-stream',
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'video/mp4',
+      'video/quicktime',
+      'video/webm',
+    ],
+    { parseAs: 'buffer', bodyLimit: 100 * 1024 * 1024 },
+    (_request, body, done) => {
+      done(null, body);
+    },
+  );
 
   fastify.addHook('onRequest', (request: FastifyRequest, reply: FastifyReply, done: () => void) => {
     attachRequestId(request, reply);

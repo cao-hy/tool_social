@@ -6,6 +6,7 @@ const { loadEnvConfig } = nextEnv;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 loadEnvConfig(repoRoot);
 const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+const storageBaseUrl = process.env.S3_ENDPOINT ?? 'http://localhost:9000';
 
 /**
  * Security headers — SECURITY.md §9.
@@ -20,6 +21,27 @@ const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:400
  * CSP script strict hoàn toàn.
  */
 const isDevelopment = process.env.NODE_ENV !== 'production';
+const devConnectSources = [
+  "'self'",
+  'http://localhost:3000',
+  'ws://localhost:3000',
+  apiBaseUrl,
+  storageBaseUrl,
+  'http://127.0.0.1:3000',
+  'ws://127.0.0.1:3000',
+  'http://127.0.0.1:4000',
+  'http://127.0.0.1:9000',
+  'https:',
+].join(' ');
+const devMediaSources = [
+  "'self'",
+  'data:',
+  'blob:',
+  storageBaseUrl,
+  'http://localhost:9000',
+  'http://127.0.0.1:9000',
+  'https:',
+].join(' ');
 
 const csp = [
   "default-src 'self'",
@@ -29,11 +51,10 @@ const csp = [
   isDevelopment
     ? "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
     : "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https:",
+  isDevelopment ? `img-src ${devMediaSources}` : "img-src 'self' data: blob: https:",
+  isDevelopment ? `media-src ${devMediaSources}` : "media-src 'self' blob: https:",
   isDevelopment ? "font-src 'self' data: https://fonts.gstatic.com" : "font-src 'self' data:",
-  isDevelopment
-    ? "connect-src 'self' http://localhost:3000 ws://localhost:3000 http://localhost:4000 https:"
-    : "connect-src 'self' http://localhost:4000 https:",
+  isDevelopment ? `connect-src ${devConnectSources}` : "connect-src 'self' https:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

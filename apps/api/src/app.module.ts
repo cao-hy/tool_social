@@ -6,6 +6,10 @@ import { InfrastructureModule } from './infrastructure/infrastructure.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { PlatformsModule } from './modules/platforms/platforms.module';
+import { MediaModule } from './modules/media/media.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { PostsModule } from './modules/posts/posts.module';
+import { SocialAccountsModule } from './modules/social-accounts/social-accounts.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 
 /**
@@ -17,7 +21,17 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module';
  * thêm từ Phase 2 trở đi — xem docs/ROADMAP.md.
  */
 @Module({
-  imports: [InfrastructureModule, HealthModule, PlatformsModule, AuthModule, WorkspacesModule],
+  imports: [
+    InfrastructureModule,
+    HealthModule,
+    PlatformsModule,
+    AuthModule,
+    WorkspacesModule,
+    SocialAccountsModule,
+    MediaModule,
+    PostsModule,
+    NotificationsModule,
+  ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },

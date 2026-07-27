@@ -77,6 +77,31 @@ const platformOAuthSchema = z.object({
   TIKTOK_CLIENT_SECRET: z.string().optional(),
 });
 
+function validatePlatformOAuth(
+  env: z.infer<typeof platformOAuthSchema>,
+  ctx: z.RefinementCtx,
+): void {
+  const facebookValues = [
+    ['FACEBOOK_APP_ID', env.FACEBOOK_APP_ID],
+    ['FACEBOOK_APP_SECRET', env.FACEBOOK_APP_SECRET],
+    ['FACEBOOK_API_VERSION', env.FACEBOOK_API_VERSION],
+  ] as const;
+  const hasAnyFacebook = facebookValues.some(([, value]) => Boolean(value));
+  const hasAllFacebook = facebookValues.every(([, value]) => Boolean(value));
+
+  if (hasAnyFacebook && !hasAllFacebook) {
+    for (const [name, value] of facebookValues) {
+      if (value) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message:
+          'Bật Facebook adapter thật cần cấu hình đủ FACEBOOK_APP_ID, FACEBOOK_APP_SECRET và FACEBOOK_API_VERSION.',
+      });
+    }
+  }
+}
+
 /* ------------------------------------------------------------------- apps */
 
 export const apiEnvSchema = z
@@ -107,6 +132,7 @@ export const apiEnvSchema = z
   .merge(observabilitySchema)
   .merge(platformOAuthSchema)
   .superRefine((env, ctx) => {
+    validatePlatformOAuth(env, ctx);
     if (env.NODE_ENV !== 'production') return;
 
     if (!env.API_BASE_URL.startsWith('https://')) {
@@ -155,7 +181,8 @@ export const workerEnvSchema = z
   .merge(encryptionSchema)
   .merge(storageSchema)
   .merge(observabilitySchema)
-  .merge(platformOAuthSchema);
+  .merge(platformOAuthSchema)
+  .superRefine(validatePlatformOAuth);
 
 export type WorkerEnv = z.infer<typeof workerEnvSchema>;
 

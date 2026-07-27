@@ -47,6 +47,11 @@ export interface TokenSet {
   refreshTokenExpiresAt?: Date;
   scopes: string[];
   tokenType?: string;
+  /**
+   * Một số nền tảng trả đủ profile account ngay trong bước đổi token.
+   * Service dùng field này để tránh gọi thêm mạng trong OAuth callback.
+   */
+  accountProfile?: SocialAccountProfile;
 }
 
 export interface AuthUrlInput {
@@ -72,6 +77,11 @@ export interface MediaInput {
   type: MediaType;
   /** URL tải được của media. Xem lưu ý về bucket private trong docs §7. */
   url: string;
+  /**
+   * Bytes của media khi adapter cần upload binary trực tiếp lên nền tảng.
+   * Bắt buộc với storage private/local vì nền tảng không thể fetch URL nội bộ.
+   */
+  bytes?: Uint8Array;
   mimeType: string;
   sizeBytes: number;
   width?: number;

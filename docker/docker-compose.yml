@@ -59,6 +59,8 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+      # Cho phép frontend local PUT file trực tiếp bằng signed URL.
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:3000,http://127.0.0.1:3000
     ports:
       - '9000:9000' # S3 API
       - '9001:9001' # Web console
@@ -78,13 +80,14 @@ services:
     depends_on:
       minio:
         condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin &&
-      mc mb --ignore-existing local/socialhub-media &&
-      mc anonymous set none local/socialhub-media &&
-      echo 'Bucket socialhub-media đã sẵn sàng (private).'
-      "
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/socialhub-media &&
+        mc anonymous set none local/socialhub-media &&
+        echo 'Bucket socialhub-media đã sẵn sàng (private).'
 
 volumes:
   postgres-data:

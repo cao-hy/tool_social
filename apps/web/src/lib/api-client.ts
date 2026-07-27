@@ -3,6 +3,11 @@ import type { WorkspaceRole } from '@socialhub/shared';
 import type {
   AuditLogItem,
   AuthPayload,
+  OAuthStartResult,
+  ContentPostView,
+  MediaAssetView,
+  NotificationView,
+  SocialAccountView,
   WorkspaceInvitation,
   WorkspaceMember,
   WorkspaceSummary,
@@ -121,4 +126,137 @@ export const workspaceApi = {
     }),
   auditLogs: (workspaceId: string) =>
     apiFetch<{ items: AuditLogItem[] }>(`/workspaces/${workspaceId}/audit-logs`),
+};
+
+export const socialAccountsApi = {
+  list: (workspaceId: string) =>
+    apiFetch<{ items: SocialAccountView[] }>(`/workspaces/${workspaceId}/social-accounts`),
+  startOAuth: (workspaceId: string, platform: string) =>
+    apiFetch<OAuthStartResult>(
+      `/workspaces/${workspaceId}/social-accounts/oauth/${platform}/authorize`,
+      { method: 'POST' },
+    ),
+  disconnect: (workspaceId: string, socialAccountId: string) =>
+    apiFetch<{ disconnected: true }>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}`,
+      { method: 'DELETE' },
+    ),
+  testConnection: (workspaceId: string, socialAccountId: string) =>
+    apiFetch<{ ok: true; checkedAt: string; profile: { name: string; username?: string } }>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/test`,
+      { method: 'POST' },
+    ),
+};
+
+export const notificationsApi = {
+  list: (workspaceId: string, query?: { unreadOnly?: boolean; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (query?.unreadOnly !== undefined) params.set('unreadOnly', String(query.unreadOnly));
+    if (query?.limit) params.set('limit', String(query.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return apiFetch<{ items: NotificationView[] }>(
+      `/workspaces/${workspaceId}/notifications${suffix}`,
+    );
+  },
+  markRead: (workspaceId: string, notificationId: string) =>
+    apiFetch<{ updated: number }>(
+      `/workspaces/${workspaceId}/notifications/${notificationId}/read`,
+      { method: 'PATCH' },
+    ),
+  markAllRead: (workspaceId: string) =>
+    apiFetch<{ updated: number }>(`/workspaces/${workspaceId}/notifications/read-all`, {
+      method: 'PATCH',
+    }),
+};
+
+export const mediaApi = {
+  createUpload: (
+    workspaceId: string,
+    input: { fileName: string; sizeBytes: number; declaredMimeType: string },
+  ) =>
+    apiFetch<{ mediaAsset: MediaAssetView; uploadUrl: string; expiresInSeconds: number }>(
+      `/workspaces/${workspaceId}/media/uploads`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  confirmUpload: (workspaceId: string, mediaAssetId: string) =>
+    apiFetch<MediaAssetView>(`/workspaces/${workspaceId}/media/${mediaAssetId}/confirm`, {
+      method: 'POST',
+    }),
+  uploadObject: (workspaceId: string, mediaAssetId: string, file: File) =>
+    apiFetch<{ uploaded: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}/object`, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    }),
+};
+
+export const postsApi = {
+  list: (workspaceId: string, query?: { status?: string; platform?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (query?.status) params.set('status', query.status);
+    if (query?.platform) params.set('platform', query.platform);
+    if (query?.limit) params.set('limit', String(query.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return apiFetch<{ items: ContentPostView[] }>(`/workspaces/${workspaceId}/posts${suffix}`);
+  },
+  get: (workspaceId: string, postId: string) =>
+    apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}`),
+  create: (
+    workspaceId: string,
+    input: {
+      title?: string;
+      body?: string;
+      linkUrl?: string;
+      hashtags: string[];
+      socialAccountIds: string[];
+      mediaAssetIds?: string[];
+      scheduledAt?: string;
+    },
+  ) =>
+    apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  publish: (workspaceId: string, postId: string, socialAccountIds?: string[]) =>
+    apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}/publish`, {
+      method: 'POST',
+      body: JSON.stringify({ socialAccountIds }),
+    }),
+  schedule: (
+    workspaceId: string,
+    postId: string,
+    input: { scheduledAt: string; socialAccountIds?: string[] },
+  ) =>
+    apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}/schedule`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  retry: (workspaceId: string, postId: string) =>
+    apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}/retry`, {
+      method: 'POST',
+    }),
+  duplicate: (workspaceId: string, postId: string) =>
+    apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}/duplicate`, {
+      method: 'POST',
+    }),
+  update: (
+    workspaceId: string,
+    postId: string,
+    input: {
+      title?: string;
+      body?: string;
+      linkUrl?: string;
+      hashtags?: string[];
+      socialAccountIds?: string[];
+      mediaAssetIds?: string[];
+    },
+  ) =>
+    apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  delete: (workspaceId: string, postId: string) =>
+    apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/posts/${postId}`, {
+      method: 'DELETE',
+    }),
 };

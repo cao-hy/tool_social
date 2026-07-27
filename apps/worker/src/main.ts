@@ -1,8 +1,18 @@
 import { createServer, type Server } from 'node:http';
+import { S3Client } from '@aws-sdk/client-s3';
 import { loadEnvOrExit, loadWorkerEnv, type WorkerEnv } from '@socialhub/config';
+import { AdapterRegistry, createRuntimeAdapterRegistry } from '@socialhub/platform-adapters';
+import { Keyring } from '@socialhub/security';
 import Redis from 'ioredis';
 import { logger } from './logger';
+import { createPublishPostProcessor } from './processors/publish-post';
+import {
+  createRefreshSocialTokenProcessor,
+  createWorkerPrisma,
+} from './processors/refresh-social-token';
+import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
+import { startScheduledPostScanner } from './schedulers/scheduled-post-scanner';
 
 /**
  * Worker chạy như một process riêng, KHÔNG phải một phần của HTTP API.
@@ -28,13 +38,31 @@ async function main(): Promise<void> {
   const registry = new QueueRegistry(connection, env.WORKER_CONCURRENCY_MULTIPLIER);
   registry.createQueues();
 
-  // Phase 1 CỐ Ý chưa đăng ký processor nghiệp vụ nào. Mục tiêu của phase này
-  // là chứng minh hạ tầng queue chạy được: kết nối Redis, cấu hình retry, tắt
-  // êm. Processor thật đến ở Phase 5 (docs/ROADMAP.md).
-  logger.warn(
-    { queues: registry.getQueueNames().length },
-    'Worker chạy ở chế độ hạ tầng — chưa có processor nghiệp vụ (Phase 1)',
+  const prisma = createWorkerPrisma(env.DATABASE_URL, env.LOG_LEVEL === 'trace');
+  await prisma.$connect();
+  const keyring = Keyring.fromEnv(env.ENCRYPTION_KEYS, env.ENCRYPTION_ACTIVE_KEY);
+  const adapters = createAdapterRegistry(env);
+  const locks = new JobLockService(connection);
+  const storage = createStorageClient(env);
+
+  registry.registerWorker(
+    'publish-post',
+    createPublishPostProcessor({ prisma, keyring, adapters, locks, storage }),
   );
+  registry.registerWorker(
+    'retry-failed-post',
+    createPublishPostProcessor({ prisma, keyring, adapters, locks, storage }),
+  );
+  registry.registerWorker(
+    'refresh-social-token',
+    createRefreshSocialTokenProcessor({ prisma, keyring, adapters }),
+  );
+  const scheduledPostScanner = startScheduledPostScanner({
+    prisma,
+    publishQueue: registry.getQueue('publish-post'),
+    enabled: env.SCHEDULER_ENABLED,
+  });
+  logger.info({ workers: registry.getWorkerCount() }, 'Đã đăng ký processor Phase 3');
 
   const healthServer = startHealthServer(env, registry, connection);
 
@@ -43,8 +71,10 @@ async function main(): Promise<void> {
     shuttingDown = true;
 
     logger.info({ signal }, 'Nhận tín hiệu dừng');
+    scheduledPostScanner.stop();
     healthServer.close();
     await registry.shutdown(30_000);
+    await prisma.$disconnect();
     await connection.quit().catch(() => connection.disconnect());
     logger.info('Worker đã dừng');
     process.exit(0);
@@ -58,6 +88,32 @@ async function main(): Promise<void> {
   });
 
   logger.info({ port: env.WORKER_HEALTH_PORT }, 'Worker sẵn sàng');
+}
+
+function createStorageClient(env: WorkerEnv): { client: S3Client; bucket: string } {
+  return {
+    bucket: env.S3_BUCKET,
+    client: new S3Client({
+      endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+      forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      credentials: {
+        accessKeyId: env.S3_ACCESS_KEY_ID,
+        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+      },
+    }),
+  };
+}
+
+function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
+  return createRuntimeAdapterRegistry({
+    nodeEnv: env.NODE_ENV,
+    facebook: {
+      appId: env.FACEBOOK_APP_ID,
+      appSecret: env.FACEBOOK_APP_SECRET,
+      apiVersion: env.FACEBOOK_API_VERSION,
+    },
+  });
 }
 
 /**
