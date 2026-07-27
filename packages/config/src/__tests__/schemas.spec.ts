@@ -1,5 +1,8 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { EnvValidationError, parseEnv } from '../load-env';
+import { EnvValidationError, findNearestDotEnv, parseEnv } from '../load-env';
 import { apiEnvSchema, webEnvSchema, workerEnvSchema } from '../schemas';
 
 const validApiEnv = {
@@ -17,6 +20,21 @@ const validApiEnv = {
   S3_ACCESS_KEY_ID: 'minioadmin',
   S3_SECRET_ACCESS_KEY: 'minioadmin',
 } satisfies NodeJS.ProcessEnv;
+
+describe('findNearestDotEnv — workspace con vẫn dùng .env ở root repo', () => {
+  it('đi ngược lên thư mục cha để tìm .env gần nhất', () => {
+    const root = mkdtempSync(join(tmpdir(), 'socialhub-env-'));
+    const appDir = join(root, 'apps', 'api');
+    mkdirSync(appDir, { recursive: true });
+    writeFileSync(join(root, '.env'), 'NODE_ENV=development\n');
+
+    try {
+      expect(findNearestDotEnv(appDir)).toBe(join(root, '.env'));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('apiEnvSchema — fail fast lúc khởi động (ARCHITECTURE.md §11)', () => {
   it('chấp nhận cấu hình hợp lệ và áp default', () => {

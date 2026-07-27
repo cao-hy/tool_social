@@ -1,3 +1,12 @@
+import nextEnv from '@next/env';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const { loadEnvConfig } = nextEnv;
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+loadEnvConfig(repoRoot);
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000';
+
 /**
  * Security headers — SECURITY.md §9.
  *
@@ -6,16 +15,25 @@
  * là dữ liệu KHÔNG TIN CẬY, và CSP là lớp phòng thủ cuối cùng nếu escaping của
  * React bị bỏ qua ở đâu đó.
  *
- * `'unsafe-inline'` cho style là nhượng bộ cần thiết cho Tailwind/Next; cho
- * script thì KHÔNG — sẽ dùng nonce khi cần script inline.
+ * Ở development, Next cần inline script cho runtime/HMR nên CSP được nới vừa
+ * đủ để local dev không trắng màn hình. Production sẽ cần nonce trước khi bật
+ * CSP script strict hoàn toàn.
  */
+const isDevelopment = process.env.NODE_ENV !== 'production';
+
 const csp = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
+  isDevelopment
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+    : "script-src 'self' 'unsafe-eval'",
+  isDevelopment
+    ? "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
+    : "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
-  "font-src 'self' data:",
-  "connect-src 'self' http://localhost:4000 https:",
+  isDevelopment ? "font-src 'self' data: https://fonts.gstatic.com" : "font-src 'self' data:",
+  isDevelopment
+    ? "connect-src 'self' http://localhost:3000 ws://localhost:3000 http://localhost:4000 https:"
+    : "connect-src 'self' http://localhost:4000 https:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -38,6 +56,9 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
+  env: {
+    NEXT_PUBLIC_API_BASE_URL: apiBaseUrl,
+  },
   transpilePackages: ['@socialhub/shared'],
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];

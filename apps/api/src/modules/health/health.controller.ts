@@ -1,4 +1,4 @@
-import { Controller, Get, HttpStatus, Res } from '@nestjs/common';
+import { Controller, Get, HttpStatus, Inject, Res } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { raw } from '../../common/interceptors/response.interceptor';
 import { HealthService } from './health.service';
@@ -12,7 +12,7 @@ import { HealthService } from './health.service';
  */
 @Controller()
 export class HealthController {
-  constructor(private readonly health: HealthService) {}
+  constructor(@Inject(HealthService) private readonly health: HealthService) {}
 
   @Get('health')
   getHealth(): unknown {

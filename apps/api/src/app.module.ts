@@ -3,8 +3,10 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { InfrastructureModule } from './infrastructure/infrastructure.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { PlatformsModule } from './modules/platforms/platforms.module';
+import { WorkspacesModule } from './modules/workspaces/workspaces.module';
 
 /**
  * Filter và interceptor đăng ký ở đây (chứ không phải trên từng controller) để
@@ -15,7 +17,7 @@ import { PlatformsModule } from './modules/platforms/platforms.module';
  * thêm từ Phase 2 trở đi — xem docs/ROADMAP.md.
  */
 @Module({
-  imports: [InfrastructureModule, HealthModule, PlatformsModule],
+  imports: [InfrastructureModule, HealthModule, PlatformsModule, AuthModule, WorkspacesModule],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },

@@ -13,7 +13,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', phase: 8, description: 'Tổng quan hiệu suất' },
+  { label: 'Dashboard', href: '/dashboard', phase: 2, description: 'Tổng quan workspace' },
   { label: 'Calendar', href: '/calendar', phase: 4, description: 'Lịch đăng bài' },
   { label: 'Create Post', href: '/posts/new', phase: 4, description: 'Soạn nội dung đa nền tảng' },
   { label: 'Posts', href: '/posts', phase: 6, description: 'Danh sách và trạng thái bài đăng' },
@@ -25,7 +25,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Settings', href: '/settings', phase: 2, description: 'Cấu hình workspace' },
 ];
 
-export const CURRENT_PHASE = 1;
+export const CURRENT_PHASE = 2;
 
 export function isAvailable(item: NavItem): boolean {
   return item.phase <= CURRENT_PHASE;

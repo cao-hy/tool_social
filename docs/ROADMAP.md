@@ -60,7 +60,7 @@ Track B (access)    ────────────────────
 
 ---
 
-## Phase 1 — Project Foundation 🔄 ĐANG LÀM
+## Phase 1 — Project Foundation ✅ HOÀN TẤT
 
 **Mục tiêu**: bộ khung chạy được, có kỷ luật chất lượng. **Không có tính năng nghiệp vụ.**
 
@@ -77,37 +77,37 @@ Track B (access)    ────────────────────
 
 **Acceptance criteria** (chi tiết ở `PROJECT_PLAN.md` §15):
 
-- [ ] `npm install` sạch
-- [ ] `npm run typecheck` → 0 lỗi (strict mode toàn bộ)
-- [ ] `npm run lint` → 0 lỗi
-- [ ] `npm run test` → pass
-- [ ] `npm run build` → thành công cả 3 app
-- [ ] `npx prisma validate` + `generate` thành công
-- [ ] `/health` và `/ready` trả đúng (có test)
-- [ ] Env thiếu biến → fail lúc khởi động kèm thông báo rõ ràng (có test)
-- [ ] `.env` bị git ignore; `.env.example` chỉ có placeholder
-- [ ] CI workflow hợp lệ
-- [ ] README đủ để dev mới setup từ zero
+- [x] `npm install` sạch
+- [x] `npm run typecheck` → 0 lỗi (strict mode toàn bộ)
+- [x] `npm run lint` → 0 lỗi
+- [x] `npm run test` → pass
+- [x] `npm run build` → thành công cả 3 app
+- [x] `npx prisma validate` + `generate` thành công
+- [x] `/health` và `/ready` trả đúng (có test)
+- [x] Env thiếu biến → fail lúc khởi động kèm thông báo rõ ràng (có test)
+- [x] `.env` bị git ignore; `.env.example` chỉ có placeholder
+- [x] CI workflow hợp lệ
+- [x] README đủ để dev mới setup từ zero
 
 ---
 
-## Phase 2 — Authentication, Workspace, RBAC
+## Phase 2 — Authentication, Workspace, RBAC ✅ HOÀN TẤT
 
 **Deliverable**: đăng ký/đăng nhập/đăng xuất/quên mật khẩu/Google login · session · workspace CRUD · mời thành viên · 5 vai trò · 3 guard · audit log · notification cơ bản.
 
 **Acceptance criteria:**
 
-- [ ] Đăng ký → tự tạo workspace mặc định với vai trò OWNER
-- [ ] Password hash bằng Argon2id; **test khẳng định không có plaintext trong DB**
-- [ ] Session là HTTP-only cookie; đăng xuất **thu hồi ngay** (test)
-- [ ] Đổi mật khẩu hủy toàn bộ phiên khác (test)
-- [ ] Reset token dùng một lần, hết hạn 1h (test)
-- [ ] **Ma trận quyền 5 vai trò được test đầy đủ** cho mọi endpoint có `:wid`
-- [ ] **Cross-workspace access trả 404** — test cho mọi endpoint (E2E #14)
-- [ ] Không xóa được Owner cuối cùng của workspace (test)
-- [ ] Audit log ghi đủ 100% sự kiện trong `SECURITY.md` §11
-- [ ] Rate limit đăng nhập hoạt động (test tích hợp)
-- [ ] E2E #1, #2, #3 pass
+- [x] Đăng ký → tự tạo workspace mặc định với vai trò OWNER
+- [x] Password hash bằng Argon2id; **test khẳng định không có plaintext trong DB**
+- [x] Session là HTTP-only cookie; đăng xuất **thu hồi ngay** (test)
+- [x] Đổi mật khẩu hủy toàn bộ phiên khác (test)
+- [x] Reset token dùng một lần, hết hạn 1h (test)
+- [x] **Ma trận quyền 5 vai trò được test đầy đủ** cho mọi endpoint có `:wid`
+- [x] **Cross-workspace access trả 404** — test cho mọi endpoint (E2E #14)
+- [x] Không xóa được Owner cuối cùng của workspace (test)
+- [x] Audit log ghi đủ 100% sự kiện trong `SECURITY.md` §11
+- [x] Rate limit đăng nhập hoạt động (test tích hợp)
+- [x] E2E #1, #2, #3 pass
 
 ---
 

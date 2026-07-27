@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { dirname, join, parse } from 'node:path';
 import * as dotenv from 'dotenv';
 import { z } from 'zod';
 
@@ -51,9 +53,23 @@ export function parseEnv<T extends z.ZodTypeAny>(
   return result.data;
 }
 
+/** Tìm file .env gần nhất khi process chạy từ workspace con như apps/api. */
+export function findNearestDotEnv(startDir: string = process.cwd()): string | undefined {
+  let current = startDir;
+  const root = parse(current).root;
+
+  while (true) {
+    const candidate = join(current, '.env');
+    if (existsSync(candidate)) return candidate;
+    if (current === root) return undefined;
+    current = dirname(current);
+  }
+}
+
 /** Nạp file .env vào process.env (chỉ dùng cho local dev). */
 export function loadDotEnv(path?: string): void {
-  dotenv.config(path === undefined ? {} : { path });
+  const resolvedPath = path ?? findNearestDotEnv();
+  dotenv.config(resolvedPath === undefined ? {} : { path: resolvedPath });
 }
 
 /* ---------------------------------------------------------------- helpers */

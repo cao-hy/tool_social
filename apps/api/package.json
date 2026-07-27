@@ -22,6 +22,7 @@
     "@socialhub/platform-adapters": "*",
     "@socialhub/security": "*",
     "@socialhub/shared": "*",
+    "argon2": "^0.45.1",
     "ioredis": "^5.4.2",
     "pino": "^9.6.0",
     "reflect-metadata": "^0.2.2",
