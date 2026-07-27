@@ -1,6 +1,11 @@
 import { createPlatformError } from '../core/platform-error';
-import type { SocialAccountProfile, TokenSet } from '../core/types';
-import type { FacebookPage, FacebookPageProfile, FacebookTokenResponse } from './facebook.schemas';
+import type { PlatformComment, SocialAccountProfile, TokenSet } from '../core/types';
+import type {
+  FacebookComment,
+  FacebookPage,
+  FacebookPageProfile,
+  FacebookTokenResponse,
+} from './facebook.schemas';
 
 export function selectFacebookPage(pages: FacebookPage[]): FacebookPage {
   const page = pages.find((item) => item.access_token);
@@ -42,5 +47,25 @@ export function mapFacebookPageProfile(profile: FacebookPageProfile): SocialAcco
     avatarUrl: profile.picture?.data?.url,
     profileUrl: profile.link,
     followersCount: profile.fan_count,
+  };
+}
+
+export function mapFacebookComment(input: {
+  comment: FacebookComment;
+  externalPostId: string;
+  externalPageId: string;
+}): PlatformComment {
+  return {
+    externalCommentId: input.comment.id,
+    externalPostId: input.externalPostId,
+    parentExternalCommentId: input.comment.parent?.id,
+    authorExternalId: input.comment.from?.id,
+    authorName: input.comment.from?.name,
+    authorAvatarUrl: input.comment.from?.picture?.data?.url,
+    message: input.comment.message,
+    likeCount: input.comment.like_count,
+    postedAt: new Date(input.comment.created_time),
+    isHidden: input.comment.is_hidden,
+    isFromOwner: input.comment.from?.id === input.externalPageId,
   };
 }

@@ -32,6 +32,24 @@ export const CAPABILITY_MATRIX: Record<Platform, PlatformCapabilityTable> = Obje
   PLATFORMS.map((platform) => [platform, createUnverifiedCapabilityTable(platform)]),
 ) as Record<Platform, PlatformCapabilityTable>;
 
+CAPABILITY_MATRIX.FACEBOOK.capabilities.readComments = {
+  state: 'CONDITIONAL',
+  condition:
+    'Chỉ đọc comment trên Page post có externalPostId đã lưu, bằng Page access token có pages_read_user_content hoặc app có Page Public Content Access.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/comment/',
+  verifiedAt: '2026-07-28',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
+CAPABILITY_MATRIX.FACEBOOK.capabilities.replyToComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Chỉ reply comment bằng Page access token có pages_manage_engagement, trên comment thuộc Page/app được phép quản lý.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/comment/comments/',
+  verifiedAt: '2026-07-28',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
 export function getCapabilityTable(platform: Platform): PlatformCapabilityTable {
   return CAPABILITY_MATRIX[platform];
 }

@@ -1,4 +1,8 @@
-import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
+import {
+  AdapterRegistry,
+  DevelopmentFixtureAdapter,
+  isPlatformError,
+} from '@socialhub/platform-adapters';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import { decryptToken, type Keyring } from '@socialhub/security';
@@ -23,7 +27,7 @@ export function createPublishPostProcessor(input: {
   keyring: Keyring;
   adapters: AdapterRegistry;
   locks: JobLockService;
-  storage: { client: S3Client; bucket: string };
+  storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
 }) {
   return async (job: {
     data: unknown;
@@ -83,7 +87,7 @@ async function publishPlatformPost(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapters: AdapterRegistry;
-    storage: { client: S3Client; bucket: string };
+    storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
   },
   payload: z.infer<typeof publishPostPayloadSchema>,
   job: { id?: string; attemptsMade?: number; opts?: { attempts?: number } },
@@ -136,6 +140,21 @@ async function publishPlatformPost(
   });
 
   const adapter = input.adapters.get(platformPost.platform);
+  if (
+    platformPost.socialAccount.scopes.includes('development-fixture') &&
+    !(adapter instanceof DevelopmentFixtureAdapter)
+  ) {
+    const message =
+      'Social account này được tạo bằng development fixture. Hãy disconnect và kết nối lại bằng OAuth thật trước khi publish.';
+    await markFailed(input.prisma, platformPost.id, 'ACCOUNT_RECONNECT_REQUIRED', message);
+    await input.prisma.socialAccount.update({
+      where: { id: platformPost.socialAccountId },
+      data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
+    });
+    await updateParentStatus(input.prisma, platformPost.contentPostId);
+    return { published: false, reason: 'fixture_account_with_real_adapter' };
+  }
+
   const accessToken = decryptToken(platformPost.socialAccount.token.accessToken, input.keyring);
 
   try {
@@ -144,7 +163,7 @@ async function publishPlatformPost(
         .filter((item) => item.mediaAsset.status === 'READY')
         .map(async (item) => ({
           type: item.mediaAsset.type as MediaType,
-          url: item.mediaAsset.storageKey,
+          url: publicMediaUrl(input.storage.publicBaseUrl, item.mediaAsset.storageKey),
           bytes: await readObjectBytes(
             input.storage.client,
             input.storage.bucket,
@@ -277,6 +296,11 @@ async function publishPlatformPost(
 async function readObjectBytes(client: S3Client, bucket: string, key: string): Promise<Uint8Array> {
   const object = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   return new Uint8Array((await object.Body?.transformToByteArray()) ?? []);
+}
+
+function publicMediaUrl(publicBaseUrl: string | undefined, key: string): string {
+  if (!publicBaseUrl) return key;
+  return `${publicBaseUrl.replace(/\/$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 async function markBackgroundJobRunning(

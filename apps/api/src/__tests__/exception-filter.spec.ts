@@ -41,6 +41,15 @@ class TestErrorsController {
     });
   }
 
+  @Get('fastify-rate-limit')
+  fastifyRateLimit(): never {
+    const error = new Error('Rate limit exceeded, retry in 35 seconds') as Error & {
+      statusCode: number;
+    };
+    error.statusCode = 429;
+    throw error;
+  }
+
   @Get('platform-auth')
   platformAuth(): never {
     throw createPlatformError('AUTH_INVALID', 'YOUTUBE', 'Token đã bị thu hồi');
@@ -121,6 +130,14 @@ describe('AllExceptionsFilter (e2e)', () => {
       .expect(429);
     expect(response.body.error.code).toBe('RATE_LIMITED');
     expect(response.body.error.details.retryable).toBe(true);
+  });
+
+  it('Fastify rate-limit error có statusCode=429 → 429 RATE_LIMITED, không thành 500', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/test-errors/fastify-rate-limit')
+      .expect(429);
+    expect(response.body.error.code).toBe('RATE_LIMITED');
+    expect(response.body.error.message).toContain('Rate limit exceeded');
   });
 
   it('PlatformError AUTH_INVALID → 409 ACCOUNT_DISCONNECTED (cần kết nối lại)', async () => {

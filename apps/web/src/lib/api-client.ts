@@ -4,9 +4,14 @@ import type {
   AuditLogItem,
   AuthPayload,
   OAuthStartResult,
+  CommentTagView,
+  CommentNoteView,
+  CommentView,
   ContentPostView,
   MediaAssetView,
   NotificationView,
+  PlatformCapabilitiesView,
+  ReplyTemplateView,
   SocialAccountView,
   WorkspaceInvitation,
   WorkspaceMember,
@@ -148,6 +153,15 @@ export const socialAccountsApi = {
     ),
 };
 
+export const platformsApi = {
+  capabilities: () =>
+    apiFetch<{
+      platforms: PlatformCapabilitiesView[];
+      verificationProgress: unknown;
+      policyExcludedActions: { actions: readonly string[]; reason: string };
+    }>('/platforms/capabilities'),
+};
+
 export const notificationsApi = {
   list: (workspaceId: string, query?: { unreadOnly?: boolean; limit?: number }) => {
     const params = new URLSearchParams();
@@ -191,13 +205,36 @@ export const mediaApi = {
 };
 
 export const postsApi = {
-  list: (workspaceId: string, query?: { status?: string; platform?: string; limit?: number }) => {
+  list: (
+    workspaceId: string,
+    query?: {
+      status?: string;
+      platform?: string;
+      socialAccountId?: string;
+      q?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      sortBy?: 'createdAt' | 'updatedAt';
+      direction?: 'asc' | 'desc';
+      cursor?: string;
+      limit?: number;
+    },
+  ) => {
     const params = new URLSearchParams();
     if (query?.status) params.set('status', query.status);
     if (query?.platform) params.set('platform', query.platform);
+    if (query?.socialAccountId) params.set('socialAccountId', query.socialAccountId);
+    if (query?.q) params.set('q', query.q);
+    if (query?.dateFrom) params.set('dateFrom', query.dateFrom);
+    if (query?.dateTo) params.set('dateTo', query.dateTo);
+    if (query?.sortBy) params.set('sortBy', query.sortBy);
+    if (query?.direction) params.set('direction', query.direction);
+    if (query?.cursor) params.set('cursor', query.cursor);
     if (query?.limit) params.set('limit', String(query.limit));
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
-    return apiFetch<{ items: ContentPostView[] }>(`/workspaces/${workspaceId}/posts${suffix}`);
+    return apiFetch<{ items: ContentPostView[]; nextCursor: string | null }>(
+      `/workspaces/${workspaceId}/posts${suffix}`,
+    );
   },
   get: (workspaceId: string, postId: string) =>
     apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}`),
@@ -257,6 +294,94 @@ export const postsApi = {
     }),
   delete: (workspaceId: string, postId: string) =>
     apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/posts/${postId}`, {
+      method: 'DELETE',
+    }),
+};
+
+export const commentsApi = {
+  list: (
+    workspaceId: string,
+    query?: {
+      status?: string;
+      platform?: string;
+      socialAccountId?: string;
+      assignedToId?: string;
+      tagId?: string;
+      q?: string;
+      limit?: number;
+    },
+  ) => {
+    const params = new URLSearchParams();
+    if (query?.status) params.set('status', query.status);
+    if (query?.platform) params.set('platform', query.platform);
+    if (query?.socialAccountId) params.set('socialAccountId', query.socialAccountId);
+    if (query?.assignedToId) params.set('assignedToId', query.assignedToId);
+    if (query?.tagId) params.set('tagId', query.tagId);
+    if (query?.q) params.set('q', query.q);
+    if (query?.limit) params.set('limit', String(query.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return apiFetch<{ items: CommentView[] }>(`/workspaces/${workspaceId}/comments${suffix}`);
+  },
+  get: (workspaceId: string, commentId: string) =>
+    apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}`),
+  updateStatus: (workspaceId: string, commentId: string, status: CommentView['status']) =>
+    apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }),
+  assign: (workspaceId: string, commentId: string, memberId: string | null) =>
+    apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}/assignment`, {
+      method: 'PATCH',
+      body: JSON.stringify({ memberId }),
+    }),
+  updateTags: (workspaceId: string, commentId: string, tagIds: string[]) =>
+    apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}/tags`, {
+      method: 'PATCH',
+      body: JSON.stringify({ tagIds }),
+    }),
+  addNote: (workspaceId: string, commentId: string, body: string) =>
+    apiFetch<CommentNoteView>(`/workspaces/${workspaceId}/comments/${commentId}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    }),
+  reply: (workspaceId: string, commentId: string, message: string) =>
+    apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}/replies`, {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    }),
+  sync: (
+    workspaceId: string,
+    input: { socialAccountId: string; platformPostId?: string; since?: string },
+  ) =>
+    apiFetch<{ queued: true; jobId: string }>(`/workspaces/${workspaceId}/comments/sync`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  listTags: (workspaceId: string) =>
+    apiFetch<{ items: CommentTagView[] }>(`/workspaces/${workspaceId}/comments/tags`),
+  createTag: (workspaceId: string, input: { name: string; color: string }) =>
+    apiFetch<CommentTagView>(`/workspaces/${workspaceId}/comments/tags`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  listTemplates: (workspaceId: string) =>
+    apiFetch<{ items: ReplyTemplateView[] }>(`/workspaces/${workspaceId}/comments/templates`),
+  createTemplate: (workspaceId: string, input: { name: string; body: string }) =>
+    apiFetch<ReplyTemplateView>(`/workspaces/${workspaceId}/comments/templates`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  updateTemplate: (
+    workspaceId: string,
+    templateId: string,
+    input: { name?: string; body?: string },
+  ) =>
+    apiFetch<ReplyTemplateView>(`/workspaces/${workspaceId}/comments/templates/${templateId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  deleteTemplate: (workspaceId: string, templateId: string) =>
+    apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/comments/templates/${templateId}`, {
       method: 'DELETE',
     }),
 };

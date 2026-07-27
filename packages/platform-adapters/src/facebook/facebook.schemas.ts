@@ -57,3 +57,49 @@ export const facebookPhotoUploadResponseSchema = z.object({
 });
 
 export type FacebookPhotoUploadResponse = z.infer<typeof facebookPhotoUploadResponseSchema>;
+
+export const facebookCommentSchema = z.object({
+  id: z.string().min(1),
+  message: z.string().optional(),
+  created_time: z.string().min(1),
+  from: z
+    .object({
+      id: z.string().min(1),
+      name: z.string().optional(),
+      picture: pictureSchema,
+    })
+    .nullable()
+    .optional(),
+  like_count: z.number().int().nonnegative().optional(),
+  parent: z
+    .object({
+      id: z.string().min(1),
+    })
+    .nullable()
+    .optional(),
+  is_hidden: z.boolean().optional(),
+});
+
+export type FacebookComment = z.infer<typeof facebookCommentSchema>;
+
+export const facebookCommentsResponseSchema = z.object({
+  data: z.array(facebookCommentSchema),
+  paging: z
+    .object({
+      cursors: z
+        .object({
+          after: z.string().optional(),
+        })
+        .optional(),
+      next: z.string().url().optional(),
+    })
+    .optional(),
+});
+
+export type FacebookCommentsResponse = z.infer<typeof facebookCommentsResponseSchema>;
+
+export const facebookCommentReplyResponseSchema = z.object({
+  id: z.string().min(1),
+});
+
+export type FacebookCommentReplyResponse = z.infer<typeof facebookCommentReplyResponseSchema>;

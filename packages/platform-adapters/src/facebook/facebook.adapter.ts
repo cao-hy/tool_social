@@ -1,5 +1,5 @@
 import type { Paginated } from '@socialhub/shared';
-import { createUnverifiedCapabilityTable } from '../core/capability-table';
+import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
@@ -10,15 +10,18 @@ import type {
   PublishResult,
   SocialAccountProfile,
   PostMetrics,
+  SyncCommentsParams,
   TokenSet,
 } from '../core/types';
 import { FacebookGraphClient, type FacebookGraphClientConfig } from './facebook.client';
 import {
+  mapFacebookComment,
   mapFacebookPageProfile,
   mapFacebookPageToken,
   selectFacebookPage,
 } from './facebook.mapper';
 import { validateFacebookPost } from './facebook.validator';
+import { parseMetaWebhookEvents, verifyMetaWebhookSignature } from '../meta/webhook';
 
 export interface FacebookPagesAdapterConfig extends FacebookGraphClientConfig {
   scopes?: string[];
@@ -27,19 +30,23 @@ export interface FacebookPagesAdapterConfig extends FacebookGraphClientConfig {
 export const FACEBOOK_PAGES_OAUTH_SCOPES = [
   'pages_show_list',
   'pages_read_engagement',
+  'pages_read_user_content',
   'pages_manage_posts',
+  'pages_manage_engagement',
 ] as const;
 
 export class FacebookPagesAdapter implements SocialPlatformAdapter {
   readonly platform = 'FACEBOOK' as const;
-  readonly capabilities = createUnverifiedCapabilityTable('FACEBOOK');
+  readonly capabilities = getCapabilityTable('FACEBOOK');
 
   private readonly client: FacebookGraphClient;
   private readonly scopes: string[];
+  private readonly appSecret: string;
 
   constructor(config: FacebookPagesAdapterConfig) {
     this.client = new FacebookGraphClient(config);
     this.scopes = config.scopes ?? [...FACEBOOK_PAGES_OAUTH_SCOPES];
+    this.appSecret = config.appSecret;
   }
 
   buildAuthorizationUrl(input: AuthUrlInput): string {
@@ -156,8 +163,66 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     throw capabilityUnsupported('FACEBOOK', 'getPosts');
   }
 
+  async getComments(
+    ctx: AdapterContext,
+    params: SyncCommentsParams,
+  ): Promise<Paginated<ReturnType<typeof mapFacebookComment>>> {
+    if (!params.externalPostId) {
+      throw capabilityUnsupported('FACEBOOK', 'readCommentsOnExternallyCreatedPosts');
+    }
+
+    const response = await this.client.getPostComments({
+      externalPostId: params.externalPostId,
+      pageAccessToken: ctx.accessToken,
+      cursor: params.cursor,
+      limit: params.limit,
+      since: params.since,
+    });
+
+    return {
+      items: response.data.map((comment) =>
+        mapFacebookComment({
+          comment,
+          externalPostId: params.externalPostId as string,
+          externalPageId: ctx.externalPageId ?? ctx.externalAccountId,
+        }),
+      ),
+      nextCursor: response.paging?.cursors?.after ?? null,
+      hasMore: Boolean(response.paging?.next),
+    };
+  }
+
+  async replyToComment(
+    ctx: AdapterContext,
+    externalCommentId: string,
+    message: string,
+  ): Promise<{ externalReplyId: string; sentAt: Date }> {
+    const result = await this.client.replyToComment({
+      externalCommentId,
+      pageAccessToken: ctx.accessToken,
+      message,
+    });
+
+    return {
+      externalReplyId: result.id,
+      sentAt: new Date(),
+    };
+  }
+
   async getPostMetrics(_ctx: AdapterContext, _externalPostId: string): Promise<PostMetrics> {
     throw capabilityUnsupported('FACEBOOK', 'getPostMetrics');
+  }
+
+  verifyWebhookSignature(rawBody: Buffer, headers: Record<string, string | undefined>): boolean {
+    return verifyMetaWebhookSignature({
+      rawBody,
+      headers,
+      appSecret: this.appSecret,
+    });
+  }
+
+  parseWebhookEvents(payload: unknown) {
+    return parseMetaWebhookEvents(payload);
   }
 }
 

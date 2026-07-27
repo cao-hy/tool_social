@@ -5,11 +5,13 @@ import { AdapterRegistry, createRuntimeAdapterRegistry } from '@socialhub/platfo
 import { Keyring } from '@socialhub/security';
 import Redis from 'ioredis';
 import { logger } from './logger';
+import { createProcessWebhookProcessor } from './processors/process-webhook';
 import { createPublishPostProcessor } from './processors/publish-post';
 import {
   createRefreshSocialTokenProcessor,
   createWorkerPrisma,
 } from './processors/refresh-social-token';
+import { createSyncCommentsProcessor } from './processors/sync-comments';
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
 import { startScheduledPostScanner } from './schedulers/scheduled-post-scanner';
@@ -57,6 +59,18 @@ async function main(): Promise<void> {
     'refresh-social-token',
     createRefreshSocialTokenProcessor({ prisma, keyring, adapters }),
   );
+  registry.registerWorker(
+    'sync-comments',
+    createSyncCommentsProcessor({ prisma, keyring, adapters }),
+  );
+  registry.registerWorker(
+    'process-webhook',
+    createProcessWebhookProcessor({
+      prisma,
+      adapters,
+      syncCommentsQueue: registry.getQueue('sync-comments'),
+    }),
+  );
   const scheduledPostScanner = startScheduledPostScanner({
     prisma,
     publishQueue: registry.getQueue('publish-post'),
@@ -90,9 +104,14 @@ async function main(): Promise<void> {
   logger.info({ port: env.WORKER_HEALTH_PORT }, 'Worker sẵn sàng');
 }
 
-function createStorageClient(env: WorkerEnv): { client: S3Client; bucket: string } {
+function createStorageClient(env: WorkerEnv): {
+  client: S3Client;
+  bucket: string;
+  publicBaseUrl?: string;
+} {
   return {
     bucket: env.S3_BUCKET,
+    publicBaseUrl: env.S3_PUBLIC_BASE_URL,
     client: new S3Client({
       endpoint: env.S3_ENDPOINT,
       region: env.S3_REGION,
@@ -111,6 +130,12 @@ function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
     facebook: {
       appId: env.FACEBOOK_APP_ID,
       appSecret: env.FACEBOOK_APP_SECRET,
+      apiVersion: env.FACEBOOK_API_VERSION,
+      loginConfigId: env.FACEBOOK_LOGIN_CONFIG_ID,
+    },
+    instagram: {
+      appId: env.INSTAGRAM_APP_ID,
+      appSecret: env.INSTAGRAM_APP_SECRET,
       apiVersion: env.FACEBOOK_API_VERSION,
     },
   });

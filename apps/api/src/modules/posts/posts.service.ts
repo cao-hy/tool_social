@@ -1,6 +1,7 @@
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Prisma } from '@socialhub/db';
 import { deriveContentPostStatus, buildJobId } from '@socialhub/shared';
 import type { Platform, PlatformPostStatus } from '@socialhub/shared';
 import { Queue } from 'bullmq';
@@ -47,27 +48,62 @@ export class PostsService implements OnModuleDestroy {
   }
 
   async list(workspaceId: string, query: ListPostsQuery) {
+    const platformPostWhere =
+      query.platform || query.socialAccountId
+        ? {
+            platform: query.platform,
+            socialAccountId: query.socialAccountId,
+          }
+        : undefined;
+    const cursor = query.cursor ? decodePostCursor(query.cursor) : null;
+    const where: Prisma.ContentPostWhereInput = {
+      workspaceId,
+      deletedAt: null,
+      status: query.status,
+      platformPosts: platformPostWhere ? { some: platformPostWhere } : undefined,
+      createdAt:
+        query.dateFrom || query.dateTo ? { gte: query.dateFrom, lte: query.dateTo } : undefined,
+      OR: query.q
+        ? [
+            { title: { contains: query.q, mode: 'insensitive' } },
+            { body: { contains: query.q, mode: 'insensitive' } },
+            { linkUrl: { contains: query.q, mode: 'insensitive' } },
+          ]
+        : undefined,
+      AND: cursor ? [buildCursorWhere(cursor, query.sortBy, query.direction)] : undefined,
+    };
+
     const posts = await this.prisma.contentPost.findMany({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        status: query.status,
-        platformPosts: query.platform ? { some: { platform: query.platform } } : undefined,
-      },
+      where,
       include: {
         platformPosts: { include: { socialAccount: true }, orderBy: { createdAt: 'asc' } },
         media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
       },
-      orderBy: { createdAt: 'desc' },
-      take: query.limit,
+      orderBy: [{ [query.sortBy]: query.direction }, { id: query.direction }],
+      take: query.limit + 1,
     });
 
-    return { items: await Promise.all(posts.map((post) => this.toPostView(post))) };
+    const page = posts.slice(0, query.limit);
+    const last = page.at(-1);
+    const hasMore = posts.length > query.limit;
+
+    return {
+      items: await Promise.all(page.map((post) => this.toPostView(post))),
+      nextCursor:
+        hasMore && last
+          ? encodePostCursor({
+              sortBy: query.sortBy,
+              direction: query.direction,
+              id: last.id,
+              value: last[query.sortBy].toISOString(),
+            })
+          : null,
+    };
   }
 
   async get(workspaceId: string, postId: string) {
     const post = await this.findPost(workspaceId, postId);
-    return this.toPostView(post);
+    return this.toPostView(post, await this.jobHistory(workspaceId, post.platformPosts));
   }
 
   async create(
@@ -590,7 +626,53 @@ export class PostsService implements OnModuleDestroy {
     return post;
   }
 
-  private async toPostView(post: Awaited<ReturnType<typeof this.findPost>>) {
+  private async jobHistory(
+    workspaceId: string,
+    platformPosts: Array<{ id: string }>,
+  ): Promise<
+    Array<{
+      id: string;
+      queueName: string;
+      jobId: string;
+      status: string;
+      attempts: number;
+      maxAttempts: number;
+      startedAt: Date | null;
+      finishedAt: Date | null;
+      durationMs: number | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+      isDead: boolean;
+      correlationId: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>
+  > {
+    if (platformPosts.length === 0) return [];
+
+    const jobIds = platformPosts.map((platformPost) =>
+      buildJobId('publish-post', {
+        platformPostId: platformPost.id,
+        workspaceId,
+        correlationId: 'lookup',
+      }),
+    );
+
+    return this.prisma.backgroundJob.findMany({
+      where: {
+        workspaceId,
+        queueName: { in: ['publish-post', 'retry-failed-post'] },
+        jobId: { in: jobIds },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
+
+  private async toPostView(
+    post: Awaited<ReturnType<typeof this.findPost>>,
+    jobs: Awaited<ReturnType<typeof this.jobHistory>> = [],
+  ) {
     const platformStatuses = post.platformPosts.map((item) => item.status as PlatformPostStatus);
     return {
       id: post.id,
@@ -642,9 +724,82 @@ export class PostsService implements OnModuleDestroy {
               : null,
         })),
       ),
+      jobs: jobs.map((job) => ({
+        id: job.id,
+        queueName: job.queueName,
+        jobId: job.jobId,
+        status: job.status,
+        attempts: job.attempts,
+        maxAttempts: job.maxAttempts,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+        durationMs: job.durationMs,
+        errorCode: job.errorCode,
+        errorMessage: job.errorMessage,
+        isDead: job.isDead,
+        correlationId: job.correlationId,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      })),
       links: {
         web: `${this.env.WEB_BASE_URL.replace(/\/$/, '')}/posts/${post.id}`,
       },
     };
   }
+}
+
+interface PostCursor {
+  sortBy: 'createdAt' | 'updatedAt';
+  direction: 'asc' | 'desc';
+  value: string;
+  id: string;
+}
+
+function encodePostCursor(cursor: PostCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodePostCursor(cursor: string): PostCursor | null {
+  try {
+    const decoded = JSON.parse(
+      Buffer.from(cursor, 'base64url').toString('utf8'),
+    ) as Partial<PostCursor>;
+    if (
+      (decoded.sortBy === 'createdAt' || decoded.sortBy === 'updatedAt') &&
+      (decoded.direction === 'asc' || decoded.direction === 'desc') &&
+      typeof decoded.value === 'string' &&
+      typeof decoded.id === 'string'
+    ) {
+      return decoded as PostCursor;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function buildCursorWhere(
+  cursor: PostCursor,
+  sortBy: 'createdAt' | 'updatedAt',
+  direction: 'asc' | 'desc',
+): Prisma.ContentPostWhereInput {
+  if (cursor.sortBy !== sortBy || cursor.direction !== direction) {
+    throw AppError.validation('Cursor không khớp với sort hiện tại.');
+  }
+
+  const value = new Date(cursor.value);
+  if (Number.isNaN(value.getTime())) {
+    throw AppError.validation('Cursor không hợp lệ.');
+  }
+
+  const comparator = direction === 'desc' ? 'lt' : 'gt';
+  return {
+    OR: [
+      { [sortBy]: { [comparator]: value } },
+      {
+        [sortBy]: value,
+        id: { [comparator]: cursor.id },
+      },
+    ],
+  };
 }

@@ -1,4 +1,4 @@
-import type { WorkspaceRole } from '@socialhub/shared';
+import type { Capability, CapabilityKey, WorkspaceRole } from '@socialhub/shared';
 import type { Platform, SocialAccountStatus } from '@socialhub/shared';
 import type { MediaType, PlatformPostStatus, PostStatus } from '@socialhub/shared';
 
@@ -83,6 +83,24 @@ export interface OAuthStartResult {
   developmentFixture: boolean;
 }
 
+export interface PlatformCapabilitiesView {
+  platform: Platform;
+  label: string;
+  capabilities: Record<CapabilityKey, Capability>;
+  limits?: {
+    captionMaxLength?: number | null;
+    titleMaxLength?: number | null;
+    maxHashtags?: number | null;
+    maxImagesPerPost?: number | null;
+    imageMaxBytes?: number | null;
+    videoMaxBytes?: number | null;
+    videoMinDurationSec?: number | null;
+    videoMaxDurationSec?: number | null;
+    allowedImageMimeTypes?: string[];
+    allowedVideoMimeTypes?: string[];
+  };
+}
+
 export interface MediaAssetView {
   id: string;
   type: MediaType;
@@ -126,5 +144,103 @@ export interface ContentPostView {
   derivedStatus: PostStatus;
   platformPosts: PlatformPostView[];
   media: MediaAssetView[];
+  jobs: BackgroundJobView[];
   links: { web: string };
+}
+
+export interface BackgroundJobView {
+  id: string;
+  queueName: string;
+  jobId: string;
+  status: string;
+  attempts: number;
+  maxAttempts: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  isDead: boolean;
+  correlationId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommentTagView {
+  id: string;
+  name: string;
+  color: string;
+  createdAt?: string;
+}
+
+export interface CommentAssignmentView {
+  id: string;
+  memberId: string;
+  assignedToId: string;
+  assignedToName: string | null;
+  assignedToEmail: string;
+  assignedById: string;
+  assignedAt: string;
+  resolvedAt: string | null;
+}
+
+export interface CommentNoteView {
+  id: string;
+  body: string;
+  authorId: string;
+  authorName: string | null;
+  authorEmail: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommentReplyView {
+  id: string;
+  message: string;
+  status: string;
+  sentById: string;
+  sentByName: string | null;
+  sentByEmail: string;
+  externalReplyId: string | null;
+  sentAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommentView {
+  id: string;
+  platform: Platform;
+  platformPostId: string;
+  contentPostId: string;
+  contentPostTitle: string | null;
+  socialAccountId: string;
+  socialAccountName: string;
+  externalCommentId: string;
+  parentId: string | null;
+  authorExternalId: string | null;
+  authorName: string | null;
+  authorAvatarUrl: string | null;
+  message: string | null;
+  likeCount: number | null;
+  postedAt: string;
+  status: 'OPEN' | 'PENDING' | 'RESOLVED';
+  isHidden: boolean;
+  isFromPage: boolean;
+  createdAt: string;
+  updatedAt: string;
+  assignment: CommentAssignmentView | null;
+  tags: CommentTagView[];
+  notes: CommentNoteView[];
+  replies: CommentReplyView[];
+}
+
+export interface ReplyTemplateView {
+  id: string;
+  workspaceId: string;
+  name: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
 }

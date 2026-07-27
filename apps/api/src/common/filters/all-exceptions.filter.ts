@@ -93,6 +93,21 @@ export class AllExceptionsFilter implements ExceptionFilter {
       };
     }
 
+    const statusCode = getHttpStyleStatusCode(exception);
+    if (statusCode) {
+      return {
+        status: statusCode,
+        code: this.httpStatusToCode(statusCode),
+        message:
+          exception instanceof Error
+            ? exception.message
+            : statusCode === 429
+              ? 'Bạn thao tác quá nhanh. Vui lòng thử lại sau.'
+              : 'Request không hợp lệ.',
+        logLevel: statusCode >= 500 ? 'error' : 'warn',
+      };
+    }
+
     // Lỗi không lường trước: người dùng chỉ nhận requestId, chi tiết nằm ở log.
     return {
       status: HttpStatus.INTERNAL_SERVER_ERROR,
@@ -174,4 +189,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
         return status >= 500 ? 'INTERNAL_ERROR' : 'VALIDATION_ERROR';
     }
   }
+}
+
+function getHttpStyleStatusCode(exception: unknown): number | null {
+  if (typeof exception !== 'object' || exception === null || !('statusCode' in exception)) {
+    return null;
+  }
+  const statusCode = (exception as { statusCode?: unknown }).statusCode;
+  return typeof statusCode === 'number' && statusCode >= 400 && statusCode < 600
+    ? statusCode
+    : null;
 }

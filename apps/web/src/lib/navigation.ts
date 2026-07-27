@@ -25,7 +25,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: 'Settings', href: '/settings', phase: 2, description: 'Cấu hình workspace' },
 ];
 
-export const CURRENT_PHASE = 5;
+export const CURRENT_PHASE = 7;
 
 export function isAvailable(item: NavItem): boolean {
   return item.phase <= CURRENT_PHASE;

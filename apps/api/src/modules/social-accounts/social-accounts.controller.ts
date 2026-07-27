@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { platformSchema, type Platform } from '@socialhub/shared';
+import { isPlatformError } from '@socialhub/platform-adapters';
 import type { AuthenticatedRequest } from '../../common/auth/auth.types';
 import { requireUser } from '../../common/auth/request-auth';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
@@ -91,13 +92,31 @@ export class SocialAccountsController {
     @Query('code') code: string | undefined,
     @Query('state') state: string | undefined,
     @Query('error') oauthError: string | undefined,
+    @Query('error_description') oauthErrorDescription: string | undefined,
+    @Query('granted_scopes') grantedScopes: string | undefined,
+    @Query('denied_scopes') deniedScopes: string | undefined,
     @Req() request: FastifyRequest & AuthenticatedRequest,
     @Res() reply: FastifyReply,
   ) {
     const platformValue = this.safeParsePlatform(platform);
 
     if (oauthError) {
-      return this.redirectToAccounts(reply, { oauth: 'cancelled', platform: platformValue });
+      logger.warn(
+        {
+          requestId: getRequestId(request),
+          platform: platformValue,
+          oauthError,
+          oauthErrorDescription,
+          deniedScopes,
+          grantedScopes,
+        },
+        'OAuth provider trả lỗi trước khi callback có code',
+      );
+      return this.redirectToAccounts(reply, {
+        oauth: 'cancelled',
+        platform: platformValue,
+        reason: this.oauthProviderReason(oauthError, oauthErrorDescription, deniedScopes),
+      });
     }
 
     if (!code || !state) {
@@ -133,13 +152,14 @@ export class SocialAccountsController {
         {
           requestId,
           platform: platformValue,
-          err: error instanceof Error ? { name: error.name, message: error.message } : error,
+          err: this.errorLogObject(error),
         },
         timedOut ? 'OAuth callback quá thời gian chờ' : 'OAuth callback thất bại',
       );
       return this.redirectToAccounts(reply, {
         oauth: timedOut ? 'timeout' : 'failed',
         platform: platformValue,
+        reason: timedOut ? 'timeout' : this.oauthFailureReason(error),
       });
     }
   }
@@ -166,6 +186,45 @@ export class SocialAccountsController {
     params: Record<string, string | undefined>,
   ): FastifyReply {
     return reply.code(303).redirect(this.accountsUrl(params));
+  }
+
+  private oauthProviderReason(
+    error: string,
+    description: string | undefined,
+    deniedScopes: string | undefined,
+  ): string {
+    const text = `${error} ${description ?? ''} ${deniedScopes ?? ''}`.toLowerCase();
+    if (text.includes('invalid scope') || text.includes('pages_read_user_content')) {
+      return 'facebook_permission_not_available';
+    }
+    if (text.includes('access_denied')) return 'cancelled';
+    return 'provider_error';
+  }
+
+  private oauthFailureReason(error: unknown): string {
+    if (isPlatformError(error)) {
+      if (error.platform === 'FACEBOOK' && error.kind === 'PERMISSION_DENIED') {
+        return 'facebook_permission_not_available';
+      }
+      if (
+        error.kind === 'PERMISSION_DENIED' &&
+        /pages_read_user_content|invalid scope|permission/i.test(error.message)
+      ) {
+        return 'facebook_permission_not_available';
+      }
+      if (error.kind === 'AUTH_INVALID') return 'facebook_auth_invalid';
+      return `platform_${error.kind.toLowerCase()}`;
+    }
+    if (error instanceof Error && /OAuth state/i.test(error.message)) return 'invalid_state';
+    if (error instanceof Error && /callback không khớp phiên/i.test(error.message)) {
+      return 'session_mismatch';
+    }
+    return 'unknown';
+  }
+
+  private errorLogObject(error: unknown): unknown {
+    if (isPlatformError(error)) return error.toLogObject();
+    return error instanceof Error ? { name: error.name, message: error.message } : error;
   }
 
   private auditContext(request: FastifyRequest) {

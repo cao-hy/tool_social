@@ -63,6 +63,7 @@ const platformOAuthSchema = z.object({
   FACEBOOK_APP_SECRET: z.string().optional(),
   FACEBOOK_WEBHOOK_SECRET: z.string().optional(),
   FACEBOOK_API_VERSION: z.string().optional(),
+  FACEBOOK_LOGIN_CONFIG_ID: z.string().optional(),
 
   INSTAGRAM_APP_ID: z.string().optional(),
   INSTAGRAM_APP_SECRET: z.string().optional(),

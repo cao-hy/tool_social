@@ -39,6 +39,29 @@ describe('FacebookPagesAdapter', () => {
     );
     expect(url.searchParams.get('scope')).toBe('pages_show_list,pages_read_engagement');
     expect(url.searchParams.get('state')).toBe('state-123');
+    expect(url.searchParams.get('return_scopes')).toBe('true');
+  });
+
+  it('dùng Facebook Login for Business config_id khi được cấu hình', () => {
+    const adapter = new FacebookPagesAdapter({
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+      loginConfigId: 'config-123',
+    });
+
+    const url = new URL(
+      adapter.buildAuthorizationUrl({
+        redirectUri: 'http://localhost:4000/api/v1/oauth/facebook/callback',
+        state: 'state-123',
+        scopes: ['pages_show_list', 'pages_read_user_content'],
+      }),
+    );
+
+    expect(url.searchParams.get('config_id')).toBe('config-123');
+    expect(url.searchParams.get('override_default_response_type')).toBe('true');
+    expect(url.searchParams.get('return_scopes')).toBe('true');
+    expect(url.searchParams.has('scope')).toBe(false);
   });
 
   it('đổi authorization code thành Page access token đầu tiên quản lý được', async () => {
@@ -93,7 +116,9 @@ describe('FacebookPagesAdapter', () => {
     expect(token.scopes).toEqual([
       'pages_show_list',
       'pages_read_engagement',
+      'pages_read_user_content',
       'pages_manage_posts',
+      'pages_manage_engagement',
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -207,6 +232,106 @@ describe('FacebookPagesAdapter', () => {
       externalUrl: 'https://www.facebook.com/page-1_post-1',
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('đọc comments của một Page post qua Graph API comments edge', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe('https://graph.facebook.com');
+      expect(url.pathname).toBe('/v24.0/page-1_post-1/comments');
+      expect(url.searchParams.get('access_token')).toBe('page-access-token');
+      expect(url.searchParams.get('filter')).toBe('stream');
+      expect(url.searchParams.get('after')).toBe('cursor-1');
+      expect(url.searchParams.get('since')).toBe('1710000000');
+      expect(url.searchParams.get('fields')).toContain('parent{id}');
+
+      return jsonResponse({
+        data: [
+          {
+            id: 'comment-1',
+            message: 'hello',
+            created_time: '2024-03-09T16:00:00+0000',
+            from: { id: 'user-1', name: 'Reader' },
+            like_count: 2,
+            is_hidden: false,
+          },
+          {
+            id: 'comment-2',
+            message: 'page reply',
+            created_time: '2024-03-09T16:01:00+0000',
+            from: { id: 'page-1', name: 'Main Page' },
+            parent: { id: 'comment-1' },
+          },
+        ],
+        paging: { cursors: { after: 'cursor-2' }, next: 'https://graph.facebook.com/next' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new FacebookPagesAdapter({
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+    });
+
+    await expect(
+      adapter.getComments(
+        { accessToken: 'page-access-token', externalAccountId: 'page-1', correlationId: 'test' },
+        {
+          externalPostId: 'page-1_post-1',
+          cursor: 'cursor-1',
+          since: new Date('2024-03-09T16:00:00.000Z'),
+        },
+      ),
+    ).resolves.toMatchObject({
+      nextCursor: 'cursor-2',
+      hasMore: true,
+      items: [
+        {
+          externalCommentId: 'comment-1',
+          externalPostId: 'page-1_post-1',
+          authorExternalId: 'user-1',
+          authorName: 'Reader',
+          message: 'hello',
+          likeCount: 2,
+          isHidden: false,
+          isFromOwner: false,
+        },
+        {
+          externalCommentId: 'comment-2',
+          parentExternalCommentId: 'comment-1',
+          isFromOwner: true,
+        },
+      ],
+    });
+  });
+
+  it('reply comment bằng Page access token', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      expect(String(input)).toBe('https://graph.facebook.com/v24.0/comment-1/comments');
+      expect(init?.method).toBe('POST');
+      expect(String(init?.body)).toContain('access_token=page-access-token');
+      expect(String(init?.body)).toContain('message=C%E1%BA%A3m+%C6%A1n+b%E1%BA%A1n');
+      return jsonResponse({ id: 'reply-1' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new FacebookPagesAdapter({
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+    });
+
+    await expect(
+      adapter.replyToComment(
+        { accessToken: 'page-access-token', externalAccountId: 'page-1', correlationId: 'test' },
+        'comment-1',
+        'Cảm ơn bạn',
+      ),
+    ).resolves.toMatchObject({
+      externalReplyId: 'reply-1',
+      sentAt: expect.any(Date),
+    });
   });
 });
 

@@ -16,19 +16,26 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
     }
   });
 
-  it('TẤT CẢ capability đang là UNVERIFIED — không có ô nào bị đoán', () => {
+  it('chỉ các capability đã có nguồn xác minh mới rời UNVERIFIED', () => {
     for (const platform of PLATFORMS) {
       const { verified, total } = countVerified(CAPABILITY_MATRIX[platform]);
       expect(total).toBeGreaterThan(0);
-      expect(verified).toBe(0);
+      expect(verified).toBe(platform === 'FACEBOOK' ? 2 : 0);
     }
+    expect(CAPABILITY_MATRIX.FACEBOOK.capabilities.readComments).toMatchObject({
+      state: 'CONDITIONAL',
+      source: expect.stringContaining('developers.facebook.com'),
+      verifiedAt: '2026-07-28',
+    });
   });
 
-  it('UNVERIFIED KHÔNG được coi là hỗ trợ — hệ thống không hứa điều chưa kiểm chứng', () => {
+  it('UNVERIFIED KHÔNG được coi là hỗ trợ — chỉ capability đã xác minh mới dùng được', () => {
     for (const platform of PLATFORMS) {
       const table = CAPABILITY_MATRIX[platform];
       for (const key of Object.keys(table.capabilities) as Array<keyof typeof table.capabilities>) {
-        expect(isSupported(table, key)).toBe(false);
+        expect(isSupported(table, key)).toBe(
+          platform === 'FACEBOOK' && (key === 'readComments' || key === 'replyToComment'),
+        );
       }
     }
   });
@@ -42,11 +49,11 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
     }
   });
 
-  it('tiến độ xác minh báo cáo trung thực là 0%', () => {
+  it('tiến độ xác minh báo cáo trung thực', () => {
     const progress = getVerificationProgress();
     for (const platform of PLATFORMS) {
-      expect(progress[platform].percent).toBe(0);
-      expect(progress[platform].verified).toBe(0);
+      expect(progress[platform].verified).toBe(platform === 'FACEBOOK' ? 2 : 0);
+      expect(progress[platform].percent).toBe(platform === 'FACEBOOK' ? 6 : 0);
     }
   });
 

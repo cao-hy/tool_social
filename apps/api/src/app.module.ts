@@ -4,6 +4,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { InfrastructureModule } from './infrastructure/infrastructure.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { CommentsModule } from './modules/comments/comments.module';
 import { HealthModule } from './modules/health/health.module';
 import { PlatformsModule } from './modules/platforms/platforms.module';
 import { MediaModule } from './modules/media/media.module';
@@ -11,6 +12,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 import { PostsModule } from './modules/posts/posts.module';
 import { SocialAccountsModule } from './modules/social-accounts/social-accounts.module';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module';
+import { WebhooksModule } from './modules/webhooks/webhooks.module';
 
 /**
  * Filter và interceptor đăng ký ở đây (chứ không phải trên từng controller) để
@@ -27,10 +29,12 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module';
     PlatformsModule,
     AuthModule,
     WorkspacesModule,
+    WebhooksModule,
     SocialAccountsModule,
     MediaModule,
     PostsModule,
     NotificationsModule,
+    CommentsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

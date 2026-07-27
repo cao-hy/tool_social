@@ -27,12 +27,27 @@ export async function createApp(env: ApiEnv): Promise<NestFastifyApplication> {
       // Route webhook sẽ đăng ký content-type parser riêng ở Phase 3.
       genReqId: () => undefined as unknown as string,
     }),
-    { bufferLogs: true },
+    { bufferLogs: true, bodyParser: false },
   );
 
   app.setGlobalPrefix(API_PREFIX, { exclude: UNVERSIONED_ROUTES });
 
   const fastify = app.getHttpAdapter().getInstance();
+
+  fastify.removeContentTypeParser(['application/json', 'application/*+json']);
+  fastify.addContentTypeParser(
+    ['application/json', 'application/*+json'],
+    { parseAs: 'buffer', bodyLimit: 5 * 1024 * 1024 },
+    (request, body, done) => {
+      const rawBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
+      (request as FastifyRequest & { rawBody?: Buffer }).rawBody = rawBody;
+      try {
+        done(null, JSON.parse(rawBody.toString('utf8')));
+      } catch (error) {
+        done(error as Error);
+      }
+    },
+  );
 
   fastify.addContentTypeParser(
     [
@@ -69,7 +84,7 @@ export async function createApp(env: ApiEnv): Promise<NestFastifyApplication> {
   });
 
   await app.register(fastifyRateLimit, {
-    max: env.RATE_LIMIT_MAX,
+    max: effectiveRateLimitMax(env),
     timeWindow: env.RATE_LIMIT_WINDOW_MS,
     // Ở Phase 2 sẽ chuyển sang store Redis để có hiệu lực trên nhiều instance.
     // Store in-memory chỉ giới hạn được trong phạm vi một process.
@@ -88,4 +103,9 @@ export async function createApp(env: ApiEnv): Promise<NestFastifyApplication> {
   app.enableShutdownHooks();
 
   return app;
+}
+
+function effectiveRateLimitMax(env: ApiEnv): number {
+  if (env.NODE_ENV !== 'development') return env.RATE_LIMIT_MAX;
+  return Math.max(env.RATE_LIMIT_MAX, 1000);
 }

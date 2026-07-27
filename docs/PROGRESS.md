@@ -51,3 +51,31 @@
   - Facebook media publish mới hỗ trợ ảnh và nhánh video đơn giản; chưa có resumable video upload, alt text, thumbnail video, hoặc cleanup ảnh tạm khi feed publish thất bại.
   - Chưa có test tích hợp với DB thật cho toàn bộ processor publish/job log.
   - Các E2E #4, #5, #6, #7, #8, #12, #13 chưa được tự động hóa đầy đủ trong repo; hiện mới có smoke test thủ công với credential thật cho Facebook.
+
+## 2026-07-28
+
+- Phase 6 Posts Management lát MVP đã thêm:
+  - API list posts có filter tổ hợp: status, platform, social account, keyword, khoảng ngày tạo.
+  - API list posts có sort `createdAt`/`updatedAt` và cursor pagination theo `(sortField, id)` để ổn định hơn offset pagination.
+  - API `GET /posts/:postId` trả thêm job history từ `BackgroundJob` cho các job publish/retry liên quan.
+  - UI `/posts` có search/filter/sort/pagination, action Detail/Edit/Delete/Duplicate/Retry, export CSV theo filter hiện tại.
+  - UI `/posts/:id` hiển thị nội dung, media, trạng thái từng platform post, external URL, lỗi, timeline và job history.
+  - Export CSV có helper escape riêng và test chống comma/newline/quote/CSV injection.
+- Giới hạn còn lại:
+  - Manual sync và remote delete chưa bật thành action thật vì capability matrix của nền tảng vẫn `UNVERIFIED`; UI hiển thị cảnh báo thay vì cho bấm một chức năng chưa được xác minh.
+  - Chưa có Playwright E2E cho toàn bộ Phase 6; hiện mới có unit test CSV và verification bằng typecheck/lint/build.
+- Phase 7 Comments Inbox lát core đã thêm:
+  - API `comments`: list/filter theo status/platform/account/assignee/tag/search, xem chi tiết, đổi status, assign, tag, note nội bộ, reply, reply template.
+  - `comment:reply`, `comment:moderate`, `comment:assign` được enforce qua RBAC; assign chỉ nhận member trong cùng workspace và tạo notification cho assignee.
+  - Worker `sync-comments` upsert comment theo unique `(socialAccountId, externalCommentId)` để chống trùng, đồng thời nối `parentExternalCommentId` thành `parentId` để hiển thị thread.
+  - Facebook adapter đã có `getComments()` thật qua Graph API comments edge cho `PlatformPost.externalPostId`; sync theo account sẽ quét 25 platform posts đã publish gần nhất rồi kéo comment từng bài. Token cần scope `pages_read_user_content` hoặc app cần Page Public Content Access.
+  - Webhook public `GET/POST /api/v1/webhooks/:platform`: verify challenge, giữ raw body cho signature, chữ ký sai bị 401, event trùng bị nhận diện qua unique constraint và không enqueue lại.
+  - Worker `process-webhook` parse event qua adapter, tìm social account/post liên quan rồi enqueue `sync-comments`.
+  - Facebook/Instagram adapter có verifier/parser webhook Meta cơ bản dùng `x-hub-signature-256`.
+  - UI `/inbox`: filter, danh sách comment dạng cây, detail panel, status, assignment, tags, notes, reply templates, sync comments.
+  - UI đọc `/platforms/capabilities`; nếu `readComments`/`replyToComment` chưa `SUPPORTED`/`CONDITIONAL` thì khóa/ẩn nút thay vì để người dùng bấm rồi mới báo lỗi.
+  - Nav mở tới Phase 7 (`CURRENT_PHASE = 7`).
+  - Test mới: webhook signature/replay, backend reject reply unsupported, backend reject assign cross-workspace.
+- Giới hạn Phase 7 còn lại:
+  - Chưa có Playwright E2E #10/#11.
+  - Facebook read comments mới bật ở trạng thái `CONDITIONAL`: chỉ cho post đã có `externalPostId` trong hệ thống và token Page có `pages_read_user_content` hoặc app có Page Public Content Access. Token cũ thiếu scope này cần ngắt kết nối/kết nối lại. Reply comment, Instagram comments và đọc comment từ post tạo ngoài hệ thống vẫn chưa bật.

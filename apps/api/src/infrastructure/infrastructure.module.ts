@@ -39,6 +39,12 @@ export const ADAPTER_REGISTRY = Symbol('ADAPTER_REGISTRY');
             appId: env.FACEBOOK_APP_ID,
             appSecret: env.FACEBOOK_APP_SECRET,
             apiVersion: env.FACEBOOK_API_VERSION,
+            loginConfigId: env.FACEBOOK_LOGIN_CONFIG_ID,
+          },
+          instagram: {
+            appId: env.INSTAGRAM_APP_ID,
+            appSecret: env.INSTAGRAM_APP_SECRET,
+            apiVersion: env.FACEBOOK_API_VERSION,
           },
         }),
     },

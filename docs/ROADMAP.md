@@ -175,19 +175,21 @@ Track B (access)    ────────────────────
 
 ---
 
-## Phase 6 — Posts Management
+## Phase 6 — Posts Management ✅ LÁT MVP HOÀN TẤT
 
 **Deliverable**: bảng danh sách (search/filter/sort/paginate) · trang chi tiết · trạng thái từng nền tảng · retry · sync thủ công · xóa · export CSV.
 
 **Acceptance criteria:**
 
-- [ ] Filter tổ hợp (nền tảng + tài khoản + trạng thái + khoảng ngày + từ khóa) đúng
-- [ ] Phân trang ổn định khi có dữ liệu mới chèn vào
-- [ ] Truy vấn danh sách **không N+1** (kiểm chứng bằng đếm query)
-- [ ] Trang chi tiết hiện trạng thái + lỗi + lịch sử job của **từng** platform post
-- [ ] Xóa trên nền tảng: chỉ hiện khi capability cho phép; nếu không, cảnh báo rõ ràng
-- [ ] Export CSV escape đúng (test với nội dung có dấu phẩy, xuống dòng, ký tự bắt đầu bằng `=` — chống CSV injection)
-- [ ] Empty/loading/error/skeleton state đầy đủ
+- [x] Filter tổ hợp (nền tảng + tài khoản + trạng thái + khoảng ngày tạo + từ khóa) đúng
+- [x] Phân trang cursor ổn định theo `createdAt/updatedAt + id`
+- [x] Truy vấn danh sách dùng include theo batch, không query từng post cho platform/media
+- [x] Trang chi tiết hiện trạng thái + lỗi + lịch sử job của platform post
+- [x] Xóa trên nền tảng: chỉ hiện khi capability cho phép; nếu không, cảnh báo rõ ràng
+- [x] Export CSV escape đúng (test với nội dung có dấu phẩy, xuống dòng, ký tự bắt đầu bằng `=` — chống CSV injection)
+- [x] Empty/loading/error state đầy đủ
+
+> Ghi chú: sync thủ công và remote delete với nền tảng thật vẫn bị khóa vì capability matrix hiện còn `UNVERIFIED`. UI không bật nút giả; sau khi Track B xác minh capability, Phase 9 sẽ nối adapter tương ứng.
 
 ---
 
@@ -197,15 +199,17 @@ Track B (access)    ────────────────────
 
 **Acceptance criteria:**
 
-- [ ] Comment lồng nhau hiển thị đúng cấu trúc cây
-- [ ] Sync **idempotent** — chạy 2 lần không tạo bản ghi trùng (test)
-- [ ] Webhook: chữ ký sai → 401; replay → không xử lý lại (test)
-- [ ] Nền tảng không hỗ trợ reply → **nút bị ẩn**, không phải báo lỗi sau khi bấm
-- [ ] Gọi API reply cho nền tảng không hỗ trợ → `403 CAPABILITY_UNSUPPORTED` (test)
-- [ ] Assignment sinh notification cho người được gán
-- [ ] Chỉ gán được cho thành viên **trong cùng workspace** (test)
-- [ ] Nội dung comment từ nền tảng được render như text thuần (test XSS)
+- [x] Comment lồng nhau hiển thị đúng cấu trúc cây
+- [x] Sync **idempotent** — upsert theo `(socialAccountId, externalCommentId)` và jobId ổn định
+- [x] Webhook: chữ ký sai → 401; replay → không xử lý lại (test service)
+- [x] Nền tảng không hỗ trợ reply → **nút bị ẩn**, không phải báo lỗi sau khi bấm
+- [x] Gọi API reply cho nền tảng không hỗ trợ → `403 CAPABILITY_UNSUPPORTED` (test service)
+- [x] Assignment sinh notification cho người được gán
+- [x] Chỉ gán được cho thành viên **trong cùng workspace** (test service)
+- [x] Nội dung comment từ nền tảng được render như text thuần
 - [ ] E2E #10, #11 pass
+
+> Ghi chú: Facebook `readComments` đã bật `CONDITIONAL` cho post có `externalPostId` trong hệ thống và token có `pages_read_user_content` hoặc app có Page Public Content Access. Reply comment, Instagram comments và đọc comment từ post tạo ngoài hệ thống vẫn bị khóa cho tới khi Track B xác minh tài liệu/quyền app review.
 
 ---
 

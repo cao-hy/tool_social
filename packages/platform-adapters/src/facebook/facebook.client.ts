@@ -7,9 +7,13 @@ import {
 import {
   facebookPageProfileSchema,
   facebookPagesResponseSchema,
+  facebookCommentReplyResponseSchema,
+  facebookCommentsResponseSchema,
   facebookPhotoUploadResponseSchema,
   facebookPublishPostResponseSchema,
   facebookTokenResponseSchema,
+  type FacebookCommentsResponse,
+  type FacebookCommentReplyResponse,
   type FacebookPage,
   type FacebookPageProfile,
   type FacebookPhotoUploadResponse,
@@ -21,6 +25,7 @@ export interface FacebookGraphClientConfig {
   appId: string;
   appSecret: string;
   apiVersion: string;
+  loginConfigId?: string;
 }
 
 export class FacebookGraphClient {
@@ -38,7 +43,13 @@ export class FacebookGraphClient {
     url.searchParams.set('redirect_uri', input.redirectUri);
     url.searchParams.set('state', input.state);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', input.scopes.join(','));
+    url.searchParams.set('return_scopes', 'true');
+    if (this.config.loginConfigId) {
+      url.searchParams.set('config_id', this.config.loginConfigId);
+      url.searchParams.set('override_default_response_type', 'true');
+    } else {
+      url.searchParams.set('scope', input.scopes.join(','));
+    }
     return url.toString();
   }
 
@@ -156,6 +167,41 @@ export class FacebookGraphClient {
       `/${input.pageId}/videos?access_token=${encodeURIComponent(input.pageAccessToken)}`,
       form,
       facebookPublishPostResponseSchema,
+    );
+  }
+
+  async getPostComments(input: {
+    externalPostId: string;
+    pageAccessToken: string;
+    cursor?: string;
+    limit?: number;
+    since?: Date;
+  }): Promise<FacebookCommentsResponse> {
+    const params: Record<string, string> = {
+      access_token: input.pageAccessToken,
+      fields: 'id,message,from{id,name,picture},created_time,like_count,parent{id},is_hidden',
+      filter: 'stream',
+      limit: String(input.limit ?? 25),
+      order: 'chronological',
+    };
+    if (input.cursor) params.after = input.cursor;
+    if (input.since) params.since = String(Math.floor(input.since.getTime() / 1000));
+
+    return this.get(`/${input.externalPostId}/comments`, params, facebookCommentsResponseSchema);
+  }
+
+  async replyToComment(input: {
+    externalCommentId: string;
+    pageAccessToken: string;
+    message: string;
+  }): Promise<FacebookCommentReplyResponse> {
+    return this.postForm(
+      `/${input.externalCommentId}/comments`,
+      {
+        access_token: input.pageAccessToken,
+        message: input.message,
+      },
+      facebookCommentReplyResponseSchema,
     );
   }
 

@@ -40,15 +40,19 @@ export default function AccountsPage() {
     const params = new URLSearchParams(window.location.search);
     const connected = params.get('connected');
     const oauth = params.get('oauth');
+    const reason = params.get('reason');
 
     if (connected) {
       setNotice(`Đã kết nối ${connected}.`);
     } else if (oauth === 'cancelled') {
-      setError('Bạn đã hủy luồng kết nối.');
+      setError(oauthReasonMessage(reason) ?? 'Bạn đã hủy luồng kết nối.');
     } else if (oauth === 'timeout') {
       setError('Kết nối quá thời gian chờ. Kiểm tra log API rồi thử lại.');
     } else if (oauth === 'missing-code' || oauth === 'failed') {
-      setError('Kết nối chưa hoàn tất. Kiểm tra quyền Facebook app và thử lại.');
+      setError(
+        oauthReasonMessage(reason) ??
+          'Kết nối chưa hoàn tất. Kiểm tra quyền Facebook app và thử lại.',
+      );
     }
   }, []);
 
@@ -202,4 +206,27 @@ export default function AccountsPage() {
       </section>
     </div>
   );
+}
+
+function oauthReasonMessage(reason: string | null): string | null {
+  switch (reason) {
+    case 'facebook_permission_not_available':
+      return 'Facebook chưa grant pages_read_user_content vào token. Kiểm tra Login Configuration ID trong Facebook Login for Business có quyền này, restart API rồi disconnect/connect lại.';
+    case 'platform_network':
+      return 'API không gọi được graph.facebook.com trong lúc đổi token. Kiểm tra DNS/VPN/firewall hoặc cấu hình 1.1.1.1 như lần trước, rồi bấm kết nối lại.';
+    case 'platform_permission_denied':
+      return 'Facebook từ chối quyền OAuth. Với comment inbox, app cần cấp được pages_read_user_content hoặc Page Public Content Access.';
+    case 'facebook_auth_invalid':
+      return 'Facebook từ chối token OAuth. Hãy kiểm tra App ID/App Secret/API version và redirect URI.';
+    case 'invalid_state':
+      return 'OAuth state không hợp lệ hoặc đã hết hạn. Hãy bấm kết nối lại từ trang này.';
+    case 'session_mismatch':
+      return 'Phiên đăng nhập hiện tại không khớp với người bắt đầu OAuth. Hãy đăng nhập lại rồi kết nối.';
+    case 'provider_error':
+      return 'Facebook từ chối luồng OAuth. Hãy kiểm tra quyền được yêu cầu trong App Dashboard.';
+    case 'cancelled':
+      return 'Bạn đã hủy luồng kết nối.';
+    default:
+      return null;
+  }
 }

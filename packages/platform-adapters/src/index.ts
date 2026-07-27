@@ -13,4 +13,5 @@ export * from './facebook/facebook.errors';
 export * from './facebook/facebook.mapper';
 export * from './facebook/facebook.schemas';
 export * from './facebook/facebook.validator';
+export * from './instagram/instagram.adapter';
 export * from './registry-factory';

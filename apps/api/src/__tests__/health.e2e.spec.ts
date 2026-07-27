@@ -163,18 +163,21 @@ describe('Health & Platforms (e2e)', () => {
       expect(platforms.sort()).toEqual(['FACEBOOK', 'INSTAGRAM', 'PINTEREST', 'TIKTOK', 'YOUTUBE']);
     });
 
-    it('báo cáo trung thực rằng chưa capability nào được xác minh (prompt §7)', async () => {
+    it('báo cáo trung thực số capability đã xác minh (prompt §7)', async () => {
       const response = await request(app.getHttpServer()).get('/platforms/capabilities');
-      for (const platform of Object.values(response.body.data.verificationProgress)) {
-        expect((platform as { percent: number }).percent).toBe(0);
-      }
+      expect(response.body.data.verificationProgress.FACEBOOK.verified).toBe(1);
+      expect(response.body.data.verificationProgress.INSTAGRAM.verified).toBe(0);
     });
 
-    it('mọi capability đều ở trạng thái UNVERIFIED — không ô nào bị đoán', async () => {
+    it('chỉ Facebook readComments đã được xác minh, các ô khác không bị đoán', async () => {
       const response = await request(app.getHttpServer()).get('/platforms/capabilities');
       for (const platform of response.body.data.platforms) {
-        for (const capability of Object.values(platform.capabilities)) {
-          expect((capability as { state: string }).state).toBe('UNVERIFIED');
+        for (const [key, capability] of Object.entries(platform.capabilities)) {
+          const expected =
+            platform.platform === 'FACEBOOK' && key === 'readComments'
+              ? 'CONDITIONAL'
+              : 'UNVERIFIED';
+          expect((capability as { state: string }).state).toBe(expected);
         }
       }
     });

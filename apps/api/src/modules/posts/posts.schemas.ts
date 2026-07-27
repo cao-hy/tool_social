@@ -45,9 +45,17 @@ export const listPostsQuerySchema = z.object({
       'PUBLISHED',
       'PARTIALLY_PUBLISHED',
       'FAILED',
+      'CANCELLED',
     ])
     .optional(),
   platform: platformSchema.optional(),
+  socialAccountId: z.string().min(1).optional(),
+  q: optionalText,
+  dateFrom: z.coerce.date().optional(),
+  dateTo: z.coerce.date().optional(),
+  sortBy: z.enum(['createdAt', 'updatedAt']).default('createdAt'),
+  direction: z.enum(['asc', 'desc']).default('desc'),
+  cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 
