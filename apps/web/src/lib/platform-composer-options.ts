@@ -1,6 +1,7 @@
 import type { Platform } from '@socialhub/shared';
 
 export interface PlatformOverrideDraft {
+  customized: boolean;
   title: string;
   caption: string;
   description: string;
@@ -27,6 +28,7 @@ export interface PlatformOverrideDraft {
 }
 
 export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
+  customized: false,
   title: '',
   caption: '',
   description: '',
@@ -60,8 +62,17 @@ export function platformOverrideFromOptions(input: {
   options?: Record<string, unknown> | null;
 }): PlatformOverrideDraft {
   const options = input.options ?? {};
+  const hasOptions = Object.keys(options).length > 0;
+  const hasContentOverride = Boolean(
+    input.title ||
+    input.caption ||
+    input.description ||
+    input.linkUrl ||
+    input.mediaAssetIds?.length,
+  );
   return {
     ...EMPTY_PLATFORM_OVERRIDE,
+    customized: hasContentOverride || hasOptions,
     title: input.title ?? '',
     caption: input.caption ?? '',
     description: input.description ?? '',
@@ -102,6 +113,8 @@ export function platformOverrideFromOptions(input: {
 }
 
 export function platformOptions(platform: Platform, draft: PlatformOverrideDraft) {
+  if (!draft.customized) return undefined;
+
   switch (platform) {
     case 'FACEBOOK':
       return compactOptions({
@@ -148,6 +161,21 @@ export function hasPlatformSpecificOptions(
   draft: PlatformOverrideDraft,
 ): boolean {
   return Boolean(platformOptions(platform, draft));
+}
+
+export function isPlatformOverrideActive(
+  platform: Platform,
+  draft: PlatformOverrideDraft,
+): boolean {
+  if (!draft.customized) return false;
+  return Boolean(
+    draft.title.trim() ||
+    draft.caption.trim() ||
+    draft.description.trim() ||
+    draft.linkUrl.trim() ||
+    draft.mediaAssetIds.length > 0 ||
+    hasPlatformSpecificOptions(platform, draft),
+  );
 }
 
 function compactOptions(input: Record<string, unknown>): Record<string, unknown> | undefined {

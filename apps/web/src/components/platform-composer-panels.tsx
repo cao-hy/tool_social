@@ -12,6 +12,11 @@ interface PlatformComposerPanelsProps {
   mediaAssets: MediaAssetView[];
   drafts: Record<string, PlatformOverrideDraft>;
   disabled?: boolean;
+  common?: {
+    title?: string;
+    body?: string;
+    linkUrl?: string;
+  };
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
 }
 
@@ -20,21 +25,22 @@ export function PlatformComposerPanels({
   mediaAssets,
   drafts,
   disabled = false,
+  common,
   onChange,
 }: PlatformComposerPanelsProps) {
   if (accounts.length === 0) return null;
 
   return (
-    <section className="space-y-3 rounded-lg border border-slate-200 bg-white p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-slate-950">Tùy chỉnh theo nền tảng</h2>
+          <h2 className="text-base font-semibold text-slate-950">Nội dung riêng từng nền tảng</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Field chung vẫn dùng làm mặc định. Chỉ mở phần riêng khi social đó cần title, privacy,
-            board, media hoặc caption khác.
+            Mặc định mọi tài khoản dùng nội dung chung. Chỉ bật tùy chỉnh cho target cần caption,
+            media hoặc option khác.
           </p>
         </div>
-        <span className="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600">
+        <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
           {accounts.length} target
         </span>
       </div>
@@ -46,44 +52,88 @@ export function PlatformComposerPanels({
           return (
             <article
               key={account.id}
-              className="rounded-md border border-slate-200 bg-slate-50/60 p-4"
+              className="overflow-hidden rounded-lg border border-slate-200 bg-white"
             >
-              <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-950">{account.name}</p>
-                  <p className="text-xs text-slate-500">
-                    {PLATFORM_LABELS[account.platform]} · {account.username ?? account.id}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-semibold text-slate-950">{account.name}</p>
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                      {PLATFORM_LABELS[account.platform]}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">{account.username ?? account.id}</p>
                 </div>
-                <span
-                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                    issues.length === 0
-                      ? 'bg-emerald-50 text-emerald-700'
-                      : 'bg-amber-50 text-amber-700'
-                  }`}
-                >
-                  {issues.length === 0 ? 'Sẵn sàng' : `${issues.length} cần sửa`}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                      issues.length === 0
+                        ? 'bg-emerald-50 text-emerald-700'
+                        : 'bg-amber-50 text-amber-700'
+                    }`}
+                  >
+                    {issues.length === 0 ? 'Sẵn sàng' : `${issues.length} cần sửa`}
+                  </span>
+                  <button
+                    className={`h-9 rounded-md border px-3 text-sm font-medium transition ${
+                      draft.customized
+                        ? 'border-brand-200 bg-brand-50 text-brand-700'
+                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                    disabled={disabled}
+                    type="button"
+                    onClick={() => onChange(account.id, { customized: !draft.customized })}
+                  >
+                    {draft.customized ? 'Đang tùy chỉnh' : 'Dùng bản chung'}
+                  </button>
+                </div>
               </div>
 
-              {issues.length > 0 ? (
-                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  {issues.join(' · ')}
+              <div className="space-y-3 px-4 py-3">
+                <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-3">
+                  <InheritedChip label="Text" value={commonTextSummary(common)} />
+                  <InheritedChip
+                    label="Media"
+                    value={mediaSummary(resolveMedia(draft, mediaAssets))}
+                  />
+                  <InheritedChip
+                    label="Mode"
+                    value={
+                      draft.customized ? 'Riêng target này' : platformModeHint(account.platform)
+                    }
+                  />
                 </div>
-              ) : null}
 
-              <PlatformFields
-                account={account}
-                disabled={disabled}
-                draft={draft}
-                mediaAssets={mediaAssets}
-                onChange={onChange}
-              />
+                {issues.length > 0 ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    {issues.join(' · ')}
+                  </div>
+                ) : null}
+
+                {draft.customized ? (
+                  <PlatformFields
+                    account={account}
+                    disabled={disabled}
+                    draft={draft}
+                    mediaAssets={mediaAssets}
+                    onChange={onChange}
+                  />
+                ) : null}
+              </div>
             </article>
           );
         })}
       </div>
     </section>
+  );
+}
+
+function InheritedChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md bg-slate-50 px-3 py-2">
+      <span className="block font-medium text-slate-500">{label}</span>
+      <span className="mt-0.5 block truncate text-slate-800">{value}</span>
+    </div>
   );
 }
 
@@ -513,8 +563,38 @@ function resolveMedia(
   draft: PlatformOverrideDraft,
   mediaAssets: MediaAssetView[],
 ): MediaAssetView[] {
-  if (draft.mediaAssetIds.length === 0) return mediaAssets;
+  if (!draft.customized || draft.mediaAssetIds.length === 0) return mediaAssets;
   return mediaAssets.filter((asset) => draft.mediaAssetIds.includes(asset.id));
+}
+
+function commonTextSummary(common: PlatformComposerPanelsProps['common']): string {
+  if (!common) return 'Theo nội dung chung';
+  const parts = [
+    common.title?.trim() ? 'tiêu đề' : null,
+    common.body?.trim() ? 'nội dung' : null,
+    common.linkUrl?.trim() ? 'link' : null,
+  ].filter(Boolean);
+  return parts.length > 0 ? `Dùng ${parts.join(' + ')}` : 'Chưa có text chung';
+}
+
+function mediaSummary(mediaAssets: MediaAssetView[]): string {
+  if (mediaAssets.length === 0) return 'Chưa có media';
+  const imageCount = mediaAssets.filter((asset) => asset.type === 'IMAGE').length;
+  const videoCount = mediaAssets.filter((asset) => asset.type === 'VIDEO').length;
+  return [
+    imageCount > 0 ? `${imageCount} ảnh` : null,
+    videoCount > 0 ? `${videoCount} video` : null,
+  ]
+    .filter(Boolean)
+    .join(' + ');
+}
+
+function platformModeHint(platform: Platform): string {
+  if (platform === 'YOUTUBE') return 'Dùng title + 1 video chung';
+  if (platform === 'TIKTOK') return 'Dùng caption + 1 video chung';
+  if (platform === 'PINTEREST') return 'Dùng title/link/media chung';
+  if (platform === 'INSTAGRAM') return 'Dùng caption/media chung';
+  return 'Kế thừa nội dung chung';
 }
 
 function titleLabel(platform: Platform): string | null {
