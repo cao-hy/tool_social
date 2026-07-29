@@ -365,7 +365,7 @@ async function mediaInputFromAsset(
 ) {
   return {
     type: mediaAsset.type as MediaType,
-    url: publicMediaUrl(storage.publicBaseUrl, mediaAsset.storageKey),
+    url: publicMediaUrl(storage.publicBaseUrl, storage.bucket, mediaAsset.storageKey),
     bytes: await readObjectBytes(storage.client, storage.bucket, mediaAsset.storageKey),
     mimeType: mediaAsset.mimeType ?? 'application/octet-stream',
     sizeBytes: mediaAsset.sizeBytes ?? 0,
@@ -375,9 +375,14 @@ async function mediaInputFromAsset(
   };
 }
 
-function publicMediaUrl(publicBaseUrl: string | undefined, key: string): string {
+function publicMediaUrl(publicBaseUrl: string | undefined, bucket: string, key: string): string {
   if (!publicBaseUrl) return key;
-  return `${publicBaseUrl.replace(/\/$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`;
+  const url = new URL(publicBaseUrl);
+  const existingSegments = url.pathname.split('/').filter(Boolean);
+  const keySegments = key.split('/').filter(Boolean).map(encodeURIComponent);
+  const needsBucket = !existingSegments.includes(bucket);
+  url.pathname = [...existingSegments, ...(needsBucket ? [bucket] : []), ...keySegments].join('/');
+  return url.toString();
 }
 
 async function markBackgroundJobRunning(

@@ -30,6 +30,23 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
         message:
           'Instagram Graph API cần media URL công khai để Meta tải được. Local MinIO/localhost hoặc storage key nội bộ không dùng được.',
       });
+      return;
+    }
+
+    const host = safeHostname(item.url);
+    if (
+      host === 'localhost' ||
+      host === 'minio' ||
+      host === '127.0.0.1' ||
+      host?.startsWith('10.') ||
+      host?.startsWith('172.') ||
+      host?.startsWith('192.168.')
+    ) {
+      issues.push({
+        field: `media[${index}].url`,
+        message:
+          'Instagram cần URL media public ngoài internet. Hãy cấu hình S3_PUBLIC_BASE_URL trỏ tới domain media public.',
+      });
     }
   });
 
@@ -46,4 +63,12 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
   }
 
   return { valid: issues.length === 0, issues };
+}
+
+function safeHostname(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
