@@ -9,7 +9,7 @@ import { MediaPreview } from '@/components/media-preview';
 import { postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
-import type { ContentPostView } from '@/lib/types';
+import type { ContentPostView, PlatformPostView, YouTubePlatformState } from '@/lib/types';
 
 export default function PostDetailPage() {
   const auth = useAuth();
@@ -20,6 +20,7 @@ export default function PostDetailPage() {
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [platformAction, setPlatformAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function loadPost() {
@@ -68,11 +69,40 @@ export default function PostDetailPage() {
     }
   }
 
+  async function refreshPlatformState(platformPost: PlatformPostView) {
+    if (!workspace || !post) return;
+    setPlatformAction(`refresh:${platformPost.id}`);
+    setError(null);
+    try {
+      const result = await postsApi.refreshPlatformState(workspace.id, post.id, platformPost.id);
+      setPost(result.post);
+    } catch (refreshError) {
+      setError(getErrorMessage(refreshError));
+    } finally {
+      setPlatformAction(null);
+    }
+  }
+
+  async function makeYouTubePublic(platformPost: PlatformPostView) {
+    if (!workspace || !post) return;
+    setPlatformAction(`public:${platformPost.id}`);
+    setError(null);
+    try {
+      const result = await postsApi.makeYouTubePublic(workspace.id, post.id, platformPost.id);
+      setPost(result.post);
+    } catch (publishError) {
+      setError(getErrorMessage(publishError));
+    } finally {
+      setPlatformAction(null);
+    }
+  }
+
   if (!workspace) {
     return <p className="text-sm text-slate-600">Tài khoản này chưa thuộc workspace nào.</p>;
   }
 
   const canRetry = hasPermission(workspace.role, 'post:publish');
+  const canPublish = hasPermission(workspace.role, 'post:publish');
   const canDelete = hasPermission(workspace.role, 'post:delete');
   const canUpdate = hasPermission(workspace.role, 'post:update');
   const hasFailedPlatformPost =
@@ -236,6 +266,60 @@ export default function PostDetailPage() {
                       Mở bài trên nền tảng
                     </a>
                   ) : null}
+                  {hasPlatformOverride(platformPost) ? (
+                    <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+                      <p className="text-xs font-semibold uppercase text-slate-500">
+                        Override cho target này
+                      </p>
+                      <div className="mt-2 space-y-2 text-sm text-slate-700">
+                        {platformPost.title ? (
+                          <p>
+                            <span className="font-semibold text-slate-900">Title:</span>{' '}
+                            {platformPost.title}
+                          </p>
+                        ) : null}
+                        {platformPost.caption ? (
+                          <p className="whitespace-pre-wrap">
+                            <span className="font-semibold text-slate-900">Caption:</span>{' '}
+                            {platformPost.caption}
+                          </p>
+                        ) : null}
+                        {platformPost.description ? (
+                          <p className="whitespace-pre-wrap">
+                            <span className="font-semibold text-slate-900">Description:</span>{' '}
+                            {platformPost.description}
+                          </p>
+                        ) : null}
+                        {platformPost.linkUrl ? (
+                          <p className="break-all">
+                            <span className="font-semibold text-slate-900">Link:</span>{' '}
+                            {platformPost.linkUrl}
+                          </p>
+                        ) : null}
+                      </div>
+                      {platformPost.media.length > 0 ? (
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          {platformPost.media.map((asset) => (
+                            <MediaPreview key={asset.id} asset={asset} className="max-h-40" />
+                          ))}
+                        </div>
+                      ) : null}
+                      {platformPost.options ? (
+                        <pre className="mt-3 max-h-40 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
+                          {JSON.stringify(platformPost.options, null, 2)}
+                        </pre>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {platformPost.platform === 'YOUTUBE' ? (
+                    <YouTubeStatePanel
+                      canPublish={canPublish}
+                      onMakePublic={() => void makeYouTubePublic(platformPost)}
+                      onRefresh={() => void refreshPlatformState(platformPost)}
+                      platformAction={platformAction}
+                      platformPost={platformPost}
+                    />
+                  ) : null}
                 </article>
               ))}
             </div>
@@ -289,12 +373,115 @@ export default function PostDetailPage() {
   );
 }
 
+function YouTubeStatePanel({
+  platformPost,
+  platformAction,
+  canPublish,
+  onRefresh,
+  onMakePublic,
+}: {
+  platformPost: PlatformPostView;
+  platformAction: string | null;
+  canPublish: boolean;
+  onRefresh: () => void;
+  onMakePublic: () => void;
+}) {
+  const state = isYouTubePlatformState(platformPost.platformState)
+    ? platformPost.platformState
+    : null;
+  const processing = state?.processingStatus ?? '-';
+  const privacy = state?.privacyStatus ?? '-';
+  const upload = state?.uploadStatus ?? '-';
+  const progress = processingProgressText(state);
+  const canMakePublic =
+    canPublish &&
+    Boolean(platformPost.externalPostId) &&
+    state?.privacyStatus !== 'public' &&
+    state?.processingStatus !== 'processing' &&
+    state?.processingStatus !== 'failed';
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+      <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+        <StateRow label="Processing" value={processing} />
+        <StateRow label="Privacy" value={privacy} />
+        <StateRow label="Upload" value={upload} />
+        <StateRow label="Progress" value={progress} />
+        <StateRow
+          label="Refreshed"
+          value={state?.refreshedAt ? formatDateTime(state.refreshedAt) : '-'}
+        />
+      </div>
+      {state?.processingFailureReason ? (
+        <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+          {state.processingFailureReason}
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <SecondaryButton
+          disabled={!platformPost.externalPostId || platformAction !== null}
+          onClick={onRefresh}
+          type="button"
+        >
+          {platformAction === `refresh:${platformPost.id}` ? 'Đang refresh...' : 'Refresh status'}
+        </SecondaryButton>
+        <PrimaryButton
+          busy={platformAction === `public:${platformPost.id}`}
+          disabled={!canMakePublic || platformAction !== null}
+          onClick={onMakePublic}
+          type="button"
+        >
+          Make public
+        </PrimaryButton>
+      </div>
+      {state?.processingStatus === 'processing' ? (
+        <p className="mt-2 text-xs text-amber-700">
+          YouTube vẫn đang xử lý video. Khi trạng thái thành succeeded thì có thể public.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function StateRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-slate-500">{label}</span>
+      <span className="text-right font-medium text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+function isYouTubePlatformState(value: unknown): value is YouTubePlatformState {
+  return Boolean(value && typeof value === 'object' && 'videoId' in value);
+}
+
+function processingProgressText(state: YouTubePlatformState | null): string {
+  const progress = state?.processingProgress;
+  if (!progress?.partsTotal || progress.partsProcessed === undefined) return '-';
+  const percent = Math.round((progress.partsProcessed / progress.partsTotal) * 100);
+  const timeLeft =
+    progress.timeLeftMs === undefined ? '' : ` · còn ${Math.ceil(progress.timeLeftMs / 1000)}s`;
+  return `${percent}%${timeLeft}`;
+}
+
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-3">
       <dt className="text-slate-500">{label}</dt>
       <dd className="text-right font-medium text-slate-900">{value}</dd>
     </div>
+  );
+}
+
+function hasPlatformOverride(platformPost: PlatformPostView): boolean {
+  return Boolean(
+    platformPost.title ||
+    platformPost.caption ||
+    platformPost.description ||
+    platformPost.linkUrl ||
+    platformPost.options ||
+    platformPost.media.length > 0,
   );
 }
 

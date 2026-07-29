@@ -39,10 +39,12 @@ export default function PostsPage() {
   const [platform, setPlatform] = useState('');
   const [socialAccountId, setSocialAccountId] = useState('');
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [sortBy, setSortBy] = useState<'createdAt' | 'updatedAt'>('createdAt');
   const [direction, setDirection] = useState<'asc' | 'desc'>('desc');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -57,14 +59,14 @@ export default function PostsPage() {
       status: status || undefined,
       platform: platform || undefined,
       socialAccountId: socialAccountId || undefined,
-      q: query.trim() || undefined,
+      q: debouncedQuery.trim() || undefined,
       dateFrom: dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined,
       dateTo: dateTo ? new Date(`${dateTo}T23:59:59.999`).toISOString() : undefined,
       sortBy,
       direction,
       limit: PAGE_SIZE,
     }),
-    [dateFrom, dateTo, direction, platform, query, socialAccountId, sortBy, status],
+    [dateFrom, dateTo, debouncedQuery, direction, platform, socialAccountId, sortBy, status],
   );
 
   async function loadPosts(cursor?: string) {
@@ -89,6 +91,11 @@ export default function PostsPage() {
       .then((result) => setAccounts(result.items))
       .catch((loadError) => setError(getErrorMessage(loadError)));
   }, [workspace]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedQuery(query), 350);
+    return () => window.clearTimeout(timeoutId);
+  }, [query]);
 
   useEffect(() => {
     setCursorStack([]);
@@ -191,14 +198,59 @@ export default function PostsPage() {
 
   const canRetry = hasPermission(workspace.role, 'post:publish');
   const canCreate = hasPermission(workspace.role, 'post:create');
+  const activeAdvancedFilterCount = [
+    platform,
+    socialAccountId,
+    dateFrom,
+    dateTo,
+    sortBy !== 'createdAt' ? sortBy : '',
+    direction !== 'desc' ? direction : '',
+  ].filter(Boolean).length;
+  const hasAnyFilter = Boolean(
+    status ||
+    platform ||
+    socialAccountId ||
+    debouncedQuery.trim() ||
+    dateFrom ||
+    dateTo ||
+    sortBy !== 'createdAt' ||
+    direction !== 'desc',
+  );
+  const statusCounts = new Map<string, number>();
+  for (const post of posts) {
+    statusCounts.set(post.status, (statusCounts.get(post.status) ?? 0) + 1);
+  }
+  const emptyState = hasAnyFilter
+    ? {
+        title: 'Không có bài nào khớp bộ lọc',
+        body: 'Thử xóa bớt filter, đổi khoảng ngày, hoặc tìm bằng từ khóa khác.',
+      }
+    : {
+        title: 'Chưa có bài viết nào',
+        body: 'Tạo draft đầu tiên, chọn tài khoản publish, rồi đăng ngay hoặc đưa vào lịch.',
+      };
+
+  function resetFilters() {
+    setStatus('');
+    setPlatform('');
+    setSocialAccountId('');
+    setQuery('');
+    setDebouncedQuery('');
+    setDateFrom('');
+    setDateTo('');
+    setSortBy('createdAt');
+    setDirection('desc');
+  }
 
   return (
-    <div className="space-y-5">
-      <header className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-950">Posts</h1>
+    <div className="space-y-4">
+      <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div className="max-w-3xl">
+          <p className="text-sm font-semibold text-brand-700">Publishing queue</p>
+          <h1 className="mt-1 text-2xl font-semibold text-slate-950">Posts</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Quản lý bài đăng theo trạng thái, nền tảng, tài khoản và lịch sử xử lý.
+            Màn vận hành bài đăng: theo dõi draft, lịch đăng, queue worker, lỗi từng nền tảng và
+            thao tác retry/duplicate/export.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -214,7 +266,7 @@ export default function PostsPage() {
           </SecondaryButton>
           {canCreate ? (
             <Link
-              className="inline-flex h-10 items-center rounded-md bg-brand-600 px-3 text-sm font-semibold text-white"
+              className="inline-flex h-10 items-center rounded-md bg-brand-600 px-3 text-sm font-semibold text-white transition hover:bg-brand-700"
               href="/posts/new"
             >
               Tạo post
@@ -223,144 +275,182 @@ export default function PostsPage() {
         </div>
       </header>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <Field label="Từ khóa">
+      <section className="rounded-lg border border-slate-200 bg-white p-3">
+        <div className="grid gap-3 xl:grid-cols-[1fr_auto] xl:items-center">
+          <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap">
+            <PostStatusTab
+              active={status === ''}
+              count={posts.length}
+              label="Tất cả"
+              onClick={() => setStatus('')}
+            />
+            {POST_STATUSES.map((item) => (
+              <PostStatusTab
+                key={item}
+                active={status === item}
+                count={statusCounts.get(item) ?? 0}
+                label={postStatusLabel(item)}
+                onClick={() => setStatus(item)}
+              />
+            ))}
+          </div>
+          <div className="grid gap-2 md:grid-cols-[minmax(240px,380px)_auto]">
             <TextInput
-              placeholder="title, body, link"
+              aria-label="Tìm bài viết"
+              placeholder="Tìm title, nội dung, link..."
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
-          </Field>
-          <Field label="Trạng thái">
-            <SelectInput value={status} onChange={(event) => setStatus(event.target.value)}>
-              <option value="">Tất cả</option>
-              {POST_STATUSES.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </SelectInput>
-          </Field>
-          <Field label="Nền tảng">
-            <SelectInput
-              value={platform}
-              onChange={(event) => {
-                setPlatform(event.target.value);
-                setSocialAccountId('');
-              }}
-            >
-              <option value="">Tất cả</option>
-              {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </SelectInput>
-          </Field>
-          <Field label="Tài khoản">
-            <SelectInput
-              value={socialAccountId}
-              onChange={(event) => setSocialAccountId(event.target.value)}
-            >
-              <option value="">Tất cả</option>
-              {accounts
-                .filter((account) => !platform || account.platform === platform)
-                .map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
-            </SelectInput>
-          </Field>
-          <Field label="Từ ngày tạo">
-            <TextInput
-              type="date"
-              value={dateFrom}
-              onChange={(event) => setDateFrom(event.target.value)}
-            />
-          </Field>
-          <Field label="Đến ngày tạo">
-            <TextInput
-              type="date"
-              value={dateTo}
-              onChange={(event) => setDateTo(event.target.value)}
-            />
-          </Field>
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Field label="Sắp xếp">
-            <SelectInput
-              value={sortBy}
-              onChange={(event) => setSortBy(event.target.value as 'createdAt' | 'updatedAt')}
-            >
-              <option value="createdAt">Ngày tạo</option>
-              <option value="updatedAt">Ngày cập nhật</option>
-            </SelectInput>
-          </Field>
-          <Field label="Thứ tự">
-            <SelectInput
-              value={direction}
-              onChange={(event) => setDirection(event.target.value as 'asc' | 'desc')}
-            >
-              <option value="desc">Mới nhất trước</option>
-              <option value="asc">Cũ nhất trước</option>
-            </SelectInput>
-          </Field>
-          <div className="flex items-end">
             <SecondaryButton
-              className="w-full"
-              onClick={() => {
-                setStatus('');
-                setPlatform('');
-                setSocialAccountId('');
-                setQuery('');
-                setDateFrom('');
-                setDateTo('');
-                setSortBy('createdAt');
-                setDirection('desc');
-              }}
+              aria-expanded={showAdvancedFilters}
+              onClick={() => setShowAdvancedFilters((current) => !current)}
               type="button"
             >
-              Xóa filter
+              Bộ lọc {activeAdvancedFilterCount > 0 ? `(${activeAdvancedFilterCount})` : ''}
             </SecondaryButton>
           </div>
         </div>
+
+        {showAdvancedFilters ? (
+          <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3 md:grid-cols-2 xl:grid-cols-6">
+            <Field label="Nền tảng">
+              <SelectInput
+                value={platform}
+                onChange={(event) => {
+                  setPlatform(event.target.value);
+                  setSocialAccountId('');
+                }}
+              >
+                <option value="">Tất cả nền tảng</option>
+                {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
+            <Field label="Tài khoản">
+              <SelectInput
+                value={socialAccountId}
+                onChange={(event) => setSocialAccountId(event.target.value)}
+              >
+                <option value="">Tất cả tài khoản</option>
+                {accounts
+                  .filter((account) => !platform || account.platform === platform)
+                  .map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+              </SelectInput>
+            </Field>
+            <Field label="Từ ngày tạo">
+              <TextInput
+                type="date"
+                value={dateFrom}
+                onChange={(event) => setDateFrom(event.target.value)}
+              />
+            </Field>
+            <Field label="Đến ngày tạo">
+              <TextInput
+                type="date"
+                value={dateTo}
+                onChange={(event) => setDateTo(event.target.value)}
+              />
+            </Field>
+            <Field label="Sắp xếp">
+              <SelectInput
+                value={sortBy}
+                onChange={(event) => setSortBy(event.target.value as 'createdAt' | 'updatedAt')}
+              >
+                <option value="createdAt">Ngày tạo</option>
+                <option value="updatedAt">Ngày cập nhật</option>
+              </SelectInput>
+            </Field>
+            <Field label="Thứ tự">
+              <SelectInput
+                value={direction}
+                onChange={(event) => setDirection(event.target.value as 'asc' | 'desc')}
+              >
+                <option value="desc">Mới nhất trước</option>
+                <option value="asc">Cũ nhất trước</option>
+              </SelectInput>
+            </Field>
+          </div>
+        ) : null}
       </section>
 
       <InlineError message={error} />
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-slate-950">
+              {loading ? 'Đang tải...' : `${posts.length} bài trong trang này`}
+            </p>
+            <p className="text-xs text-slate-500">
+              Mỗi bài có thể có nhiều platform post, mỗi platform post có trạng thái riêng.
+            </p>
+          </div>
+          {hasAnyFilter ? (
+            <button
+              className="text-sm font-medium text-brand-700 hover:text-brand-800"
+              onClick={resetFilters}
+              type="button"
+            >
+              Xóa filter
+            </button>
+          ) : null}
+        </div>
         <div className="divide-y divide-slate-200">
           {posts.map((post) => (
-            <article key={post.id} className="p-5">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <article key={post.id} className="p-4 transition hover:bg-slate-50/60">
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Link
-                      className="truncate text-base font-semibold text-slate-950 hover:text-brand-700"
-                      href={`/posts/${post.id}`}
-                    >
-                      {post.title ?? 'Untitled post'}
-                    </Link>
                     <StatusBadge status={post.status} />
                     {post.derivedStatus !== post.status ? (
-                      <StatusBadge status={post.derivedStatus} />
+                      <StatusBadge status={post.derivedStatus} muted />
+                    ) : null}
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                      {post.platformPosts.length} target
+                    </span>
+                    {post.media.length > 0 ? (
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                        {post.media.length} media
+                      </span>
                     ) : null}
                   </div>
-                  <p className="mt-2 line-clamp-2 text-sm text-slate-600">
+
+                  <Link
+                    className="mt-3 block truncate text-base font-semibold text-slate-950 hover:text-brand-700"
+                    href={`/posts/${post.id}`}
+                  >
+                    {post.title ?? 'Untitled post'}
+                  </Link>
+                  <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">
                     {post.body ?? 'Không có nội dung.'}
                   </p>
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-medium text-slate-500">
-                    <span>Created: {formatDateTime(post.createdAt)}</span>
-                    <span>Updated: {formatDateTime(post.updatedAt)}</span>
-                    {post.scheduledAt ? (
-                      <span>Scheduled: {formatDateTime(post.scheduledAt)}</span>
-                    ) : null}
-                    {post.publishedAt ? (
-                      <span>Published: {formatDateTime(post.publishedAt)}</span>
-                    ) : null}
+                  {post.hashtags.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {post.hashtags.slice(0, 8).map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700"
+                        >
+                          #{tag.replace(/^#/, '')}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 xl:grid-cols-4">
+                    <TimelineItem label="Tạo" value={post.createdAt} />
+                    <TimelineItem label="Cập nhật" value={post.updatedAt} />
+                    <TimelineItem label="Lên lịch" value={post.scheduledAt} />
+                    <TimelineItem label="Đã đăng" value={post.publishedAt} />
                   </div>
+
                   {post.media.length > 0 ? (
                     <div className="mt-3 grid max-w-2xl gap-2 sm:grid-cols-2">
                       {post.media.slice(0, 4).map((asset) => (
@@ -370,56 +460,60 @@ export default function PostsPage() {
                   ) : null}
                 </div>
 
-                <div className="flex flex-wrap gap-2">
+                <aside className="space-y-2 rounded-md border border-slate-200 bg-white p-3">
                   <Link
-                    className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                    className="inline-flex h-10 w-full items-center justify-center rounded-md bg-brand-600 px-3 text-sm font-semibold text-white transition hover:bg-brand-700"
                     href={`/posts/${post.id}`}
                   >
-                    Detail
+                    Xem chi tiết
                   </Link>
-                  <Link
-                    className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                    href={`/posts/${post.id}/edit`}
-                  >
-                    Edit
-                  </Link>
-                  <SecondaryButton
-                    disabled={duplicating !== null}
-                    onClick={() => void duplicatePost(post.id)}
-                    type="button"
-                  >
-                    {duplicating === post.id ? 'Đang nhân bản...' : 'Duplicate'}
-                  </SecondaryButton>
-                  <SecondaryButton
-                    disabled={
-                      deleting !== null || !['DRAFT', 'FAILED', 'SCHEDULED'].includes(post.status)
-                    }
-                    onClick={() => void deletePost(post)}
-                    title={
-                      post.status === 'PUBLISHED'
-                        ? 'Xóa bài đã đăng trên nền tảng chưa được capability matrix xác minh.'
-                        : undefined
-                    }
-                    type="button"
-                  >
-                    {deleting === post.id ? 'Đang xóa...' : 'Delete'}
-                  </SecondaryButton>
-                  <PrimaryButton
-                    busy={retrying === post.id}
-                    disabled={
-                      !canRetry ||
-                      !post.platformPosts.some((item) => item.status === 'FAILED') ||
-                      retrying !== null
-                    }
-                    onClick={() => void retry(post.id)}
-                    type="button"
-                  >
-                    Retry lỗi
-                  </PrimaryButton>
-                </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Link
+                      className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                      href={`/posts/${post.id}/edit`}
+                    >
+                      Sửa
+                    </Link>
+                    <SecondaryButton
+                      disabled={duplicating !== null}
+                      onClick={() => void duplicatePost(post.id)}
+                      type="button"
+                    >
+                      {duplicating === post.id ? 'Đang...' : 'Nhân bản'}
+                    </SecondaryButton>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <SecondaryButton
+                      disabled={
+                        deleting !== null || !['DRAFT', 'FAILED', 'SCHEDULED'].includes(post.status)
+                      }
+                      onClick={() => void deletePost(post)}
+                      title={
+                        post.status === 'PUBLISHED'
+                          ? 'Xóa bài đã đăng trên nền tảng chưa được capability matrix xác minh.'
+                          : undefined
+                      }
+                      type="button"
+                    >
+                      {deleting === post.id ? 'Đang...' : 'Xóa'}
+                    </SecondaryButton>
+                    <PrimaryButton
+                      busy={retrying === post.id}
+                      disabled={
+                        !canRetry ||
+                        !post.platformPosts.some((item) => item.status === 'FAILED') ||
+                        retrying !== null
+                      }
+                      onClick={() => void retry(post.id)}
+                      type="button"
+                    >
+                      Retry
+                    </PrimaryButton>
+                  </div>
+                </aside>
               </div>
 
-              <div className="mt-4 grid gap-2 lg:grid-cols-2">
+              <div className="mt-4 grid gap-2 xl:grid-cols-2">
                 {post.platformPosts.map((platformPost) => (
                   <div
                     key={platformPost.id}
@@ -459,7 +553,10 @@ export default function PostsPage() {
           ))}
 
           {!loading && posts.length === 0 ? (
-            <p className="p-6 text-sm text-slate-600">Không có post nào khớp filter.</p>
+            <div className="p-6">
+              <p className="text-sm font-semibold text-slate-950">{emptyState.title}</p>
+              <p className="mt-1 text-sm text-slate-600">{emptyState.body}</p>
+            </div>
           ) : null}
           {loading ? <p className="p-6 text-sm text-slate-600">Đang tải posts...</p> : null}
         </div>
@@ -494,7 +591,15 @@ export default function PostsPage() {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, muted = false }: { status: string; muted?: boolean }) {
+  if (muted) {
+    return (
+      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-500">
+        {postStatusLabel(status)}
+      </span>
+    );
+  }
+
   const tone =
     status === 'PUBLISHED'
       ? 'bg-emerald-50 text-emerald-700'
@@ -504,7 +609,67 @@ function StatusBadge({ status }: { status: string }) {
           ? 'bg-amber-50 text-amber-700'
           : 'bg-slate-100 text-slate-600';
 
-  return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span>;
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>
+      {postStatusLabel(status)}
+    </span>
+  );
+}
+
+function PostStatusTab({
+  active,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`inline-flex h-11 items-center justify-between gap-3 rounded-md border px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+        active
+          ? 'border-brand-200 bg-brand-50 text-brand-700'
+          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+      }`}
+      onClick={onClick}
+      type="button"
+    >
+      <span>{label}</span>
+      <span
+        className={`rounded-full px-2 py-0.5 text-xs ${
+          active ? 'bg-white text-brand-700' : 'bg-slate-100 text-slate-500'
+        }`}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
+function TimelineItem({ label, value }: { label: string; value: string | null }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
+      <p className="font-semibold text-slate-500">{label}</p>
+      <p className="mt-1 text-slate-700">{value ? formatDateTime(value) : '—'}</p>
+    </div>
+  );
+}
+
+function postStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    DRAFT: 'Draft',
+    SCHEDULED: 'Đã lên lịch',
+    QUEUED: 'Trong queue',
+    PROCESSING: 'Đang xử lý',
+    PUBLISHED: 'Đã đăng',
+    PARTIALLY_PUBLISHED: 'Đăng một phần',
+    FAILED: 'Lỗi',
+    PENDING: 'Đang chờ',
+  };
+  return labels[status] ?? status;
 }
 
 function formatDateTime(value: string) {

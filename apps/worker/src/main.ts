@@ -138,6 +138,20 @@ function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
       appSecret: env.INSTAGRAM_APP_SECRET,
       apiVersion: env.FACEBOOK_API_VERSION,
     },
+    pinterest: {
+      appId: env.PINTEREST_APP_ID,
+      appSecret: env.PINTEREST_APP_SECRET,
+      defaultBoardName: env.PINTEREST_DEFAULT_BOARD_NAME,
+      environment: env.PINTEREST_API_ENVIRONMENT,
+    },
+    youtube: {
+      clientId: env.YOUTUBE_CLIENT_ID,
+      clientSecret: env.YOUTUBE_CLIENT_SECRET,
+    },
+    tiktok: {
+      clientKey: env.TIKTOK_CLIENT_KEY,
+      clientSecret: env.TIKTOK_CLIENT_SECRET,
+    },
   });
 }
 

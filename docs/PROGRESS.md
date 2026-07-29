@@ -79,3 +79,16 @@
 - Giới hạn Phase 7 còn lại:
   - Chưa có Playwright E2E #10/#11.
   - Facebook read comments mới bật ở trạng thái `CONDITIONAL`: chỉ cho post đã có `externalPostId` trong hệ thống và token Page có `pages_read_user_content` hoặc app có Page Public Content Access. Token cũ thiếu scope này cần ngắt kết nối/kết nối lại. Reply comment, Instagram comments và đọc comment từ post tạo ngoài hệ thống vẫn chưa bật.
+- Phase 9 mở rộng nền tảng — TikTok lát đầu đã thêm:
+  - TikTok adapter thật cho OAuth v2/Login Kit: build authorization URL, exchange code, refresh token, revoke token, lấy profile qua `/v2/user/info/`.
+  - TikTok Direct Post video qua Content Posting API: `creator_info/query`, `video/init`, upload `FILE_UPLOAD` theo chunk bằng `upload_url`, rồi fetch status bằng `publish/status/fetch`.
+  - Worker đọc bytes video từ storage private giống YouTube, nên TikTok không cần URL media public để upload video. Sau publish, `publish_id`, status/fail reason/uploaded bytes được lưu vào `PlatformPost.platformState`.
+  - Validation client/server: TikTok hiện chỉ nhận đúng 1 video mỗi bài, không kèm ảnh; MIME cho phép `video/mp4`, `video/quicktime`, `video/webm`; caption tối đa 2200 ký tự.
+  - Env và registry đã có `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`; `.env.example` ghi rõ TikTok Login Kit for Web cần redirect URI HTTPS, local dev nên dùng tunnel tới API port 4000.
+  - Capability matrix đánh dấu `publishVideo`, `refreshToken`, `revokeToken` là đã code theo docs chính thức; `readComments`/`replyToComment` vẫn `UNSUPPORTED` vì public Content Posting/Display API không cung cấp inbox comment organic kiểu Facebook/YouTube.
+  - Chưa smoke test credential thật. TikTok app cần bật Login Kit + Content Posting API và được cấp scope `user.info.basic`, `video.publish`, `video.upload`. App chưa audit/approval có thể bị giới hạn visibility theo chính sách TikTok.
+- Composer per-platform overrides đã nâng cấp:
+  - DB thêm `PlatformPost.linkUrl`, `PlatformPost.options` và bảng `PlatformPostMedia` để mỗi target có text/link/options/media riêng.
+  - API create/update nhận `platformOverrides` nhưng vẫn tương thích payload cũ.
+  - Worker publish ưu tiên override của `PlatformPost`, fallback về nội dung/media chung từ `ContentPost`.
+  - UI Create/Edit cho chỉnh override theo từng tài khoản; Post detail hiển thị override để debug.

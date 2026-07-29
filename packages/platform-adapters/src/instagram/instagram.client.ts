@@ -102,8 +102,9 @@ export class InstagramGraphClient {
     videoUrl?: string;
     caption?: string;
     isCarouselItem?: boolean;
-    mediaType?: 'IMAGE' | 'VIDEO' | 'CAROUSEL';
+    mediaType?: 'IMAGE' | 'VIDEO' | 'CAROUSEL' | 'REELS' | 'STORIES';
     children?: string[];
+    shareToFeed?: boolean;
   }): Promise<string> {
     const body: Record<string, string> = {
       access_token: input.accessToken,
@@ -116,6 +117,12 @@ export class InstagramGraphClient {
     }
     if (input.caption) body.caption = input.caption;
     if (input.isCarouselItem) body.is_carousel_item = 'true';
+    if (input.mediaType === 'REELS' || input.mediaType === 'STORIES') {
+      body.media_type = input.mediaType;
+    }
+    if (input.shareToFeed !== undefined) {
+      body.share_to_feed = input.shareToFeed ? 'true' : 'false';
+    }
     if (input.mediaType === 'CAROUSEL' && input.children) {
       body.media_type = 'CAROUSEL';
       body.children = input.children.join(',');

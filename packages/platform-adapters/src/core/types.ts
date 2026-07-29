@@ -98,6 +98,8 @@ export interface PublishPostInput {
   hashtags?: string[];
   media: MediaInput[];
   thumbnail?: MediaInput;
+  /** Tuỳ chọn riêng của từng nền tảng, do PlatformPost.options lưu lại. */
+  options?: Record<string, unknown>;
   /** Chỉ dùng khi nền tảng có native scheduling VÀ capability đã xác minh. */
   scheduledAt?: Date;
 }

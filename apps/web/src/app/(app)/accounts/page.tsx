@@ -51,7 +51,7 @@ export default function AccountsPage() {
     } else if (oauth === 'missing-code' || oauth === 'failed') {
       setError(
         oauthReasonMessage(reason) ??
-          'Kết nối chưa hoàn tất. Kiểm tra quyền Facebook app và thử lại.',
+          'Kết nối chưa hoàn tất. Kiểm tra quyền app nền tảng và thử lại.',
       );
     }
   }, []);
@@ -213,17 +213,27 @@ function oauthReasonMessage(reason: string | null): string | null {
     case 'facebook_permission_not_available':
       return 'Facebook chưa grant pages_read_user_content vào token. Kiểm tra Login Configuration ID trong Facebook Login for Business có quyền này, restart API rồi disconnect/connect lại.';
     case 'platform_network':
-      return 'API không gọi được graph.facebook.com trong lúc đổi token. Kiểm tra DNS/VPN/firewall hoặc cấu hình 1.1.1.1 như lần trước, rồi bấm kết nối lại.';
+      return 'API không gọi được nền tảng trong lúc đổi token. Kiểm tra DNS/VPN/firewall rồi bấm kết nối lại.';
     case 'platform_permission_denied':
-      return 'Facebook từ chối quyền OAuth. Với comment inbox, app cần cấp được pages_read_user_content hoặc Page Public Content Access.';
+      return 'Nền tảng từ chối quyền OAuth. Hãy kiểm tra các scope được yêu cầu trong Developer Dashboard.';
     case 'facebook_auth_invalid':
       return 'Facebook từ chối token OAuth. Hãy kiểm tra App ID/App Secret/API version và redirect URI.';
+    case 'pinterest_auth_invalid':
+      return 'Pinterest từ chối token OAuth hoặc token thiếu scope. Hãy kiểm tra App ID/App Secret, redirect URI và các scope user_accounts:read, boards:read, boards:write, pins:read, pins:write.';
+    case 'youtube_auth_invalid':
+      return 'YouTube từ chối token OAuth hoặc token thiếu scope. Hãy kiểm tra Client ID/Client Secret, redirect URI và các scope youtube.upload/youtube.readonly/youtube.force-ssl. Nếu vừa thêm scope, hãy disconnect/connect lại.';
+    case 'tiktok_auth_invalid':
+      return 'TikTok từ chối token OAuth hoặc token thiếu scope. Hãy kiểm tra Client Key/Client Secret, redirect URI và các scope user.info.basic/video.publish/video.upload.';
+    case 'platform_auth_invalid':
+      return 'Nền tảng từ chối token OAuth. Hãy kiểm tra credential, redirect URI và scope đã cấp.';
+    case 'platform_platform_error':
+      return 'Nền tảng trả dữ liệu khác định dạng hệ thống mong đợi. Xem log API để biết field nào sai, rồi thử kết nối lại.';
     case 'invalid_state':
       return 'OAuth state không hợp lệ hoặc đã hết hạn. Hãy bấm kết nối lại từ trang này.';
     case 'session_mismatch':
       return 'Phiên đăng nhập hiện tại không khớp với người bắt đầu OAuth. Hãy đăng nhập lại rồi kết nối.';
     case 'provider_error':
-      return 'Facebook từ chối luồng OAuth. Hãy kiểm tra quyền được yêu cầu trong App Dashboard.';
+      return 'Nền tảng từ chối luồng OAuth. Hãy kiểm tra quyền được yêu cầu trong Developer Dashboard.';
     case 'cancelled':
       return 'Bạn đã hủy luồng kết nối.';
     default:

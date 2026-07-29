@@ -2,10 +2,18 @@ import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Prisma } from '@socialhub/db';
+import {
+  type AdapterContext,
+  type AdapterRegistry,
+  type SocialPlatformAdapter,
+  type YouTubeVideoPlatformState,
+} from '@socialhub/platform-adapters';
+import { decryptToken, type Keyring } from '@socialhub/security';
 import { deriveContentPostStatus, buildJobId } from '@socialhub/shared';
 import type { Platform, PlatformPostStatus } from '@socialhub/shared';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
+import { ADAPTER_REGISTRY, KEYRING } from '../../infrastructure/infrastructure.module';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -27,6 +35,8 @@ export class PostsService implements OnModuleDestroy {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RedisService) private readonly redis: RedisService,
     @Inject(ENV) private readonly env: ApiEnv,
+    @Inject(KEYRING) private readonly keyring: Keyring,
+    @Inject(ADAPTER_REGISTRY) private readonly adapters: AdapterRegistry,
     @Inject(AuditService) private readonly audit: AuditService,
   ) {
     this.publishQueue = new Queue('publish-post', {
@@ -76,7 +86,13 @@ export class PostsService implements OnModuleDestroy {
     const posts = await this.prisma.contentPost.findMany({
       where,
       include: {
-        platformPosts: { include: { socialAccount: true }, orderBy: { createdAt: 'asc' } },
+        platformPosts: {
+          include: {
+            socialAccount: true,
+            media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
         media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
       },
       orderBy: [{ [query.sortBy]: query.direction }, { id: query.direction }],
@@ -130,7 +146,13 @@ export class PostsService implements OnModuleDestroy {
         },
       });
 
-      await this.replaceTargets(tx, workspaceId, created.id, input.socialAccountIds);
+      await this.replaceTargets(
+        tx,
+        workspaceId,
+        created.id,
+        input.socialAccountIds,
+        input.platformOverrides,
+      );
       await this.replaceMedia(tx, workspaceId, created.id, input.mediaAssetIds);
 
       if (input.scheduledAt) {
@@ -186,7 +208,13 @@ export class PostsService implements OnModuleDestroy {
       });
 
       if (input.socialAccountIds) {
-        await this.replaceTargets(tx, workspaceId, postId, input.socialAccountIds);
+        await this.replaceTargets(
+          tx,
+          workspaceId,
+          postId,
+          input.socialAccountIds,
+          input.platformOverrides ?? [],
+        );
       }
       if (input.mediaAssetIds) {
         await this.replaceMedia(tx, workspaceId, postId, input.mediaAssetIds);
@@ -401,6 +429,15 @@ export class PostsService implements OnModuleDestroy {
         workspaceId,
         copy.id,
         post.platformPosts.map((item) => item.socialAccountId),
+        post.platformPosts.map((item) => ({
+          socialAccountId: item.socialAccountId,
+          caption: item.caption ?? undefined,
+          title: item.title ?? undefined,
+          description: item.description ?? undefined,
+          linkUrl: item.linkUrl ?? undefined,
+          options: item.options as Record<string, unknown> | undefined,
+          mediaAssetIds: item.media.map((media) => media.mediaAssetId),
+        })),
       );
       await this.replaceMedia(
         tx,
@@ -422,6 +459,73 @@ export class PostsService implements OnModuleDestroy {
     });
 
     return this.get(workspaceId, created.id);
+  }
+
+  async refreshPlatformPostState(
+    workspaceId: string,
+    postId: string,
+    platformPostId: string,
+    actorUserId: string,
+    auditContext: AuditContext,
+  ) {
+    const state = await this.fetchYouTubePlatformState(workspaceId, postId, platformPostId);
+
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'POST_UPDATED',
+      resourceType: 'PlatformPost',
+      resourceId: platformPostId,
+      metadata: { action: 'refresh_platform_state', platform: 'YOUTUBE' },
+    });
+
+    return {
+      post: await this.get(workspaceId, postId),
+      platformState: state,
+    };
+  }
+
+  async makeYouTubePublic(
+    workspaceId: string,
+    postId: string,
+    platformPostId: string,
+    actorUserId: string,
+    auditContext: AuditContext,
+  ) {
+    const { platformPost, adapter, ctx } = await this.youtubePlatformPostContext(
+      workspaceId,
+      postId,
+      platformPostId,
+    );
+
+    const current = await adapter.getVideoPlatformState(ctx, platformPost.externalPostId);
+    assertYouTubeReadyForPublic(current);
+
+    const state = await adapter.makeVideoPublic(ctx, platformPost.externalPostId);
+    await this.prisma.platformPost.update({
+      where: { id: platformPost.id },
+      data: {
+        platformState: state as unknown as Prisma.InputJsonValue,
+        errorCode: null,
+        errorMessage: null,
+      },
+    });
+
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'POST_UPDATED',
+      resourceType: 'PlatformPost',
+      resourceId: platformPostId,
+      metadata: { action: 'youtube_make_public', platformState: state },
+    });
+
+    return {
+      post: await this.get(workspaceId, postId),
+      platformState: state,
+    };
   }
 
   private async prepareForPublishing(
@@ -550,12 +654,23 @@ export class PostsService implements OnModuleDestroy {
   }
 
   private async replaceTargets(
-    tx: Pick<PrismaService, 'socialAccount' | 'platformPost'>,
+    tx: Prisma.TransactionClient,
     workspaceId: string,
     contentPostId: string,
     socialAccountIds: string[],
+    platformOverrides:
+      CreatePostInput['platformOverrides'] | NonNullable<UpdatePostInput['platformOverrides']> = [],
   ): Promise<void> {
     const uniqueIds = [...new Set(socialAccountIds)];
+    const overrideByAccountId = new Map(
+      platformOverrides.map((override) => [override.socialAccountId, override]),
+    );
+    for (const override of platformOverrides) {
+      if (!uniqueIds.includes(override.socialAccountId)) {
+        throw AppError.validation('Platform override phải thuộc một social account đã chọn.');
+      }
+    }
+
     const accounts = await tx.socialAccount.findMany({
       where: { id: { in: uniqueIds }, workspaceId, deletedAt: null, status: 'CONNECTED' },
     });
@@ -567,32 +682,47 @@ export class PostsService implements OnModuleDestroy {
       where: { contentPostId, status: { in: ['PENDING', 'QUEUED', 'FAILED', 'CANCELLED'] } },
     });
 
-    if (accounts.length > 0) {
-      await tx.platformPost.createMany({
-        data: accounts.map((account) => ({
+    for (const account of accounts) {
+      const override = overrideByAccountId.get(account.id);
+      const platformPost = await tx.platformPost.create({
+        data: {
           workspaceId,
           contentPostId,
           socialAccountId: account.id,
           platform: account.platform,
           status: 'PENDING',
-        })),
+          caption: override?.caption,
+          title: override?.title,
+          description: override?.description,
+          linkUrl: override?.linkUrl,
+          options: override?.options as Prisma.InputJsonValue | undefined,
+        },
       });
+
+      if (override?.mediaAssetIds && override.mediaAssetIds.length > 0) {
+        const mediaAssetIds = await this.validateMediaAssetIds(
+          tx,
+          workspaceId,
+          override.mediaAssetIds,
+        );
+        await tx.platformPostMedia.createMany({
+          data: mediaAssetIds.map((mediaAssetId, position) => ({
+            platformPostId: platformPost.id,
+            mediaAssetId,
+            position,
+          })),
+        });
+      }
     }
   }
 
   private async replaceMedia(
-    tx: Pick<PrismaService, 'mediaAsset' | 'contentPostMedia'>,
+    tx: Prisma.TransactionClient,
     workspaceId: string,
     contentPostId: string,
     mediaAssetIds: string[],
   ): Promise<void> {
-    const uniqueIds = [...new Set(mediaAssetIds)];
-    const mediaAssets = await tx.mediaAsset.findMany({
-      where: { id: { in: uniqueIds }, workspaceId, deletedAt: null, status: 'READY' },
-    });
-    if (mediaAssets.length !== uniqueIds.length) {
-      throw AppError.validation('Một hoặc nhiều media asset chưa sẵn sàng hoặc không hợp lệ.');
-    }
+    const uniqueIds = await this.validateMediaAssetIds(tx, workspaceId, mediaAssetIds);
 
     await tx.contentPostMedia.deleteMany({ where: { contentPostId } });
     if (uniqueIds.length > 0) {
@@ -604,6 +734,21 @@ export class PostsService implements OnModuleDestroy {
         })),
       });
     }
+  }
+
+  private async validateMediaAssetIds(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    mediaAssetIds: string[],
+  ): Promise<string[]> {
+    const uniqueIds = [...new Set(mediaAssetIds)];
+    const mediaAssets = await tx.mediaAsset.findMany({
+      where: { id: { in: uniqueIds }, workspaceId, deletedAt: null, status: 'READY' },
+    });
+    if (mediaAssets.length !== uniqueIds.length) {
+      throw AppError.validation('Một hoặc nhiều media asset chưa sẵn sàng hoặc không hợp lệ.');
+    }
+    return uniqueIds;
   }
 
   private async workspaceTimezone(workspaceId: string): Promise<string> {
@@ -618,7 +763,13 @@ export class PostsService implements OnModuleDestroy {
     const post = await this.prisma.contentPost.findFirst({
       where: { id: postId, workspaceId, deletedAt: null },
       include: {
-        platformPosts: { include: { socialAccount: true }, orderBy: { createdAt: 'asc' } },
+        platformPosts: {
+          include: {
+            socialAccount: true,
+            media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
+          },
+          orderBy: { createdAt: 'asc' },
+        },
         media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
       },
     });
@@ -686,43 +837,32 @@ export class PostsService implements OnModuleDestroy {
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
       derivedStatus: deriveContentPostStatus(platformStatuses),
-      platformPosts: post.platformPosts.map((item) => ({
-        id: item.id,
-        platform: item.platform as Platform,
-        status: item.status,
-        socialAccountId: item.socialAccountId,
-        socialAccountName: item.socialAccount.name,
-        externalPostId: item.externalPostId,
-        externalUrl: item.externalUrl,
-        publishedAt: item.publishedAt,
-        attemptCount: item.attemptCount,
-        errorCode: item.errorCode,
-        errorMessage: item.errorMessage,
-      })),
-      media: await Promise.all(
-        post.media.map(async (item) => ({
-          id: item.mediaAsset.id,
-          type: item.mediaAsset.type,
-          status: item.mediaAsset.status,
-          originalFileName: item.mediaAsset.originalFileName,
-          mimeType: item.mediaAsset.mimeType,
-          sizeBytes: item.mediaAsset.sizeBytes,
-          width: item.mediaAsset.width,
-          height: item.mediaAsset.height,
-          durationSec: item.mediaAsset.durationSec,
-          position: item.position,
-          readUrl:
-            item.mediaAsset.status === 'READY'
-              ? await getSignedUrl(
-                  this.s3,
-                  new GetObjectCommand({
-                    Bucket: this.env.S3_BUCKET,
-                    Key: item.mediaAsset.storageKey,
-                  }),
-                  { expiresIn: 10 * 60 },
-                )
-              : null,
+      platformPosts: await Promise.all(
+        post.platformPosts.map(async (item) => ({
+          id: item.id,
+          platform: item.platform as Platform,
+          status: item.status,
+          socialAccountId: item.socialAccountId,
+          socialAccountName: item.socialAccount.name,
+          caption: item.caption,
+          title: item.title,
+          description: item.description,
+          linkUrl: item.linkUrl,
+          options: item.options,
+          media: await Promise.all(
+            item.media.map((media) => this.toMediaAssetView(media.mediaAsset, media.position)),
+          ),
+          externalPostId: item.externalPostId,
+          externalUrl: item.externalUrl,
+          publishedAt: item.publishedAt,
+          attemptCount: item.attemptCount,
+          errorCode: item.errorCode,
+          errorMessage: item.errorMessage,
+          platformState: item.platformState,
         })),
+      ),
+      media: await Promise.all(
+        post.media.map((item) => this.toMediaAssetView(item.mediaAsset, item.position)),
       ),
       jobs: jobs.map((job) => ({
         id: job.id,
@@ -745,6 +885,160 @@ export class PostsService implements OnModuleDestroy {
         web: `${this.env.WEB_BASE_URL.replace(/\/$/, '')}/posts/${post.id}`,
       },
     };
+  }
+
+  private async toMediaAssetView(
+    mediaAsset: {
+      id: string;
+      type: unknown;
+      status: string;
+      originalFileName: string | null;
+      mimeType: string | null;
+      sizeBytes: number | null;
+      width: number | null;
+      height: number | null;
+      durationSec: number | null;
+      storageKey: string;
+    },
+    position?: number,
+  ) {
+    return {
+      id: mediaAsset.id,
+      type: mediaAsset.type,
+      status: mediaAsset.status,
+      originalFileName: mediaAsset.originalFileName,
+      mimeType: mediaAsset.mimeType,
+      sizeBytes: mediaAsset.sizeBytes,
+      width: mediaAsset.width,
+      height: mediaAsset.height,
+      durationSec: mediaAsset.durationSec,
+      position,
+      readUrl:
+        mediaAsset.status === 'READY'
+          ? await getSignedUrl(
+              this.s3,
+              new GetObjectCommand({
+                Bucket: this.env.S3_BUCKET,
+                Key: mediaAsset.storageKey,
+              }),
+              { expiresIn: 10 * 60 },
+            )
+          : null,
+    };
+  }
+
+  private async fetchYouTubePlatformState(
+    workspaceId: string,
+    postId: string,
+    platformPostId: string,
+  ): Promise<YouTubeVideoPlatformState> {
+    const { platformPost, adapter, ctx } = await this.youtubePlatformPostContext(
+      workspaceId,
+      postId,
+      platformPostId,
+    );
+    const state = await adapter.getVideoPlatformState(ctx, platformPost.externalPostId);
+    await this.prisma.platformPost.update({
+      where: { id: platformPost.id },
+      data: {
+        platformState: state as unknown as Prisma.InputJsonValue,
+        errorCode: null,
+        errorMessage: null,
+      },
+    });
+    return state;
+  }
+
+  private async youtubePlatformPostContext(
+    workspaceId: string,
+    postId: string,
+    platformPostId: string,
+  ): Promise<{
+    platformPost: {
+      id: string;
+      platform: Platform;
+      externalPostId: string;
+      socialAccount: {
+        externalAccountId: string;
+        externalPageId: string | null;
+        status: string;
+        token: { accessToken: string } | null;
+      };
+    };
+    adapter: SocialPlatformAdapter & YouTubeStatusAdapter;
+    ctx: AdapterContext;
+  }> {
+    const platformPost = await this.prisma.platformPost.findFirst({
+      where: {
+        id: platformPostId,
+        workspaceId,
+        contentPostId: postId,
+      },
+      include: { socialAccount: { include: { token: true } } },
+    });
+    if (!platformPost) throw AppError.notFound('platform post');
+    if (platformPost.platform !== 'YOUTUBE') {
+      throw AppError.capabilityUnsupported(platformPost.platform, 'youtube_video_state');
+    }
+    if (!platformPost.externalPostId) {
+      throw AppError.conflict('YouTube video chưa có externalPostId để kiểm tra trạng thái.');
+    }
+    if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
+      throw AppError.conflict('YouTube account chưa kết nối hoặc token không khả dụng.');
+    }
+
+    const adapter = this.adapters.get('YOUTUBE');
+    if (!hasYouTubeStatusMethods(adapter)) {
+      throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
+    }
+
+    const ctx = {
+      accessToken: decryptToken(platformPost.socialAccount.token.accessToken, this.keyring),
+      externalAccountId: platformPost.socialAccount.externalAccountId,
+      externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+      correlationId: `youtube-state:${platformPostId}`,
+    } satisfies AdapterContext;
+
+    return {
+      platformPost: {
+        id: platformPost.id,
+        platform: platformPost.platform as Platform,
+        externalPostId: platformPost.externalPostId,
+        socialAccount: platformPost.socialAccount,
+      },
+      adapter,
+      ctx,
+    };
+  }
+}
+
+interface YouTubeStatusAdapter {
+  getVideoPlatformState(
+    ctx: AdapterContext,
+    externalPostId: string,
+  ): Promise<YouTubeVideoPlatformState>;
+  makeVideoPublic(ctx: AdapterContext, externalPostId: string): Promise<YouTubeVideoPlatformState>;
+}
+
+function hasYouTubeStatusMethods(
+  adapter: SocialPlatformAdapter,
+): adapter is SocialPlatformAdapter & YouTubeStatusAdapter {
+  return (
+    adapter.platform === 'YOUTUBE' &&
+    'getVideoPlatformState' in adapter &&
+    'makeVideoPublic' in adapter
+  );
+}
+
+function assertYouTubeReadyForPublic(state: YouTubeVideoPlatformState): void {
+  const status = state.processingStatus?.toLowerCase();
+  if (status === 'processing') {
+    throw AppError.conflict('YouTube vẫn đang xử lý video. Hãy refresh trạng thái rồi thử lại.');
+  }
+  if (status === 'failed') {
+    throw AppError.conflict(
+      `YouTube xử lý video thất bại${state.processingFailureReason ? `: ${state.processingFailureReason}` : ''}.`,
+    );
   }
 }
 

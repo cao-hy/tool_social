@@ -70,6 +70,8 @@ const platformOAuthSchema = z.object({
 
   PINTEREST_APP_ID: z.string().optional(),
   PINTEREST_APP_SECRET: z.string().optional(),
+  PINTEREST_DEFAULT_BOARD_NAME: z.string().optional(),
+  PINTEREST_API_ENVIRONMENT: z.enum(['production', 'sandbox']).optional(),
 
   YOUTUBE_CLIENT_ID: z.string().optional(),
   YOUTUBE_CLIENT_SECRET: z.string().optional(),
@@ -98,6 +100,63 @@ function validatePlatformOAuth(
         path: [name],
         message:
           'Bật Facebook adapter thật cần cấu hình đủ FACEBOOK_APP_ID, FACEBOOK_APP_SECRET và FACEBOOK_API_VERSION.',
+      });
+    }
+  }
+
+  const pinterestValues = [
+    ['PINTEREST_APP_ID', env.PINTEREST_APP_ID],
+    ['PINTEREST_APP_SECRET', env.PINTEREST_APP_SECRET],
+  ] as const;
+  const hasAnyPinterest = pinterestValues.some(([, value]) => Boolean(value));
+  const hasAllPinterest = pinterestValues.every(([, value]) => Boolean(value));
+
+  if (hasAnyPinterest && !hasAllPinterest) {
+    for (const [name, value] of pinterestValues) {
+      if (value) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message:
+          'Bật Pinterest adapter thật cần cấu hình đủ PINTEREST_APP_ID và PINTEREST_APP_SECRET.',
+      });
+    }
+  }
+
+  const youtubeValues = [
+    ['YOUTUBE_CLIENT_ID', env.YOUTUBE_CLIENT_ID],
+    ['YOUTUBE_CLIENT_SECRET', env.YOUTUBE_CLIENT_SECRET],
+  ] as const;
+  const hasAnyYouTube = youtubeValues.some(([, value]) => Boolean(value));
+  const hasAllYouTube = youtubeValues.every(([, value]) => Boolean(value));
+
+  if (hasAnyYouTube && !hasAllYouTube) {
+    for (const [name, value] of youtubeValues) {
+      if (value) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message:
+          'Bật YouTube adapter thật cần cấu hình đủ YOUTUBE_CLIENT_ID và YOUTUBE_CLIENT_SECRET.',
+      });
+    }
+  }
+
+  const tiktokValues = [
+    ['TIKTOK_CLIENT_KEY', env.TIKTOK_CLIENT_KEY],
+    ['TIKTOK_CLIENT_SECRET', env.TIKTOK_CLIENT_SECRET],
+  ] as const;
+  const hasAnyTikTok = tiktokValues.some(([, value]) => Boolean(value));
+  const hasAllTikTok = tiktokValues.every(([, value]) => Boolean(value));
+
+  if (hasAnyTikTok && !hasAllTikTok) {
+    for (const [name, value] of tiktokValues) {
+      if (value) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [name],
+        message:
+          'Bật TikTok adapter thật cần cấu hình đủ TIKTOK_CLIENT_KEY và TIKTOK_CLIENT_SECRET.',
       });
     }
   }

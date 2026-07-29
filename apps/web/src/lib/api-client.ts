@@ -11,6 +11,7 @@ import type {
   MediaAssetView,
   NotificationView,
   PlatformCapabilitiesView,
+  PlatformPostState,
   ReplyTemplateView,
   SocialAccountView,
   WorkspaceInvitation,
@@ -247,6 +248,7 @@ export const postsApi = {
       hashtags: string[];
       socialAccountIds: string[];
       mediaAssetIds?: string[];
+      platformOverrides?: PlatformOverrideInput[];
       scheduledAt?: string;
     },
   ) =>
@@ -286,6 +288,7 @@ export const postsApi = {
       hashtags?: string[];
       socialAccountIds?: string[];
       mediaAssetIds?: string[];
+      platformOverrides?: PlatformOverrideInput[];
     },
   ) =>
     apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}`, {
@@ -296,7 +299,27 @@ export const postsApi = {
     apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/posts/${postId}`, {
       method: 'DELETE',
     }),
+  refreshPlatformState: (workspaceId: string, postId: string, platformPostId: string) =>
+    apiFetch<{ post: ContentPostView; platformState: PlatformPostState }>(
+      `/workspaces/${workspaceId}/posts/${postId}/platform-posts/${platformPostId}/refresh-state`,
+      { method: 'POST' },
+    ),
+  makeYouTubePublic: (workspaceId: string, postId: string, platformPostId: string) =>
+    apiFetch<{ post: ContentPostView; platformState: PlatformPostState }>(
+      `/workspaces/${workspaceId}/posts/${postId}/platform-posts/${platformPostId}/youtube/make-public`,
+      { method: 'POST' },
+    ),
 };
+
+export interface PlatformOverrideInput {
+  socialAccountId: string;
+  caption?: string;
+  title?: string;
+  description?: string;
+  linkUrl?: string;
+  mediaAssetIds?: string[];
+  options?: Record<string, unknown>;
+}
 
 export const commentsApi = {
   list: (

@@ -2,9 +2,13 @@ import {
   AdapterRegistry,
   DevelopmentFixtureAdapter,
   isPlatformError,
+  type AdapterContext,
+  type SocialPlatformAdapter,
+  type TikTokPublishPlatformState,
+  type YouTubeVideoPlatformState,
 } from '@socialhub/platform-adapters';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
+import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import { decryptToken, type Keyring } from '@socialhub/security';
 import {
   deriveContentPostStatus,
@@ -96,6 +100,7 @@ async function publishPlatformPost(
     where: { id: payload.platformPostId, workspaceId: payload.workspaceId },
     include: {
       socialAccount: { include: { token: true } },
+      media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
       contentPost: {
         include: {
           media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
@@ -158,32 +163,22 @@ async function publishPlatformPost(
   const accessToken = decryptToken(platformPost.socialAccount.token.accessToken, input.keyring);
 
   try {
+    const sourceMedia =
+      platformPost.media.length > 0 ? platformPost.media : platformPost.contentPost.media;
     const media = await Promise.all(
-      platformPost.contentPost.media
+      sourceMedia
         .filter((item) => item.mediaAsset.status === 'READY')
-        .map(async (item) => ({
-          type: item.mediaAsset.type as MediaType,
-          url: publicMediaUrl(input.storage.publicBaseUrl, item.mediaAsset.storageKey),
-          bytes: await readObjectBytes(
-            input.storage.client,
-            input.storage.bucket,
-            item.mediaAsset.storageKey,
-          ),
-          mimeType: item.mediaAsset.mimeType ?? 'application/octet-stream',
-          sizeBytes: item.mediaAsset.sizeBytes ?? 0,
-          width: item.mediaAsset.width ?? undefined,
-          height: item.mediaAsset.height ?? undefined,
-          durationSec: item.mediaAsset.durationSec ?? undefined,
-        })),
+        .map((item) => mediaInputFromAsset(input.storage, item.mediaAsset)),
     );
 
     const publishInput = {
       caption: platformPost.caption ?? platformPost.contentPost.body ?? undefined,
       title: platformPost.title ?? platformPost.contentPost.title ?? undefined,
       description: platformPost.description ?? platformPost.contentPost.body ?? undefined,
-      linkUrl: platformPost.contentPost.linkUrl ?? undefined,
+      linkUrl: platformPost.linkUrl ?? platformPost.contentPost.linkUrl ?? undefined,
       hashtags: platformPost.contentPost.hashtags,
       media,
+      options: jsonObject(platformPost.options),
     };
 
     const validation = adapter.validatePost(publishInput);
@@ -198,14 +193,18 @@ async function publishPlatformPost(
       return { published: false, reason: 'validation' };
     }
 
-    const result = await adapter.publishPost(
-      {
-        accessToken,
-        externalAccountId: platformPost.socialAccount.externalAccountId,
-        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-        correlationId: payload.correlationId,
-      },
-      publishInput,
+    const adapterContext = {
+      accessToken,
+      externalAccountId: platformPost.socialAccount.externalAccountId,
+      externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+      correlationId: payload.correlationId,
+    } satisfies AdapterContext;
+
+    const result = await adapter.publishPost(adapterContext, publishInput);
+    const platformState = await platformStateAfterPublish(
+      adapter,
+      adapterContext,
+      result.externalPostId,
     );
 
     await input.prisma.$transaction([
@@ -218,6 +217,9 @@ async function publishPlatformPost(
           publishedAt: result.publishedAt,
           errorCode: null,
           errorMessage: null,
+          platformState: platformState
+            ? (platformState as unknown as Prisma.InputJsonValue)
+            : undefined,
         },
       }),
       input.prisma.auditLog.create({
@@ -293,9 +295,84 @@ async function publishPlatformPost(
   }
 }
 
+function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+async function platformStateAfterPublish(
+  adapter: SocialPlatformAdapter,
+  ctx: AdapterContext,
+  externalPostId: string,
+): Promise<TikTokPublishPlatformState | YouTubeVideoPlatformState | undefined> {
+  if (!hasYouTubeStatusMethods(adapter) && !hasTikTokStatusMethods(adapter)) return undefined;
+  try {
+    if (hasYouTubeStatusMethods(adapter)) {
+      return await adapter.getVideoPlatformState(ctx, externalPostId);
+    }
+    return await adapter.getPublishPlatformState(ctx, externalPostId);
+  } catch (error) {
+    logger.warn(
+      {
+        platform: adapter.platform,
+        externalPostId,
+        err: isPlatformError(error) ? error.toLogObject() : error,
+      },
+      'Không lấy được trạng thái xử lý sau khi publish; video đã được tạo nên không fail job',
+    );
+    return undefined;
+  }
+}
+
+function hasYouTubeStatusMethods(
+  adapter: SocialPlatformAdapter,
+): adapter is SocialPlatformAdapter & {
+  getVideoPlatformState: (
+    ctx: AdapterContext,
+    externalPostId: string,
+  ) => Promise<YouTubeVideoPlatformState>;
+} {
+  return adapter.platform === 'YOUTUBE' && 'getVideoPlatformState' in adapter;
+}
+
+function hasTikTokStatusMethods(
+  adapter: SocialPlatformAdapter,
+): adapter is SocialPlatformAdapter & {
+  getPublishPlatformState: (
+    ctx: AdapterContext,
+    externalPostId: string,
+  ) => Promise<TikTokPublishPlatformState>;
+} {
+  return adapter.platform === 'TIKTOK' && 'getPublishPlatformState' in adapter;
+}
+
 async function readObjectBytes(client: S3Client, bucket: string, key: string): Promise<Uint8Array> {
   const object = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   return new Uint8Array((await object.Body?.transformToByteArray()) ?? []);
+}
+
+async function mediaInputFromAsset(
+  storage: { client: S3Client; bucket: string; publicBaseUrl?: string },
+  mediaAsset: {
+    type: unknown;
+    storageKey: string;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    width: number | null;
+    height: number | null;
+    durationSec: number | null;
+  },
+) {
+  return {
+    type: mediaAsset.type as MediaType,
+    url: publicMediaUrl(storage.publicBaseUrl, mediaAsset.storageKey),
+    bytes: await readObjectBytes(storage.client, storage.bucket, mediaAsset.storageKey),
+    mimeType: mediaAsset.mimeType ?? 'application/octet-stream',
+    sizeBytes: mediaAsset.sizeBytes ?? 0,
+    width: mediaAsset.width ?? undefined,
+    height: mediaAsset.height ?? undefined,
+    durationSec: mediaAsset.durationSec ?? undefined,
+  };
 }
 
 function publicMediaUrl(publicBaseUrl: string | undefined, key: string): string {

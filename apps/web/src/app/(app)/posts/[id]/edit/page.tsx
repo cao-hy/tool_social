@@ -11,9 +11,16 @@ import {
   TextInput,
 } from '@/components/form-controls';
 import { MediaPreview } from '@/components/media-preview';
+import { PlatformComposerPanels } from '@/components/platform-composer-panels';
 import { postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
+import {
+  EMPTY_PLATFORM_OVERRIDE,
+  platformOptions,
+  platformOverrideFromOptions,
+  type PlatformOverrideDraft,
+} from '@/lib/platform-composer-options';
 import { validatePostComposer } from '@/lib/post-validation';
 import type { ContentPostView, SocialAccountView } from '@/lib/types';
 
@@ -30,6 +37,9 @@ export default function EditPostPage() {
   const [linkUrl, setLinkUrl] = useState('');
   const [hashtags, setHashtags] = useState('');
   const [mediaAssetIds, setMediaAssetIds] = useState<string[]>([]);
+  const [platformOverrides, setPlatformOverrides] = useState<Record<string, PlatformOverrideDraft>>(
+    {},
+  );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +57,21 @@ export default function EditPostPage() {
         setHashtags(loadedPost.hashtags.join(', '));
         setSelectedIds(loadedPost.platformPosts.map((item) => item.socialAccountId));
         setMediaAssetIds(loadedPost.media.map((item) => item.id));
+        setPlatformOverrides(
+          Object.fromEntries(
+            loadedPost.platformPosts.map((item) => [
+              item.socialAccountId,
+              platformOverrideFromOptions({
+                title: item.title ?? '',
+                caption: item.caption ?? '',
+                description: item.description ?? '',
+                linkUrl: item.linkUrl ?? '',
+                mediaAssetIds: item.media.map((asset) => asset.id),
+                options: item.options,
+              }),
+            ]),
+          ),
+        );
         setAccounts(loadedAccounts.items.filter((item) => item.status === 'CONNECTED'));
       })
       .catch((loadError) => setError(getErrorMessage(loadError)))
@@ -63,6 +88,11 @@ export default function EditPostPage() {
     return [...groups.entries()];
   }, [accounts]);
 
+  const selectedAccounts = useMemo(
+    () => accounts.filter((account) => selectedIds.includes(account.id)),
+    [accounts, selectedIds],
+  );
+
   if (!workspace) {
     return <p className="text-sm text-slate-600">Tài khoản này chưa thuộc workspace nào.</p>;
   }
@@ -78,16 +108,28 @@ export default function EditPostPage() {
     );
   }
 
+  function overrideFor(accountId: string): PlatformOverrideDraft {
+    return platformOverrides[accountId] ?? EMPTY_PLATFORM_OVERRIDE;
+  }
+
+  function updateOverride(accountId: string, patch: Partial<PlatformOverrideDraft>) {
+    setPlatformOverrides((current) => ({
+      ...current,
+      [accountId]: { ...EMPTY_PLATFORM_OVERRIDE, ...current[accountId], ...patch },
+    }));
+  }
+
   async function save() {
     if (!workspace || !post) return;
-    const selectedAccounts = accounts.filter((account) => selectedIds.includes(account.id));
     const selectedMedia = post.media.filter((asset) => mediaAssetIds.includes(asset.id));
+    const platformOverridePayload = buildPlatformOverridePayload();
     const validationError = validatePostComposer({
       title,
       body,
       linkUrl,
       selectedAccounts,
       mediaAssets: selectedMedia,
+      platformOverrides: buildValidationOverrides(),
       requireTargets: post.status === 'SCHEDULED',
       requirePublishableContent: post.status === 'SCHEDULED',
     });
@@ -108,6 +150,7 @@ export default function EditPostPage() {
           .filter(Boolean),
         socialAccountIds: selectedIds,
         mediaAssetIds,
+        platformOverrides: platformOverridePayload,
       });
       router.push('/posts');
     } catch (saveError) {
@@ -115,6 +158,49 @@ export default function EditPostPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function buildValidationOverrides() {
+    return selectedAccounts.map((account) => {
+      const draft = overrideFor(account.id);
+      const selectedMedia =
+        draft.mediaAssetIds.length > 0 && post
+          ? post.media.filter((asset) => draft.mediaAssetIds.includes(asset.id))
+          : undefined;
+      return {
+        socialAccountId: account.id,
+        title: draft.title.trim() || undefined,
+        caption: draft.caption.trim() || undefined,
+        linkUrl: draft.linkUrl.trim() || undefined,
+        mediaAssets: selectedMedia,
+      };
+    });
+  }
+
+  function buildPlatformOverridePayload() {
+    return selectedAccounts
+      .map((account) => {
+        const draft = overrideFor(account.id);
+        const options = platformOptions(account.platform, draft);
+        return {
+          socialAccountId: account.id,
+          title: draft.title.trim() || undefined,
+          caption: draft.caption.trim() || undefined,
+          description: draft.description.trim() || undefined,
+          linkUrl: draft.linkUrl.trim() || undefined,
+          mediaAssetIds: draft.mediaAssetIds.length > 0 ? draft.mediaAssetIds : undefined,
+          options,
+        };
+      })
+      .filter(
+        (item) =>
+          item.title ||
+          item.caption ||
+          item.description ||
+          item.linkUrl ||
+          item.mediaAssetIds ||
+          item.options,
+      );
   }
 
   return (
@@ -208,6 +294,16 @@ export default function EditPostPage() {
                 </div>
               </div>
             ) : null}
+
+            <div className="border-t border-slate-200 pt-4">
+              <PlatformComposerPanels
+                accounts={selectedAccounts}
+                disabled={!canEditState}
+                drafts={platformOverrides}
+                mediaAssets={post?.media.filter((asset) => mediaAssetIds.includes(asset.id)) ?? []}
+                onChange={updateOverride}
+              />
+            </div>
           </div>
         )}
       </section>

@@ -115,7 +115,12 @@ export class SocialAccountsController {
       return this.redirectToAccounts(reply, {
         oauth: 'cancelled',
         platform: platformValue,
-        reason: this.oauthProviderReason(oauthError, oauthErrorDescription, deniedScopes),
+        reason: this.oauthProviderReason(
+          platformValue,
+          oauthError,
+          oauthErrorDescription,
+          deniedScopes,
+        ),
       });
     }
 
@@ -189,14 +194,19 @@ export class SocialAccountsController {
   }
 
   private oauthProviderReason(
+    platform: Platform | undefined,
     error: string,
     description: string | undefined,
     deniedScopes: string | undefined,
   ): string {
     const text = `${error} ${description ?? ''} ${deniedScopes ?? ''}`.toLowerCase();
-    if (text.includes('invalid scope') || text.includes('pages_read_user_content')) {
+    if (
+      platform === 'FACEBOOK' &&
+      (text.includes('invalid scope') || text.includes('pages_read_user_content'))
+    ) {
       return 'facebook_permission_not_available';
     }
+    if (platform === 'YOUTUBE' && text.includes('invalid')) return 'youtube_auth_invalid';
     if (text.includes('access_denied')) return 'cancelled';
     return 'provider_error';
   }
@@ -212,7 +222,11 @@ export class SocialAccountsController {
       ) {
         return 'facebook_permission_not_available';
       }
-      if (error.kind === 'AUTH_INVALID') return 'facebook_auth_invalid';
+      if (error.kind === 'AUTH_INVALID') {
+        return error.platform === 'FACEBOOK'
+          ? 'facebook_auth_invalid'
+          : `${error.platform.toLowerCase()}_auth_invalid`;
+      }
       return `platform_${error.kind.toLowerCase()}`;
     }
     if (error instanceof Error && /OAuth state/i.test(error.message)) return 'invalid_state';
@@ -223,8 +237,27 @@ export class SocialAccountsController {
   }
 
   private errorLogObject(error: unknown): unknown {
-    if (isPlatformError(error)) return error.toLogObject();
+    if (isPlatformError(error)) {
+      return {
+        ...error.toLogObject(),
+        raw: error.raw,
+        cause: this.errorCauseLogObject(error.cause),
+      };
+    }
     return error instanceof Error ? { name: error.name, message: error.message } : error;
+  }
+
+  private errorCauseLogObject(cause: unknown): unknown {
+    if (!cause) return undefined;
+    if (cause instanceof Error) {
+      return {
+        name: cause.name,
+        message: cause.message,
+        issues:
+          'issues' in cause && Array.isArray(cause.issues) ? cause.issues.slice(0, 10) : undefined,
+      };
+    }
+    return cause;
   }
 
   private auditContext(request: FastifyRequest) {

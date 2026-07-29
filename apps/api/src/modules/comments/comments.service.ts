@@ -251,12 +251,24 @@ export class CommentsService implements OnModuleDestroy {
         'Facebook token hiện tại thiếu quyền pages_manage_engagement. Hãy ngắt kết nối rồi kết nối lại Facebook Page để cấp quyền reply comment.',
       );
     }
+    if (
+      comment.platform === 'YOUTUBE' &&
+      !comment.socialAccount.scopes.includes('https://www.googleapis.com/auth/youtube.force-ssl')
+    ) {
+      throw AppError.conflict(
+        'YouTube token hiện tại thiếu scope youtube.force-ssl. Hãy ngắt kết nối rồi kết nối lại YouTube để cấp quyền quản lý comment.',
+      );
+    }
 
     const reply = await this.prisma.commentReply.create({
       data: { workspaceId, commentId: comment.id, message: input.message, sentById: actorUserId },
     });
 
     try {
+      const targetExternalCommentId =
+        comment.platform === 'YOUTUBE' && comment.parent?.externalCommentId
+          ? comment.parent.externalCommentId
+          : comment.externalCommentId;
       const result = await adapter.replyToComment(
         {
           accessToken: decryptToken(comment.socialAccount.token.accessToken, this.keyring),
@@ -264,7 +276,7 @@ export class CommentsService implements OnModuleDestroy {
           externalPageId: comment.socialAccount.externalPageId ?? undefined,
           correlationId: auditContext.requestId ?? `comment-reply:${reply.id}`,
         },
-        comment.externalCommentId,
+        targetExternalCommentId,
         input.message,
       );
 
@@ -365,6 +377,7 @@ export class CommentsService implements OnModuleDestroy {
     return {
       socialAccount: { include: { token: true } },
       platformPost: { include: { contentPost: true } },
+      parent: { select: { externalCommentId: true } },
       assignment: { include: { assignedTo: true, assignedBy: true, member: true } },
       tags: { include: { tag: true }, orderBy: { createdAt: 'asc' } },
       notes: { include: { author: true }, orderBy: { createdAt: 'desc' } },

@@ -150,6 +150,40 @@ export class PostsController {
     );
   }
 
+  @Post(':postId/platform-posts/:platformPostId/refresh-state')
+  @RequirePermissions('post:view')
+  refreshPlatformPostState(
+    @Param('workspaceId') workspaceId: string,
+    @Param('postId') postId: string,
+    @Param('platformPostId') platformPostId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.posts.refreshPlatformPostState(
+      workspaceId,
+      postId,
+      platformPostId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
+  @Post(':postId/platform-posts/:platformPostId/youtube/make-public')
+  @RequirePermissions('post:publish')
+  makeYouTubePublic(
+    @Param('workspaceId') workspaceId: string,
+    @Param('postId') postId: string,
+    @Param('platformPostId') platformPostId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.posts.makeYouTubePublic(
+      workspaceId,
+      postId,
+      platformPostId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
   @Post(':postId/duplicate')
   @RequirePermissions('post:create')
   duplicate(

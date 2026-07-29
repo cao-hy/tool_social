@@ -431,6 +431,7 @@ model MediaAsset {
   workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   uploadedBy User?              @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   posts      ContentPostMedia[]
+  platformPosts PlatformPostMedia[]
 
   @@index([workspaceId])
   @@index([workspaceId, status])
@@ -505,6 +506,8 @@ model PlatformPost {
   caption     String? @db.Text
   title       String?
   description String? @db.Text
+  linkUrl     String?
+  options     Json?
 
   /// ID bài đăng trên nền tảng. Có giá trị ngay khi publish thành công và là
   /// lớp phòng thủ cuối cùng chống đăng trùng: có externalPostId nghĩa là đã
@@ -519,6 +522,10 @@ model PlatformPost {
   errorCode    String?
   errorMessage String? @db.Text
 
+  /// Trạng thái riêng do nền tảng trả về, ví dụ YouTube processing/privacy.
+  /// Không chứa token hay dữ liệu nhạy cảm.
+  platformState Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -528,6 +535,7 @@ model PlatformPost {
   metric          PostMetric?
   metricSnapshots MetricSnapshot[]
   comments        Comment[]
+  media           PlatformPostMedia[]
 
   /// Chống lưu trùng khi sync lại: một externalPostId chỉ tồn tại một lần
   /// trên mỗi social account.
@@ -537,6 +545,21 @@ model PlatformPost {
   @@index([workspaceId, status])
   @@index([workspaceId, platform])
   @@index([socialAccountId, publishedAt])
+}
+
+/// Media override cho MỘT platform post. Nếu platform post không có dòng nào
+/// trong bảng này, worker dùng media chung từ ContentPostMedia.
+model PlatformPostMedia {
+  id             String @id @default(cuid())
+  platformPostId String
+  mediaAssetId   String
+  position       Int    @default(0)
+
+  platformPost PlatformPost @relation(fields: [platformPostId], references: [id], onDelete: Cascade)
+  mediaAsset   MediaAsset   @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+
+  @@unique([platformPostId, mediaAssetId])
+  @@index([platformPostId, position])
 }
 
 /// Tách khỏi ContentPost để giữ lịch sử thay đổi lịch (drag & drop trên

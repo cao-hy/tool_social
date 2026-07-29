@@ -139,6 +139,22 @@ describe('apiEnvSchema — credential nền tảng là optional', () => {
     expect(env.FACEBOOK_APP_ID).toBeUndefined();
     expect(env.TIKTOK_CLIENT_KEY).toBeUndefined();
   });
+
+  it('bật TikTok adapter thật thì phải có đủ Client Key và Client Secret', () => {
+    expect(() =>
+      parseEnv('api', apiEnvSchema, {
+        ...validApiEnv,
+        TIKTOK_CLIENT_KEY: 'client-key',
+      }),
+    ).toThrow(EnvValidationError);
+
+    const env = parseEnv('api', apiEnvSchema, {
+      ...validApiEnv,
+      TIKTOK_CLIENT_KEY: 'client-key',
+      TIKTOK_CLIENT_SECRET: 'client-secret',
+    });
+    expect(env.TIKTOK_CLIENT_KEY).toBe('client-key');
+  });
 });
 
 describe('workerEnvSchema', () => {

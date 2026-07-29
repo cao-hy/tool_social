@@ -1,0 +1,550 @@
+import { PLATFORM_LABELS } from '@socialhub/shared';
+import type { Platform } from '@socialhub/shared';
+import { Field, SelectInput, TextInput } from '@/components/form-controls';
+import {
+  EMPTY_PLATFORM_OVERRIDE,
+  type PlatformOverrideDraft,
+} from '@/lib/platform-composer-options';
+import type { MediaAssetView, SocialAccountView } from '@/lib/types';
+
+interface PlatformComposerPanelsProps {
+  accounts: SocialAccountView[];
+  mediaAssets: MediaAssetView[];
+  drafts: Record<string, PlatformOverrideDraft>;
+  disabled?: boolean;
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+}
+
+export function PlatformComposerPanels({
+  accounts,
+  mediaAssets,
+  drafts,
+  disabled = false,
+  onChange,
+}: PlatformComposerPanelsProps) {
+  if (accounts.length === 0) return null;
+
+  return (
+    <section className="space-y-3 rounded-lg border border-slate-200 bg-white p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-950">Tùy chỉnh theo nền tảng</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Field chung vẫn dùng làm mặc định. Chỉ mở phần riêng khi social đó cần title, privacy,
+            board, media hoặc caption khác.
+          </p>
+        </div>
+        <span className="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600">
+          {accounts.length} target
+        </span>
+      </div>
+
+      <div className="grid gap-3">
+        {accounts.map((account) => {
+          const draft = drafts[account.id] ?? EMPTY_PLATFORM_OVERRIDE;
+          const issues = platformChecklist(account.platform, resolveMedia(draft, mediaAssets));
+          return (
+            <article
+              key={account.id}
+              className="rounded-md border border-slate-200 bg-slate-50/60 p-4"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-950">{account.name}</p>
+                  <p className="text-xs text-slate-500">
+                    {PLATFORM_LABELS[account.platform]} · {account.username ?? account.id}
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                    issues.length === 0
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'bg-amber-50 text-amber-700'
+                  }`}
+                >
+                  {issues.length === 0 ? 'Sẵn sàng' : `${issues.length} cần sửa`}
+                </span>
+              </div>
+
+              {issues.length > 0 ? (
+                <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {issues.join(' · ')}
+                </div>
+              ) : null}
+
+              <PlatformFields
+                account={account}
+                disabled={disabled}
+                draft={draft}
+                mediaAssets={mediaAssets}
+                onChange={onChange}
+              />
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function PlatformFields({
+  account,
+  disabled,
+  draft,
+  mediaAssets,
+  onChange,
+}: {
+  account: SocialAccountView;
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+}) {
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="grid gap-3 md:grid-cols-2">
+        {titleLabel(account.platform) ? (
+          <Field label={titleLabel(account.platform) ?? 'Title riêng'}>
+            <TextInput
+              disabled={disabled}
+              placeholder={titlePlaceholder(account.platform)}
+              value={draft.title}
+              onChange={(event) => onChange(account.id, { title: event.target.value })}
+            />
+          </Field>
+        ) : null}
+
+        {linkLabel(account.platform) ? (
+          <Field label={linkLabel(account.platform) ?? 'Link riêng'}>
+            <TextInput
+              disabled={disabled}
+              placeholder="https://..."
+              value={draft.linkUrl}
+              onChange={(event) => onChange(account.id, { linkUrl: event.target.value })}
+            />
+          </Field>
+        ) : null}
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        {captionLabel(account.platform) ? (
+          <Field label={captionLabel(account.platform) ?? 'Caption riêng'}>
+            <textarea
+              className="min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+              disabled={disabled}
+              value={draft.caption}
+              onChange={(event) => onChange(account.id, { caption: event.target.value })}
+            />
+          </Field>
+        ) : null}
+
+        {descriptionLabel(account.platform) ? (
+          <Field label={descriptionLabel(account.platform) ?? 'Description riêng'}>
+            <textarea
+              className="min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+              disabled={disabled}
+              value={draft.description}
+              onChange={(event) => onChange(account.id, { description: event.target.value })}
+            />
+          </Field>
+        ) : null}
+      </div>
+
+      <PlatformOptions account={account} disabled={disabled} draft={draft} onChange={onChange} />
+      <MediaSelector
+        account={account}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={mediaAssets}
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
+function PlatformOptions({
+  account,
+  disabled,
+  draft,
+  onChange,
+}: {
+  account: SocialAccountView;
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+}) {
+  if (account.platform === 'FACEBOOK') {
+    return (
+      <Field label="Kiểu bài Facebook">
+        <SelectInput
+          disabled={disabled}
+          value={draft.facebookPostType}
+          onChange={(event) =>
+            onChange(account.id, {
+              facebookPostType: event.target.value as PlatformOverrideDraft['facebookPostType'],
+            })
+          }
+        >
+          <option value="AUTO">Tự chọn theo media/link</option>
+          <option value="TEXT_LINK">Text hoặc link</option>
+          <option value="PHOTO">Ảnh</option>
+          <option value="VIDEO">Video</option>
+        </SelectInput>
+      </Field>
+    );
+  }
+
+  if (account.platform === 'INSTAGRAM') {
+    return (
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Vị trí Instagram">
+          <SelectInput
+            disabled={disabled}
+            value={draft.instagramPlacement}
+            onChange={(event) =>
+              onChange(account.id, {
+                instagramPlacement: event.target
+                  .value as PlatformOverrideDraft['instagramPlacement'],
+              })
+            }
+          >
+            <option value="FEED">Feed</option>
+            <option value="CAROUSEL">Carousel</option>
+            <option value="REELS">Reels</option>
+            <option value="STORY">Story</option>
+          </SelectInput>
+        </Field>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.instagramShareToFeed}
+            disabled={disabled || draft.instagramPlacement !== 'REELS'}
+            type="checkbox"
+            onChange={(event) =>
+              onChange(account.id, { instagramShareToFeed: event.target.checked })
+            }
+          />
+          Share Reels lên feed
+        </label>
+      </div>
+    );
+  }
+
+  if (account.platform === 'PINTEREST') {
+    return (
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Board ID">
+          <TextInput
+            disabled={disabled}
+            placeholder="Để trống dùng board khi kết nối"
+            value={draft.pinterestBoardId}
+            onChange={(event) => onChange(account.id, { pinterestBoardId: event.target.value })}
+          />
+        </Field>
+        <Field label="Board section ID">
+          <TextInput
+            disabled={disabled}
+            placeholder="Tùy chọn"
+            value={draft.pinterestBoardSectionId}
+            onChange={(event) =>
+              onChange(account.id, { pinterestBoardSectionId: event.target.value })
+            }
+          />
+        </Field>
+        <Field label="Alt text ảnh">
+          <TextInput
+            disabled={disabled}
+            placeholder="Mô tả ảnh cho accessibility"
+            value={draft.pinterestAltText}
+            onChange={(event) => onChange(account.id, { pinterestAltText: event.target.value })}
+          />
+        </Field>
+        <Field label="AI disclosure">
+          <SelectInput
+            disabled={disabled}
+            value={draft.pinterestAiDisclosure}
+            onChange={(event) =>
+              onChange(account.id, {
+                pinterestAiDisclosure: event.target
+                  .value as PlatformOverrideDraft['pinterestAiDisclosure'],
+              })
+            }
+          >
+            <option value="NONE">Không khai báo AI</option>
+            <option value="GENERATIVE_AI">Có nội dung AI-generated</option>
+          </SelectInput>
+        </Field>
+      </div>
+    );
+  }
+
+  if (account.platform === 'YOUTUBE') {
+    return (
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Privacy">
+          <SelectInput
+            disabled={disabled}
+            value={draft.youtubePrivacyStatus}
+            onChange={(event) =>
+              onChange(account.id, {
+                youtubePrivacyStatus: event.target
+                  .value as PlatformOverrideDraft['youtubePrivacyStatus'],
+              })
+            }
+          >
+            <option value="public">Public</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="private">Private</option>
+          </SelectInput>
+        </Field>
+        <Field label="Category ID">
+          <TextInput
+            disabled={disabled}
+            placeholder="22 = People & Blogs"
+            value={draft.youtubeCategoryId}
+            onChange={(event) => onChange(account.id, { youtubeCategoryId: event.target.value })}
+          />
+        </Field>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.youtubeMadeForKids}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) => onChange(account.id, { youtubeMadeForKids: event.target.checked })}
+          />
+          Made for kids
+        </label>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.youtubeContainsSyntheticMedia}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange(account.id, { youtubeContainsSyntheticMedia: event.target.checked })
+            }
+          />
+          Có synthetic media
+        </label>
+      </div>
+    );
+  }
+
+  if (account.platform === 'TIKTOK') {
+    return (
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Privacy TikTok">
+          <SelectInput
+            disabled={disabled}
+            value={draft.tiktokPrivacyLevel}
+            onChange={(event) =>
+              onChange(account.id, {
+                tiktokPrivacyLevel: event.target
+                  .value as PlatformOverrideDraft['tiktokPrivacyLevel'],
+              })
+            }
+          >
+            <option value="PUBLIC_TO_EVERYONE">Public</option>
+            <option value="MUTUAL_FOLLOW_FRIENDS">Friends</option>
+            <option value="FOLLOWER_OF_CREATOR">Followers</option>
+            <option value="SELF_ONLY">Only me</option>
+          </SelectInput>
+        </Field>
+        <Field label="Cover timestamp ms">
+          <TextInput
+            disabled={disabled}
+            inputMode="numeric"
+            placeholder="Ví dụ 1500"
+            value={draft.tiktokCoverTimestampMs}
+            onChange={(event) =>
+              onChange(account.id, {
+                tiktokCoverTimestampMs: event.target.value.replace(/\D/g, ''),
+              })
+            }
+          />
+        </Field>
+        <SwitchRow
+          checked={draft.tiktokDisableComment}
+          disabled={disabled}
+          label="Tắt comment"
+          onChange={(checked) => onChange(account.id, { tiktokDisableComment: checked })}
+        />
+        <SwitchRow
+          checked={draft.tiktokDisableDuet}
+          disabled={disabled}
+          label="Tắt duet"
+          onChange={(checked) => onChange(account.id, { tiktokDisableDuet: checked })}
+        />
+        <SwitchRow
+          checked={draft.tiktokDisableStitch}
+          disabled={disabled}
+          label="Tắt stitch"
+          onChange={(checked) => onChange(account.id, { tiktokDisableStitch: checked })}
+        />
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function MediaSelector({
+  account,
+  disabled,
+  draft,
+  mediaAssets,
+  onChange,
+}: {
+  account: SocialAccountView;
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+}) {
+  if (mediaAssets.length === 0) {
+    return (
+      <p className="rounded-md border border-dashed border-slate-300 px-3 py-2 text-sm text-slate-500">
+        Chưa có media chung. Social nào cần ảnh/video sẽ chưa publish được.
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <p className="text-sm font-medium text-slate-800">Media riêng cho target này</p>
+      <p className="mt-1 text-xs text-slate-500">
+        Không chọn thì dùng toàn bộ media chung. Với YouTube/TikTok nên chọn đúng 1 video.
+      </p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {mediaAssets.map((asset) => (
+          <label
+            key={asset.id}
+            className="flex items-start gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+          >
+            <input
+              checked={draft.mediaAssetIds.includes(asset.id)}
+              className="mt-1"
+              disabled={disabled}
+              type="checkbox"
+              onChange={() =>
+                onChange(account.id, {
+                  mediaAssetIds: draft.mediaAssetIds.includes(asset.id)
+                    ? draft.mediaAssetIds.filter((id) => id !== asset.id)
+                    : [...draft.mediaAssetIds, asset.id],
+                })
+              }
+            />
+            <span className="min-w-0">
+              <span className="block truncate font-medium text-slate-900">
+                {asset.originalFileName ?? asset.id}
+              </span>
+              <span className="block text-xs text-slate-500">
+                {asset.mimeType ?? asset.type} · {asset.status}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SwitchRow({
+  checked,
+  disabled,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  label: string;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+      <input
+        checked={checked}
+        disabled={disabled}
+        type="checkbox"
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
+function platformChecklist(platform: Platform, media: MediaAssetView[]): string[] {
+  const imageCount = media.filter((asset) => asset.type === 'IMAGE').length;
+  const videoCount = media.filter((asset) => asset.type === 'VIDEO').length;
+
+  if (platform === 'FACEBOOK') {
+    if (imageCount > 0 && videoCount > 0) return ['Không trộn ảnh và video trong một post'];
+    if (videoCount > 1) return ['Chỉ hỗ trợ 1 video'];
+  }
+
+  if (platform === 'INSTAGRAM') {
+    if (media.length === 0) return ['Cần ảnh hoặc video'];
+    if (media.length > 10) return ['Tối đa 10 media'];
+    if (media.some((asset) => !asset.readUrl?.startsWith('http'))) {
+      return ['Media phải có URL public để Meta tải được'];
+    }
+  }
+
+  if (platform === 'PINTEREST') {
+    const imagePin = imageCount === 1 && videoCount === 0 && media.length === 1;
+    const videoPin = videoCount === 1 && imageCount <= 1 && media.length <= 2;
+    if (!imagePin && !videoPin) return ['Cần 1 ảnh, hoặc 1 video + tối đa 1 ảnh cover'];
+  }
+
+  if (platform === 'YOUTUBE') {
+    if (videoCount !== 1 || imageCount > 0 || media.length !== 1) {
+      return ['Cần đúng 1 video, không kèm ảnh'];
+    }
+  }
+
+  if (platform === 'TIKTOK') {
+    if (videoCount !== 1 || imageCount > 0 || media.length !== 1) {
+      return ['Cần đúng 1 video'];
+    }
+  }
+
+  return [];
+}
+
+function resolveMedia(
+  draft: PlatformOverrideDraft,
+  mediaAssets: MediaAssetView[],
+): MediaAssetView[] {
+  if (draft.mediaAssetIds.length === 0) return mediaAssets;
+  return mediaAssets.filter((asset) => draft.mediaAssetIds.includes(asset.id));
+}
+
+function titleLabel(platform: Platform): string | null {
+  if (platform === 'YOUTUBE') return 'Tiêu đề video';
+  if (platform === 'PINTEREST') return 'Pin title';
+  if (platform === 'FACEBOOK') return 'Title video Facebook';
+  return null;
+}
+
+function titlePlaceholder(platform: Platform): string {
+  if (platform === 'YOUTUBE') return 'Bắt buộc khi đăng YouTube';
+  if (platform === 'PINTEREST') return 'Tối đa 100 ký tự';
+  return 'Tùy chọn';
+}
+
+function captionLabel(platform: Platform): string | null {
+  if (platform === 'FACEBOOK') return 'Message Facebook';
+  if (platform === 'INSTAGRAM') return 'Caption Instagram';
+  if (platform === 'TIKTOK') return 'Caption TikTok';
+  return null;
+}
+
+function descriptionLabel(platform: Platform): string | null {
+  if (platform === 'YOUTUBE') return 'Description YouTube';
+  if (platform === 'PINTEREST') return 'Pin description';
+  return null;
+}
+
+function linkLabel(platform: Platform): string | null {
+  if (platform === 'FACEBOOK') return 'Link Facebook';
+  if (platform === 'PINTEREST') return 'Destination link';
+  return null;
+}

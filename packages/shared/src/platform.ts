@@ -18,7 +18,7 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   INSTAGRAM: 'Instagram Business',
   PINTEREST: 'Pinterest Business',
   YOUTUBE: 'YouTube',
-  TIKTOK: 'TikTok Business',
+  TIKTOK: 'TikTok',
 };
 
 /** Trạng thái kết nối của một social account trong hệ thống. */

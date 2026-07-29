@@ -9,6 +9,14 @@ import {
 import { countVerified, findStaleCapabilities, isSupported } from '../core/capability-table';
 
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
+  const verifiedCounts = {
+    FACEBOOK: 2,
+    INSTAGRAM: 0,
+    PINTEREST: 6,
+    TIKTOK: 5,
+    YOUTUBE: 6,
+  } as const;
+
   it('có bảng cho cả 5 nền tảng', () => {
     for (const platform of PLATFORMS) {
       expect(CAPABILITY_MATRIX[platform]).toBeDefined();
@@ -20,7 +28,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
     for (const platform of PLATFORMS) {
       const { verified, total } = countVerified(CAPABILITY_MATRIX[platform]);
       expect(total).toBeGreaterThan(0);
-      expect(verified).toBe(platform === 'FACEBOOK' ? 2 : 0);
+      expect(verified).toBe(verifiedCounts[platform]);
     }
     expect(CAPABILITY_MATRIX.FACEBOOK.capabilities.readComments).toMatchObject({
       state: 'CONDITIONAL',
@@ -34,7 +42,21 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       const table = CAPABILITY_MATRIX[platform];
       for (const key of Object.keys(table.capabilities) as Array<keyof typeof table.capabilities>) {
         expect(isSupported(table, key)).toBe(
-          platform === 'FACEBOOK' && (key === 'readComments' || key === 'replyToComment'),
+          (platform === 'FACEBOOK' && (key === 'readComments' || key === 'replyToComment')) ||
+            (platform === 'PINTEREST' &&
+              (key === 'publishImage' ||
+                key === 'publishVideo' ||
+                key === 'publishWithLink' ||
+                key === 'refreshToken')) ||
+            (platform === 'YOUTUBE' &&
+              (key === 'publishVideo' ||
+                key === 'postTitle' ||
+                key === 'refreshToken' ||
+                key === 'revokeToken' ||
+                key === 'readComments' ||
+                key === 'replyToComment')) ||
+            (platform === 'TIKTOK' &&
+              (key === 'publishVideo' || key === 'refreshToken' || key === 'revokeToken')),
         );
       }
     }
@@ -52,8 +74,18 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
   it('tiến độ xác minh báo cáo trung thực', () => {
     const progress = getVerificationProgress();
     for (const platform of PLATFORMS) {
-      expect(progress[platform].verified).toBe(platform === 'FACEBOOK' ? 2 : 0);
-      expect(progress[platform].percent).toBe(platform === 'FACEBOOK' ? 6 : 0);
+      expect(progress[platform].verified).toBe(verifiedCounts[platform]);
+      expect(progress[platform].percent).toBe(
+        platform === 'FACEBOOK'
+          ? 6
+          : platform === 'PINTEREST'
+            ? 19
+            : platform === 'YOUTUBE'
+              ? 19
+              : platform === 'TIKTOK'
+                ? 16
+                : 0,
+      );
     }
   });
 
@@ -91,7 +123,7 @@ describe('hành động bị chính sách dự án loại trừ (prompt §3)', (
 
 describe('findStaleCapabilities — kết luận cũ phải được rà lại', () => {
   it('bảng chưa xác minh thì không có gì cũ', () => {
-    expect(findStaleCapabilities(CAPABILITY_MATRIX.YOUTUBE)).toEqual([]);
+    expect(findStaleCapabilities(CAPABILITY_MATRIX.TIKTOK)).toEqual([]);
   });
 
   it('phát hiện capability xác minh quá 90 ngày', () => {

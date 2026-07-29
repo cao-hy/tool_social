@@ -7,18 +7,31 @@ const optionalText = z
   .transform((value) => (value.length === 0 ? undefined : value))
   .optional();
 
+const optionalUrl = z
+  .string()
+  .trim()
+  .url()
+  .or(z.literal('').transform(() => undefined))
+  .optional();
+
+const platformOverrideSchema = z.object({
+  socialAccountId: z.string().min(1),
+  caption: optionalText,
+  title: optionalText,
+  description: optionalText,
+  linkUrl: optionalUrl,
+  mediaAssetIds: z.array(z.string().min(1)).max(10).optional(),
+  options: z.record(z.string(), z.unknown()).optional(),
+});
+
 export const postComposerSchema = z.object({
   title: optionalText,
   body: optionalText,
-  linkUrl: z
-    .string()
-    .trim()
-    .url()
-    .or(z.literal('').transform(() => undefined))
-    .optional(),
+  linkUrl: optionalUrl,
   hashtags: z.array(z.string().trim().min(1).max(80)).max(30).default([]),
   socialAccountIds: z.array(z.string().min(1)).max(20).default([]),
   mediaAssetIds: z.array(z.string().min(1)).max(10).default([]),
+  platformOverrides: z.array(platformOverrideSchema).max(20).default([]),
 });
 
 export const createPostSchema = postComposerSchema.extend({

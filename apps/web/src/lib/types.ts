@@ -122,13 +122,37 @@ export interface PlatformPostView {
   status: PlatformPostStatus;
   socialAccountId: string;
   socialAccountName: string;
+  caption: string | null;
+  title: string | null;
+  description: string | null;
+  linkUrl: string | null;
+  options: Record<string, unknown> | null;
+  media: MediaAssetView[];
   externalPostId: string | null;
   externalUrl: string | null;
   publishedAt: string | null;
   attemptCount: number;
   errorCode: string | null;
   errorMessage: string | null;
+  platformState: PlatformPostState | null;
 }
+
+export interface YouTubePlatformState {
+  videoId: string;
+  privacyStatus?: string;
+  uploadStatus?: string;
+  processingStatus?: string;
+  processingFailureReason?: string;
+  processingProgress?: {
+    partsTotal?: number;
+    partsProcessed?: number;
+    timeLeftMs?: number;
+  };
+  refreshedAt: string;
+  madePublicAt?: string;
+}
+
+export type PlatformPostState = YouTubePlatformState | Record<string, unknown>;
 
 export interface ContentPostView {
   id: string;

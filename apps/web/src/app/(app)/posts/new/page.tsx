@@ -11,9 +11,15 @@ import {
   TextInput,
 } from '@/components/form-controls';
 import { MediaPreview } from '@/components/media-preview';
+import { PlatformComposerPanels } from '@/components/platform-composer-panels';
 import { mediaApi, postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
+import {
+  EMPTY_PLATFORM_OVERRIDE,
+  platformOptions,
+  type PlatformOverrideDraft,
+} from '@/lib/platform-composer-options';
 import { validatePostComposer } from '@/lib/post-validation';
 import type { MediaAssetView, SocialAccountView } from '@/lib/types';
 
@@ -28,6 +34,9 @@ export default function NewPostPage() {
   const [linkUrl, setLinkUrl] = useState('');
   const [hashtags, setHashtags] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
+  const [platformOverrides, setPlatformOverrides] = useState<Record<string, PlatformOverrideDraft>>(
+    {},
+  );
   const [mediaAssets, setMediaAssets] = useState<Array<MediaAssetView & { previewUrl?: string }>>(
     [],
   );
@@ -53,6 +62,11 @@ export default function NewPostPage() {
     return [...groups.entries()];
   }, [accounts]);
 
+  const selectedAccounts = useMemo(
+    () => accounts.filter((account) => selectedIds.includes(account.id)),
+    [accounts, selectedIds],
+  );
+
   if (!workspace) {
     return <p className="text-sm text-slate-600">Tài khoản này chưa thuộc workspace nào.</p>;
   }
@@ -67,6 +81,17 @@ export default function NewPostPage() {
         ? current.filter((item) => item !== accountId)
         : [...current, accountId],
     );
+  }
+
+  function overrideFor(accountId: string): PlatformOverrideDraft {
+    return platformOverrides[accountId] ?? EMPTY_PLATFORM_OVERRIDE;
+  }
+
+  function updateOverride(accountId: string, patch: Partial<PlatformOverrideDraft>): void {
+    setPlatformOverrides((current) => ({
+      ...current,
+      [accountId]: { ...EMPTY_PLATFORM_OVERRIDE, ...current[accountId], ...patch },
+    }));
   }
 
   async function createDraft() {
@@ -137,6 +162,7 @@ export default function NewPostPage() {
   }
 
   function payload() {
+    const platformOverridePayload = buildPlatformOverridePayload();
     return {
       title: title.trim() || undefined,
       body: body.trim() || undefined,
@@ -147,20 +173,64 @@ export default function NewPostPage() {
         .filter(Boolean),
       socialAccountIds: selectedIds,
       mediaAssetIds: mediaAssets.map((item) => item.id),
+      platformOverrides: platformOverridePayload,
     };
   }
 
   function validateForm(requireTargets: boolean, requirePublishableContent: boolean) {
-    const selectedAccounts = accounts.filter((account) => selectedIds.includes(account.id));
     return validatePostComposer({
       title,
       body,
       linkUrl,
       selectedAccounts,
       mediaAssets,
+      platformOverrides: buildValidationOverrides(),
       requireTargets,
       requirePublishableContent,
     });
+  }
+
+  function buildValidationOverrides() {
+    return selectedAccounts.map((account) => {
+      const draft = overrideFor(account.id);
+      const selectedMedia =
+        draft.mediaAssetIds.length > 0
+          ? mediaAssets.filter((asset) => draft.mediaAssetIds.includes(asset.id))
+          : undefined;
+      return {
+        socialAccountId: account.id,
+        title: draft.title.trim() || undefined,
+        caption: draft.caption.trim() || undefined,
+        linkUrl: draft.linkUrl.trim() || undefined,
+        mediaAssets: selectedMedia,
+      };
+    });
+  }
+
+  function buildPlatformOverridePayload() {
+    return selectedAccounts
+      .map((account) => {
+        const draft = overrideFor(account.id);
+        const options = platformOptions(account.platform, draft);
+        return {
+          socialAccountId: account.id,
+          title: draft.title.trim() || undefined,
+          caption: draft.caption.trim() || undefined,
+          description: draft.description.trim() || undefined,
+          linkUrl: draft.linkUrl.trim() || undefined,
+          mediaAssetIds: draft.mediaAssetIds.length > 0 ? draft.mediaAssetIds : undefined,
+          options,
+        };
+      })
+      .filter(
+        (item) =>
+          item.title ||
+          item.caption ||
+          item.description ||
+          item.linkUrl ||
+          item.mediaAssetIds ||
+          item.options,
+      );
   }
 
   async function uploadMedia(files: FileList | null) {
@@ -293,6 +363,13 @@ export default function NewPostPage() {
             </div>
           ) : null}
         </div>
+
+        <PlatformComposerPanels
+          accounts={selectedAccounts}
+          drafts={platformOverrides}
+          mediaAssets={mediaAssets}
+          onChange={updateOverride}
+        />
       </section>
 
       <aside className="space-y-4">

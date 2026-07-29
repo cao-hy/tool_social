@@ -77,6 +77,7 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     const message = [input.caption, input.hashtags?.map((tag) => `#${tag}`).join(' ')]
       .filter(Boolean)
       .join('\n\n');
+    const options = instagramPublishOptions(input.options);
 
     // Instagram Graph API yêu cầu phải tải lên từng media (container) trước
     if (input.media.length === 1) {
@@ -89,6 +90,11 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         imageUrl: media.type === 'IMAGE' ? media.url : undefined,
         videoUrl: media.type === 'VIDEO' ? media.url : undefined,
         caption: message,
+        mediaType:
+          options.mediaType === 'REELS' || options.mediaType === 'STORIES'
+            ? options.mediaType
+            : undefined,
+        shareToFeed: options.mediaType === 'REELS' ? options.shareToFeed : undefined,
       });
 
       const postId = await this.client.publishMedia({
@@ -164,4 +170,27 @@ export class InstagramAdapter implements SocialPlatformAdapter {
   parseWebhookEvents(payload: unknown) {
     return parseMetaWebhookEvents(payload);
   }
+}
+
+function instagramPublishOptions(options: Record<string, unknown> | undefined): {
+  mediaType?: 'FEED' | 'CAROUSEL' | 'REELS' | 'STORIES';
+  shareToFeed?: boolean;
+} {
+  const rawMediaType = options?.mediaType;
+  const mediaType =
+    rawMediaType === 'STORY'
+      ? 'STORIES'
+      : readEnum(rawMediaType, ['FEED', 'CAROUSEL', 'REELS', 'STORIES'], undefined);
+  return {
+    mediaType,
+    shareToFeed: options?.shareToFeed === true,
+  };
+}
+
+function readEnum<const T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  fallback: T | undefined,
+): T | undefined {
+  return typeof value === 'string' && allowed.includes(value as T) ? (value as T) : fallback;
 }
