@@ -243,7 +243,12 @@ jobs:
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env --profile tools run --rm migrate
 
-            $COMPOSE -f docker/docker-compose.prod.yml --env-file .env up -d --no-build --remove-orphans api worker web
+            if ! $COMPOSE -f docker/docker-compose.prod.yml --env-file .env up -d --no-build --remove-orphans api worker web; then
+              echo "Application containers failed to become healthy. Recent logs:"
+              $COMPOSE -f docker/docker-compose.prod.yml --env-file .env ps || true
+              $COMPOSE -f docker/docker-compose.prod.yml --env-file .env logs --tail=200 api worker web || true
+              exit 1
+            fi
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env ps
             docker image prune -f
