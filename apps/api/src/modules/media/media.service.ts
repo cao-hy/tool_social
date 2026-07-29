@@ -99,7 +99,7 @@ export class MediaService {
     const image = mediaType === 'IMAGE' ? sharp(bytes, { failOn: 'none' }).rotate() : null;
     const metadata = image ? await image.metadata().catch(() => undefined) : undefined;
 
-    let finalBytes = bytes;
+    let finalBytes: Buffer<ArrayBufferLike> = bytes;
     if (mediaType === 'IMAGE') {
       if (!image) throw AppError.validation('Không xử lý được ảnh upload.');
       try {
