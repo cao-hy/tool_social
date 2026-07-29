@@ -19,6 +19,7 @@ const SIGNED_READ_EXPIRES_SECONDS = 10 * 60;
 @Injectable()
 export class MediaService {
   private readonly s3: S3Client;
+  private readonly publicS3: S3Client;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -26,6 +27,15 @@ export class MediaService {
   ) {
     this.s3 = new S3Client({
       endpoint: env.S3_ENDPOINT,
+      region: env.S3_REGION,
+      forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      credentials: {
+        accessKeyId: env.S3_ACCESS_KEY_ID,
+        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+      },
+    });
+    this.publicS3 = new S3Client({
+      endpoint: env.S3_PUBLIC_BASE_URL ?? env.S3_ENDPOINT,
       region: env.S3_REGION,
       forcePathStyle: env.S3_FORCE_PATH_STYLE,
       credentials: {
@@ -65,7 +75,7 @@ export class MediaService {
 
     return {
       mediaAsset: await this.toMediaView(media),
-      uploadUrl: await getSignedUrl(this.s3, command, {
+      uploadUrl: await getSignedUrl(this.publicS3, command, {
         expiresIn: SIGNED_UPLOAD_EXPIRES_SECONDS,
       }),
       expiresInSeconds: SIGNED_UPLOAD_EXPIRES_SECONDS,
@@ -202,7 +212,7 @@ export class MediaService {
     const readUrl =
       media.status === 'READY'
         ? await getSignedUrl(
-            this.s3,
+            this.publicS3,
             new GetObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.storageKey }),
             { expiresIn: SIGNED_READ_EXPIRES_SECONDS },
           )

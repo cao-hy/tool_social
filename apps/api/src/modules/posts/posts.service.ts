@@ -29,7 +29,7 @@ import type {
 @Injectable()
 export class PostsService implements OnModuleDestroy {
   private readonly publishQueue: Queue;
-  private readonly s3: S3Client;
+  private readonly publicS3: S3Client;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -42,8 +42,8 @@ export class PostsService implements OnModuleDestroy {
     this.publishQueue = new Queue('publish-post', {
       connection: this.redis.getClient(),
     });
-    this.s3 = new S3Client({
-      endpoint: env.S3_ENDPOINT,
+    this.publicS3 = new S3Client({
+      endpoint: env.S3_PUBLIC_BASE_URL ?? env.S3_ENDPOINT,
       region: env.S3_REGION,
       forcePathStyle: env.S3_FORCE_PATH_STYLE,
       credentials: {
@@ -916,7 +916,7 @@ export class PostsService implements OnModuleDestroy {
       readUrl:
         mediaAsset.status === 'READY'
           ? await getSignedUrl(
-              this.s3,
+              this.publicS3,
               new GetObjectCommand({
                 Bucket: this.env.S3_BUCKET,
                 Key: mediaAsset.storageKey,
