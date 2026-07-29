@@ -10,6 +10,9 @@ concurrency:
   group: production-deploy
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     name: Verify
@@ -98,7 +101,8 @@ jobs:
               DEPLOY_PATH="/home/vmadmin/tool_social"
             fi
 
-            cd "$DEPLOY_PATH"
+            REPO_URL="https://github.com/${{ github.repository }}.git"
+            GIT_AUTH_HEADER="AUTHORIZATION: bearer ${{ github.token }}"
 
             if docker compose version >/dev/null 2>&1; then
               COMPOSE="docker compose"
@@ -109,19 +113,37 @@ jobs:
               exit 1
             fi
 
-            if [ ! -d .git ]; then
-              echo "Deploy path does not contain a git repository: $DEPLOY_PATH"
-              exit 1
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              mkdir -p "$(dirname "$DEPLOY_PATH")"
+              if [ -d "$DEPLOY_PATH" ] && [ -n "$(find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 ! -name .env -print -quit)" ]; then
+                echo "Deploy path exists but is not empty and not a git repository: $DEPLOY_PATH"
+                echo "Move the existing files away, or leave only .env so the action can clone safely."
+                exit 1
+              fi
+
+              if [ -f "$DEPLOY_PATH/.env" ]; then
+                cp "$DEPLOY_PATH/.env" /tmp/socialhub.env.backup
+              fi
+
+              rm -rf "$DEPLOY_PATH"
+              git -c http.extraheader="$GIT_AUTH_HEADER" clone "$REPO_URL" "$DEPLOY_PATH"
+
+              if [ -f /tmp/socialhub.env.backup ]; then
+                mv /tmp/socialhub.env.backup "$DEPLOY_PATH/.env"
+                chmod 600 "$DEPLOY_PATH/.env"
+              fi
             fi
+
+            cd "$DEPLOY_PATH"
 
             if [ ! -f .env ]; then
               echo "Missing $DEPLOY_PATH/.env. Create it from .env.example and fill production values."
               exit 1
             fi
 
-            git fetch origin main
+            git -c http.extraheader="$GIT_AUTH_HEADER" fetch origin main
             git checkout main
-            git pull --ff-only origin main
+            git reset --hard origin/main
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env config >/dev/null
 
