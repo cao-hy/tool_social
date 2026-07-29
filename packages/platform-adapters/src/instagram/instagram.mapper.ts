@@ -18,6 +18,7 @@ export function selectInstagramAccount(pages: InstagramPage[]): {
 export function mapInstagramToken(input: {
   page: InstagramPage;
   igAccountId: string;
+  profile: InstagramProfile;
   userToken: InstagramTokenResponse;
   scopes: string[];
 }): TokenSet {
@@ -28,6 +29,7 @@ export function mapInstagramToken(input: {
       : undefined,
     scopes: input.scopes,
     tokenType: input.userToken.token_type ?? 'bearer',
+    accountProfile: mapInstagramProfile(input.profile),
   };
 }
 

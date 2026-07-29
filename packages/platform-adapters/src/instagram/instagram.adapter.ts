@@ -55,10 +55,12 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     const userToken = await this.client.extendUserToken(shortLivedUserToken.access_token);
     const pages = await this.client.getManagedPages(userToken.access_token);
     const { page, igAccountId } = selectInstagramAccount(pages);
+    const profile = await this.client.getInstagramProfile(igAccountId, page.access_token);
 
     return mapInstagramToken({
       page,
       igAccountId,
+      profile,
       userToken,
       scopes: this.scopes,
     });
