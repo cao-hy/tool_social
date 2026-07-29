@@ -77,29 +77,29 @@ export type QueuePayload<Q extends QueueName> = QueuePayloads[Q];
 export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<Q>): string {
   switch (queue) {
     case 'publish-post':
-      return `publish-post-${(payload as QueuePayloads['publish-post']).platformPostId}`;
+      return `publish-post:${(payload as QueuePayloads['publish-post']).platformPostId}`;
     case 'sync-posts': {
       const p = payload as QueuePayloads['sync-posts'];
-      return `sync-posts-${p.socialAccountId}-${p.cursor ?? 'start'}`;
+      return `sync-posts:${p.socialAccountId}:${p.cursor ?? 'start'}`;
     }
     case 'sync-comments': {
       const p = payload as QueuePayloads['sync-comments'];
-      return `sync-comments-${p.platformPostId ?? p.socialAccountId}-${p.since ?? 'all'}`;
+      return `sync-comments:${p.platformPostId ?? p.socialAccountId}:${p.since ?? 'all'}`;
     }
     case 'sync-post-metrics':
-      return `sync-post-metrics-${(payload as QueuePayloads['sync-post-metrics']).platformPostId}`;
+      return `sync-post-metrics:${(payload as QueuePayloads['sync-post-metrics']).platformPostId}`;
     case 'sync-account-metrics':
-      return `sync-account-metrics-${(payload as QueuePayloads['sync-account-metrics']).socialAccountId}`;
+      return `sync-account-metrics:${(payload as QueuePayloads['sync-account-metrics']).socialAccountId}`;
     case 'refresh-social-token':
-      return `refresh-social-token-${(payload as QueuePayloads['refresh-social-token']).socialAccountId}`;
+      return `refresh-social-token:${(payload as QueuePayloads['refresh-social-token']).socialAccountId}`;
     case 'process-webhook':
-      return `process-webhook-${(payload as QueuePayloads['process-webhook']).webhookEventId}`;
+      return `process-webhook:${(payload as QueuePayloads['process-webhook']).webhookEventId}`;
     case 'retry-failed-post':
-      return `retry-failed-post-${(payload as QueuePayloads['retry-failed-post']).platformPostId}`;
+      return `retry-failed-post:${(payload as QueuePayloads['retry-failed-post']).platformPostId}`;
     case 'generate-thumbnail':
-      return `generate-thumbnail-${(payload as QueuePayloads['generate-thumbnail']).mediaAssetId}`;
+      return `generate-thumbnail:${(payload as QueuePayloads['generate-thumbnail']).mediaAssetId}`;
     case 'cleanup-unused-media':
-      return `cleanup-unused-media-${(payload as QueuePayloads['cleanup-unused-media']).olderThanDays}`;
+      return `cleanup-unused-media:${(payload as QueuePayloads['cleanup-unused-media']).olderThanDays}`;
     default: {
       const exhaustive: never = queue;
       throw new Error(`Queue chưa có quy tắc idempotency: ${String(exhaustive)}`);

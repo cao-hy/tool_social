@@ -1,6 +1,12 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import {
+  CAPABILITY_MATRIX,
+  getVerificationProgress,
+  type PlatformCapabilityTable,
+} from '@socialhub/platform-adapters';
+import { PLATFORMS, type Capability, type Platform } from '@socialhub/shared';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter';
@@ -165,19 +171,30 @@ describe('Health & Platforms (e2e)', () => {
 
     it('báo cáo trung thực số capability đã xác minh (prompt §7)', async () => {
       const response = await request(app.getHttpServer()).get('/platforms/capabilities');
-      expect(response.body.data.verificationProgress.FACEBOOK.verified).toBe(1);
-      expect(response.body.data.verificationProgress.INSTAGRAM.verified).toBe(0);
+      expect(response.body.data.verificationProgress).toEqual(getVerificationProgress());
     });
 
-    it('chỉ Facebook readComments đã được xác minh, các ô khác không bị đoán', async () => {
+    it('capability rời UNVERIFIED phải có nguồn, ngày và người xác minh', async () => {
       const response = await request(app.getHttpServer()).get('/platforms/capabilities');
-      for (const platform of response.body.data.platforms) {
-        for (const [key, capability] of Object.entries(platform.capabilities)) {
-          const expected =
-            platform.platform === 'FACEBOOK' && key === 'readComments'
-              ? 'CONDITIONAL'
-              : 'UNVERIFIED';
-          expect((capability as { state: string }).state).toBe(expected);
+      const responseByPlatform = Object.fromEntries(
+        response.body.data.platforms.map((entry: { platform: Platform }) => [
+          entry.platform,
+          entry,
+        ]),
+      ) as Record<Platform, PlatformCapabilityTable>;
+
+      for (const platform of PLATFORMS) {
+        const expected = CAPABILITY_MATRIX[platform].capabilities;
+        const actual = responseByPlatform[platform].capabilities;
+
+        for (const [key, capability] of Object.entries(actual) as Array<
+          [keyof typeof actual, Capability]
+        >) {
+          expect(capability.state).toBe(expected[key].state);
+          if (capability.state === 'UNVERIFIED') continue;
+          expect(capability.source).toMatch(/^https:\/\//);
+          expect(capability.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+          expect(capability.verifiedBy).toBeTruthy();
         }
       }
     });
