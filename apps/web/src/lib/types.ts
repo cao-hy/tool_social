@@ -116,6 +116,32 @@ export interface MediaAssetView {
   readUrl?: string | null;
 }
 
+export interface StorageUsageView {
+  disk: {
+    path: string;
+    totalBytes: number;
+    freeBytes: number;
+    availableBytes: number;
+    usedBytes: number;
+    usedPercent: number;
+  };
+  media: {
+    totalBytes: number;
+    byType: Array<{ type: MediaType; count: number; bytes: number }>;
+  };
+}
+
+export interface MediaLibraryItem extends MediaAssetView {
+  updatedAt: string;
+  uploadedByName: string | null;
+  uploadedByEmail: string | null;
+  usage: {
+    contentPosts: number;
+    platformPosts: number;
+    total: number;
+  };
+}
+
 export interface PlatformPostView {
   id: string;
   platform: Platform;

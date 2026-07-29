@@ -8,12 +8,14 @@ import type {
   CommentNoteView,
   CommentView,
   ContentPostView,
+  MediaLibraryItem,
   MediaAssetView,
   NotificationView,
   PlatformCapabilitiesView,
   PlatformPostState,
   ReplyTemplateView,
   SocialAccountView,
+  StorageUsageView,
   WorkspaceInvitation,
   WorkspaceMember,
   WorkspaceSummary,
@@ -185,6 +187,29 @@ export const notificationsApi = {
 };
 
 export const mediaApi = {
+  usage: (workspaceId: string) =>
+    apiFetch<StorageUsageView>(`/workspaces/${workspaceId}/media/usage`),
+  list: (
+    workspaceId: string,
+    query?: {
+      q?: string;
+      type?: string;
+      status?: string;
+      cursor?: string;
+      limit?: number;
+    },
+  ) => {
+    const params = new URLSearchParams();
+    if (query?.q) params.set('q', query.q);
+    if (query?.type) params.set('type', query.type);
+    if (query?.status) params.set('status', query.status);
+    if (query?.cursor) params.set('cursor', query.cursor);
+    if (query?.limit) params.set('limit', String(query.limit));
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return apiFetch<{ items: MediaLibraryItem[]; nextCursor: string | null }>(
+      `/workspaces/${workspaceId}/media${suffix}`,
+    );
+  },
   createUpload: (
     workspaceId: string,
     input: { fileName: string; sizeBytes: number; declaredMimeType: string },
@@ -202,6 +227,10 @@ export const mediaApi = {
       method: 'PUT',
       headers: { 'Content-Type': file.type || 'application/octet-stream' },
       body: file,
+    }),
+  delete: (workspaceId: string, mediaAssetId: string) =>
+    apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}`, {
+      method: 'DELETE',
     }),
 };
 

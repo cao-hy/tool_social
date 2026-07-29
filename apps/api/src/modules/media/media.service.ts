@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { statfs } from 'node:fs/promises';
 import { extname } from 'node:path';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Inject, Injectable } from '@nestjs/common';
 import type { MediaType } from '@socialhub/shared';
@@ -9,7 +15,7 @@ import sharp from 'sharp';
 import { AppError } from '../../common/errors/app-error';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
-import type { CreateMediaUploadInput } from './media.schemas';
+import type { CreateMediaUploadInput, ListMediaInput } from './media.schemas';
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
@@ -43,6 +49,60 @@ export class MediaService {
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
       },
     });
+  }
+
+  async usage(workspaceId: string) {
+    const [mediaAggregate, counts, disk] = await Promise.all([
+      this.prisma.mediaAsset.aggregate({
+        where: { workspaceId, deletedAt: null },
+        _sum: { sizeBytes: true },
+      }),
+      this.prisma.mediaAsset.groupBy({
+        by: ['type'],
+        where: { workspaceId, deletedAt: null },
+        _count: { _all: true },
+        _sum: { sizeBytes: true },
+      }),
+      this.diskUsage(),
+    ]);
+
+    return {
+      disk,
+      media: {
+        totalBytes: mediaAggregate._sum.sizeBytes ?? 0,
+        byType: counts.map((item) => ({
+          type: item.type,
+          count: item._count._all,
+          bytes: item._sum.sizeBytes ?? 0,
+        })),
+      },
+    };
+  }
+
+  async list(workspaceId: string, query: ListMediaInput) {
+    const items = await this.prisma.mediaAsset.findMany({
+      where: {
+        workspaceId,
+        deletedAt: null,
+        type: query.type,
+        status: query.status,
+        originalFileName: query.q ? { contains: query.q, mode: 'insensitive' } : undefined,
+      },
+      include: {
+        uploadedBy: { select: { name: true, email: true } },
+        _count: { select: { posts: true, platformPosts: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      cursor: query.cursor ? { id: query.cursor } : undefined,
+      skip: query.cursor ? 1 : 0,
+      take: query.limit + 1,
+    });
+
+    const pageItems = items.slice(0, query.limit);
+    return {
+      items: await Promise.all(pageItems.map((media) => this.toLibraryItem(media))),
+      nextCursor: items.length > query.limit ? (pageItems.at(-1)?.id ?? null) : null,
+    };
   }
 
   async createUpload(workspaceId: string, uploadedById: string, input: CreateMediaUploadInput) {
@@ -178,6 +238,35 @@ export class MediaService {
     return { uploaded: true };
   }
 
+  async delete(workspaceId: string, mediaAssetId: string) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+      include: { _count: { select: { posts: true, platformPosts: true } } },
+    });
+    if (!media) throw AppError.notFound('media asset');
+
+    const usageCount = media._count.posts + media._count.platformPosts;
+    if (usageCount > 0) {
+      throw AppError.conflict('Media đang được bài viết sử dụng. Gỡ khỏi bài viết trước khi xóa.');
+    }
+
+    await Promise.all([
+      this.s3.send(new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.storageKey })),
+      media.thumbnailKey
+        ? this.s3.send(
+            new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.thumbnailKey }),
+          )
+        : Promise.resolve(),
+    ]);
+
+    await this.prisma.mediaAsset.update({
+      where: { id: media.id },
+      data: { deletedAt: new Date() },
+    });
+
+    return { deleted: true };
+  }
+
   private typeFromDeclaredMime(mimeType: string): MediaType {
     if (mimeType.startsWith('video/')) return 'VIDEO';
     return 'IMAGE';
@@ -194,6 +283,52 @@ export class MediaService {
       .toLowerCase()
       .replace(/[^a-z0-9.]/g, '');
     return `workspaces/${workspaceId}/media/${randomUUID()}${extension}`;
+  }
+
+  private async diskUsage() {
+    const stats = await statfs(process.cwd(), { bigint: true });
+    const totalBytes = stats.blocks * stats.bsize;
+    const freeBytes = stats.bfree * stats.bsize;
+    const availableBytes = stats.bavail * stats.bsize;
+    const usedBytes = totalBytes - freeBytes;
+
+    return {
+      path: process.cwd(),
+      totalBytes: Number(totalBytes),
+      freeBytes: Number(freeBytes),
+      availableBytes: Number(availableBytes),
+      usedBytes: Number(usedBytes),
+      usedPercent: Number(totalBytes > 0n ? (usedBytes * 10_000n) / totalBytes : 0n) / 100,
+    };
+  }
+
+  private async toLibraryItem(media: {
+    id: string;
+    type: MediaType;
+    status: string;
+    storageKey: string;
+    originalFileName: string | null;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    width: number | null;
+    height: number | null;
+    durationSec: number | null;
+    createdAt: Date;
+    updatedAt: Date;
+    uploadedBy: { name: string | null; email: string } | null;
+    _count: { posts: number; platformPosts: number };
+  }) {
+    return {
+      ...(await this.toMediaView(media)),
+      updatedAt: media.updatedAt,
+      uploadedByName: media.uploadedBy?.name ?? null,
+      uploadedByEmail: media.uploadedBy?.email ?? null,
+      usage: {
+        contentPosts: media._count.posts,
+        platformPosts: media._count.platformPosts,
+        total: media._count.posts + media._count.platformPosts,
+      },
+    };
   }
 
   private async toMediaView(media: {

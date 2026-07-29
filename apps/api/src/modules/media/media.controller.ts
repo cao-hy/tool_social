@@ -1,11 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
+  Get,
   Headers,
   Inject,
   Param,
   Post,
   Put,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -17,13 +20,33 @@ import { AuthGuard } from '../../common/guards/auth.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
 import { WorkspaceGuard } from '../../common/guards/workspace.guard';
 import { zodPipe } from '../../common/pipes/zod-validation.pipe';
-import { createMediaUploadSchema, type CreateMediaUploadInput } from './media.schemas';
+import {
+  createMediaUploadSchema,
+  listMediaSchema,
+  type CreateMediaUploadInput,
+  type ListMediaInput,
+} from './media.schemas';
 import { MediaService } from './media.service';
 
 @Controller('workspaces/:workspaceId/media')
 @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
 export class MediaController {
   constructor(@Inject(MediaService) private readonly media: MediaService) {}
+
+  @Get('usage')
+  @RequirePermissions('media:view')
+  usage(@Param('workspaceId') workspaceId: string) {
+    return this.media.usage(workspaceId);
+  }
+
+  @Get()
+  @RequirePermissions('media:view')
+  list(
+    @Param('workspaceId') workspaceId: string,
+    @Query(zodPipe(listMediaSchema)) query: ListMediaInput,
+  ) {
+    return this.media.list(workspaceId, query);
+  }
 
   @Post('uploads')
   @RequirePermissions('media:upload')
@@ -53,5 +76,11 @@ export class MediaController {
       bytes: body,
       declaredMimeType: contentType ?? 'application/octet-stream',
     });
+  }
+
+  @Delete(':mediaAssetId')
+  @RequirePermissions('media:delete')
+  delete(@Param('workspaceId') workspaceId: string, @Param('mediaAssetId') mediaAssetId: string) {
+    return this.media.delete(workspaceId, mediaAssetId);
   }
 }

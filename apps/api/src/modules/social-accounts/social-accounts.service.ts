@@ -2,6 +2,7 @@ import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import {
   DevelopmentFixtureAdapter,
   FACEBOOK_PAGES_OAUTH_SCOPES,
+  INSTAGRAM_OAUTH_SCOPES,
   PINTEREST_OAUTH_SCOPES,
   TIKTOK_OAUTH_SCOPES,
   YOUTUBE_OAUTH_SCOPES,
@@ -477,6 +478,7 @@ export class SocialAccountsService implements OnModuleDestroy {
 
   private scopesFor(platform: Platform): string[] {
     if (platform === 'FACEBOOK') return [...FACEBOOK_PAGES_OAUTH_SCOPES];
+    if (platform === 'INSTAGRAM') return [...INSTAGRAM_OAUTH_SCOPES];
     if (platform === 'PINTEREST') return [...PINTEREST_OAUTH_SCOPES];
     if (platform === 'YOUTUBE') return [...YOUTUBE_OAUTH_SCOPES];
     if (platform === 'TIKTOK') return [...TIKTOK_OAUTH_SCOPES];
