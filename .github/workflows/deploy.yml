@@ -90,15 +90,8 @@ jobs:
 
       - name: Create release archive
         run: |
-          tar \
-            --exclude='.git' \
-            --exclude='.env' \
-            --exclude='node_modules' \
-            --exclude='.turbo' \
-            --exclude='.next' \
-            --exclude='dist' \
-            --exclude='coverage' \
-            -czf socialhub-release-${{ github.sha }}.tar.gz .
+          git archive --format=tar.gz --output=socialhub-release-${{ github.sha }}.tar.gz HEAD
+          tar -tzf socialhub-release-${{ github.sha }}.tar.gz docker/docker-compose.prod.yml package.json >/dev/null
 
       - name: Upload release archive to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -107,6 +100,7 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}
+          command_timeout: 5m
           source: socialhub-release-${{ github.sha }}.tar.gz
           target: /tmp
 
@@ -118,6 +112,7 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}
           script_stop: true
+          command_timeout: 30m
           script: |
             set -eu
 

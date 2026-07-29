@@ -146,7 +146,7 @@ services:
       minio-init:
         condition: service_completed_successfully
     ports:
-      - '${WORKER_BIND_ADDRESS:-127.0.0.1}:${WORKER_HEALTH_PORT:-4001}:4001'
+      - '${WORKER_BIND_ADDRESS:-127.0.0.1}:${WORKER_HOST_PORT:-4001}:${WORKER_HEALTH_PORT:-4001}'
     stop_grace_period: 45s
     healthcheck:
       test:
