@@ -67,6 +67,16 @@ describe('buildJobId — khóa idempotency (chống rủi ro R9: double post)', 
   it('jobId luôn có tiền tố là tên queue — dễ truy vết trong Redis', () => {
     expect(
       buildJobId('sync-post-metrics', { platformPostId: 'pp_1', workspaceId: 'ws_1' }),
-    ).toMatch(/^sync-post-metrics:/);
+    ).toMatch(/^sync-post-metrics-/);
+  });
+
+  it('jobId không chứa dấu hai chấm vì BullMQ từ chối custom id có ":"', () => {
+    expect(
+      buildJobId('sync-comments', {
+        socialAccountId: 'sa_1',
+        workspaceId: 'ws_1',
+        since: '2026-07-29T11:34:00.000Z',
+      }),
+    ).not.toContain(':');
   });
 });
