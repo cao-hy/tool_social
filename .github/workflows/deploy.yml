@@ -85,6 +85,32 @@ jobs:
     needs: verify
     environment: production
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create release archive
+        run: |
+          tar \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='node_modules' \
+            --exclude='.turbo' \
+            --exclude='.next' \
+            --exclude='dist' \
+            --exclude='coverage' \
+            -czf /tmp/socialhub-release-${{ github.sha }}.tar.gz .
+
+      - name: Upload release archive to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          source: /tmp/socialhub-release-${{ github.sha }}.tar.gz
+          target: /tmp
+          strip_components: 1
+
       - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -101,8 +127,7 @@ jobs:
               DEPLOY_PATH="/home/vmadmin/tool_social"
             fi
 
-            REPO_URL="https://github.com/${{ github.repository }}.git"
-            GIT_AUTH_HEADER="AUTHORIZATION: bearer ${{ github.token }}"
+            RELEASE_ARCHIVE="/tmp/socialhub-release-${{ github.sha }}.tar.gz"
 
             if docker compose version >/dev/null 2>&1; then
               COMPOSE="docker compose"
@@ -113,37 +138,24 @@ jobs:
               exit 1
             fi
 
-            if [ ! -d "$DEPLOY_PATH/.git" ]; then
-              mkdir -p "$(dirname "$DEPLOY_PATH")"
-              if [ -d "$DEPLOY_PATH" ] && [ -n "$(find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 ! -name .env -print -quit)" ]; then
-                echo "Deploy path exists but is not empty and not a git repository: $DEPLOY_PATH"
-                echo "Move the existing files away, or leave only .env so the action can clone safely."
-                exit 1
-              fi
-
-              if [ -f "$DEPLOY_PATH/.env" ]; then
-                cp "$DEPLOY_PATH/.env" /tmp/socialhub.env.backup
-              fi
-
-              rm -rf "$DEPLOY_PATH"
-              git -c http.extraheader="$GIT_AUTH_HEADER" clone "$REPO_URL" "$DEPLOY_PATH"
-
-              if [ -f /tmp/socialhub.env.backup ]; then
-                mv /tmp/socialhub.env.backup "$DEPLOY_PATH/.env"
-                chmod 600 "$DEPLOY_PATH/.env"
-              fi
+            if [ ! -f "$RELEASE_ARCHIVE" ]; then
+              echo "Missing release archive: $RELEASE_ARCHIVE"
+              exit 1
             fi
 
-            cd "$DEPLOY_PATH"
-
-            if [ ! -f .env ]; then
+            mkdir -p "$DEPLOY_PATH"
+            if [ ! -f "$DEPLOY_PATH/.env" ]; then
               echo "Missing $DEPLOY_PATH/.env. Create it from .env.example and fill production values."
               exit 1
             fi
 
-            git -c http.extraheader="$GIT_AUTH_HEADER" fetch origin main
-            git checkout main
-            git reset --hard origin/main
+            cp "$DEPLOY_PATH/.env" /tmp/socialhub.env.backup
+            find "$DEPLOY_PATH" -mindepth 1 -maxdepth 1 ! -name .env -exec rm -rf {} +
+            tar -xzf "$RELEASE_ARCHIVE" -C "$DEPLOY_PATH"
+            mv /tmp/socialhub.env.backup "$DEPLOY_PATH/.env"
+            chmod 600 "$DEPLOY_PATH/.env"
+
+            cd "$DEPLOY_PATH"
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env config >/dev/null
 
@@ -158,3 +170,4 @@ jobs:
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env ps
             docker image prune -f
+            rm -f "$RELEASE_ARCHIVE"
