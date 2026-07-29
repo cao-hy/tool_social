@@ -171,6 +171,8 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    environment:
+      PORT: 3000
     depends_on:
       api:
         condition: service_healthy
