@@ -14,8 +14,10 @@ COPY packages/security/package.json ./packages/security/
 COPY packages/db/package.json ./packages/db/
 COPY packages/platform-adapters/package.json ./packages/platform-adapters/
 COPY apps/api/package.json ./apps/api/
+COPY apps/web/package.json ./apps/web/
+COPY apps/worker/package.json ./apps/worker/
 # Bỏ qua husky: git hook không có ý nghĩa gì bên trong image.
-RUN npm ci --ignore-scripts
+RUN npm ci --include=optional --ignore-scripts
 
 # ---------------------------------------------------------------- build
 FROM base AS build

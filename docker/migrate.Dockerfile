@@ -15,7 +15,7 @@ COPY apps/api/package.json ./apps/api/
 COPY apps/web/package.json ./apps/web/
 COPY apps/worker/package.json ./apps/worker/
 
-RUN npm ci --ignore-scripts
+RUN npm ci --include=optional --ignore-scripts
 
 COPY packages/db/prisma ./packages/db/prisma
 

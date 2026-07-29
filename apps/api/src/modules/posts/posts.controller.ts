@@ -44,7 +44,7 @@ export class PostsController {
   list(
     @Param('workspaceId') workspaceId: string,
     @Query(zodPipe(listPostsQuerySchema)) query: ListPostsQuery,
-  ) {
+  ): Promise<unknown> {
     return this.posts.list(workspaceId, query);
   }
 
@@ -54,7 +54,7 @@ export class PostsController {
     @Param('workspaceId') workspaceId: string,
     @Body(zodPipe(createPostSchema)) body: CreatePostInput,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.create(
       workspaceId,
       requireUser(request).id,
@@ -65,7 +65,10 @@ export class PostsController {
 
   @Get(':postId')
   @RequirePermissions('post:view')
-  get(@Param('workspaceId') workspaceId: string, @Param('postId') postId: string) {
+  get(
+    @Param('workspaceId') workspaceId: string,
+    @Param('postId') postId: string,
+  ): Promise<unknown> {
     return this.posts.get(workspaceId, postId);
   }
 
@@ -76,7 +79,7 @@ export class PostsController {
     @Param('postId') postId: string,
     @Body(zodPipe(updatePostSchema)) body: UpdatePostInput,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.update(
       workspaceId,
       postId,
@@ -92,7 +95,7 @@ export class PostsController {
     @Param('workspaceId') workspaceId: string,
     @Param('postId') postId: string,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.deletePost(
       workspaceId,
       postId,
@@ -108,7 +111,7 @@ export class PostsController {
     @Param('postId') postId: string,
     @Body(zodPipe(publishPostSchema)) body: PublishPostInputDto,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.publishNow(
       workspaceId,
       postId,
@@ -125,7 +128,7 @@ export class PostsController {
     @Param('postId') postId: string,
     @Body(zodPipe(schedulePostSchema)) body: SchedulePostInput,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.schedule(
       workspaceId,
       postId,
@@ -141,7 +144,7 @@ export class PostsController {
     @Param('workspaceId') workspaceId: string,
     @Param('postId') postId: string,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.retry(
       workspaceId,
       postId,
@@ -157,7 +160,7 @@ export class PostsController {
     @Param('postId') postId: string,
     @Param('platformPostId') platformPostId: string,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.refreshPlatformPostState(
       workspaceId,
       postId,
@@ -174,7 +177,7 @@ export class PostsController {
     @Param('postId') postId: string,
     @Param('platformPostId') platformPostId: string,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.makeYouTubePublic(
       workspaceId,
       postId,
@@ -190,7 +193,7 @@ export class PostsController {
     @Param('workspaceId') workspaceId: string,
     @Param('postId') postId: string,
     @Req() request: FastifyRequest & AuthenticatedRequest,
-  ) {
+  ): Promise<unknown> {
     return this.posts.duplicate(
       workspaceId,
       postId,
