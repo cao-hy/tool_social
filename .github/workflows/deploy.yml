@@ -151,6 +151,17 @@ jobs:
 
             cd "$DEPLOY_PATH"
 
+            echo "Disk usage before Docker cleanup:"
+            df -h /
+            docker system df || true
+            find /tmp -maxdepth 1 -type f -name 'socialhub-release-*.tar.gz' -mtime +1 -delete || true
+            docker container prune -f || true
+            docker image prune -af || true
+            docker builder prune -af || true
+            echo "Disk usage after Docker cleanup:"
+            df -h /
+            docker system df || true
+
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env config >/dev/null
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env pull postgres redis minio minio-init
@@ -163,5 +174,6 @@ jobs:
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env up -d --remove-orphans api worker web
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env ps
-            docker image prune -f
+            docker image prune -af
+            docker builder prune -af
             rm -f "$RELEASE_ARCHIVE"
