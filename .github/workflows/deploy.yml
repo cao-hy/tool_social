@@ -98,7 +98,7 @@ jobs:
             --exclude='.next' \
             --exclude='dist' \
             --exclude='coverage' \
-            -czf /tmp/socialhub-release-${{ github.sha }}.tar.gz .
+            -czf socialhub-release-${{ github.sha }}.tar.gz .
 
       - name: Upload release archive to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -107,9 +107,8 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}
-          source: /tmp/socialhub-release-${{ github.sha }}.tar.gz
+          source: socialhub-release-${{ github.sha }}.tar.gz
           target: /tmp
-          strip_components: 1
 
       - name: Deploy to VPS via SSH
         uses: appleboy/ssh-action@v1.0.3
