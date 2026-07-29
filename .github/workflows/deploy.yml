@@ -95,7 +95,7 @@ jobs:
 
             DEPLOY_PATH="${{ secrets.VPS_DEPLOY_PATH }}"
             if [ -z "$DEPLOY_PATH" ]; then
-              DEPLOY_PATH="/var/www/tool_social"
+              DEPLOY_PATH="/home/vmadmin/tool_social"
             fi
 
             cd "$DEPLOY_PATH"
