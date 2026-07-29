@@ -241,7 +241,7 @@ jobs:
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env up -d --no-build postgres redis minio
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env up -d --no-build --force-recreate minio-init
 
-            $COMPOSE -f docker/docker-compose.prod.yml --env-file .env --profile tools run --rm --no-build migrate
+            $COMPOSE -f docker/docker-compose.prod.yml --env-file .env --profile tools run --rm migrate
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env up -d --no-build --remove-orphans api worker web
 
