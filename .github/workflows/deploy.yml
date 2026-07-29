@@ -14,6 +14,29 @@ jobs:
   verify:
     name: Verify
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: socialhub
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: socialhub_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U socialhub"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,6 +49,23 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Prepare CI env
+        run: |
+          cp .env.example .env
+          {
+            echo "NODE_ENV=test"
+            echo "DATABASE_URL=postgresql://socialhub:ci_password@localhost:5432/socialhub_test?schema=public"
+            echo "REDIS_URL=redis://localhost:6379"
+            echo "ENCRYPTION_KEYS=v1:$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")"
+            echo "ENCRYPTION_ACTIVE_KEY=v1"
+          } >> .env
+
+      - name: Validate Prisma schema
+        run: npm run db:validate -w @socialhub/db
+
+      - name: Generate Prisma client
+        run: npm run db:generate -w @socialhub/db
 
       - name: Typecheck
         run: npm run typecheck
