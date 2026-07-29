@@ -16,9 +16,9 @@ const storageBaseUrl = process.env.S3_ENDPOINT ?? 'http://localhost:9000';
  * là dữ liệu KHÔNG TIN CẬY, và CSP là lớp phòng thủ cuối cùng nếu escaping của
  * React bị bỏ qua ở đâu đó.
  *
- * Ở development, Next cần inline script cho runtime/HMR nên CSP được nới vừa
- * đủ để local dev không trắng màn hình. Production sẽ cần nonce trước khi bật
- * CSP script strict hoàn toàn.
+ * Next App Router vẫn phát sinh một số inline bootstrap/hydration scripts.
+ * Production muốn bỏ 'unsafe-inline' cần triển khai nonce/hash CSP riêng cho
+ * toàn bộ response HTML; nếu không browser sẽ chặn runtime và trắng màn hình.
  */
 const isDevelopment = process.env.NODE_ENV !== 'production';
 const devConnectSources = [
@@ -47,13 +47,13 @@ const csp = [
   "default-src 'self'",
   isDevelopment
     ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-    : "script-src 'self' 'unsafe-eval'",
+    : "script-src 'self' 'unsafe-inline'",
   isDevelopment
     ? "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
     : "style-src 'self' 'unsafe-inline'",
   isDevelopment ? `img-src ${devMediaSources}` : "img-src 'self' data: blob: https:",
   isDevelopment ? `media-src ${devMediaSources}` : "media-src 'self' blob: https:",
-  isDevelopment ? "font-src 'self' data: https://fonts.gstatic.com" : "font-src 'self' data:",
+  isDevelopment ? "font-src 'self' data: https:" : "font-src 'self' data: https:",
   isDevelopment ? `connect-src ${devConnectSources}` : "connect-src 'self' https:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
