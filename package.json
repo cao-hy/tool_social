@@ -77,6 +77,8 @@
     ]
   },
   "optionalDependencies": {
-    "@swc/core-linux-x64-gnu": "^1.15.46"
+    "@swc/core-linux-x64-gnu": "^1.15.46",
+    "@tailwindcss/oxide-linux-x64-gnu": "^4.3.3",
+    "@tailwindcss/oxide-linux-x64-musl": "^4.3.3"
   }
 }
