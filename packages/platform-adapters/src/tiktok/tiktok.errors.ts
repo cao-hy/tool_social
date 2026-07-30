@@ -39,13 +39,18 @@ export function normalizeTikTokError(input: {
     (wrapped.success ? wrapped.data.error?.message : undefined) ??
     `TikTok API trả về lỗi HTTP ${input.status}.`;
 
-  return createPlatformError(mapTikTokErrorKind(input.status, code), 'TIKTOK', message, {
-    httpStatus: input.status,
-    platformCode: code,
-    retryAfterMs: input.retryAfterMs,
-    raw: redactSecrets(input.payload),
-    cause: input.cause,
-  });
+  return createPlatformError(
+    mapTikTokErrorKind(input.status, code),
+    'TIKTOK',
+    userMessage(message),
+    {
+      httpStatus: input.status,
+      platformCode: code,
+      retryAfterMs: input.retryAfterMs,
+      raw: redactSecrets(input.payload),
+      cause: input.cause,
+    },
+  );
 }
 
 export function tiktokApiEnvelopeError(input: { code: string; message?: string; raw: unknown }) {
@@ -126,6 +131,17 @@ function summarizeUnexpectedCause(cause: unknown): string | null {
       .join('; ');
   }
   return cause instanceof Error ? cause.message : null;
+}
+
+function userMessage(message: string): string {
+  if (message.toLowerCase().includes('content-sharing-guidelines')) {
+    return [
+      'TikTok từ chối Direct Post theo Content Sharing Guidelines.',
+      'Nếu app chưa qua audit, tài khoản TikTok phải đang private và bài chỉ được đăng ở Only me.',
+      'Muốn đăng public cho người khác xem cần hoàn tất TikTok Direct Post audit.',
+    ].join(' ');
+  }
+  return message;
 }
 
 export function redactSecrets(value: unknown): unknown {
