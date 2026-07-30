@@ -207,6 +207,32 @@ export class FacebookGraphClient {
     );
   }
 
+  async hideComment(input: {
+    externalCommentId: string;
+    pageAccessToken: string;
+    hidden: boolean;
+  }): Promise<FacebookMutationResponse> {
+    return this.postForm(
+      `/${input.externalCommentId}`,
+      {
+        access_token: input.pageAccessToken,
+        is_hidden: input.hidden ? 'true' : 'false',
+      },
+      facebookMutationResponseSchema,
+    );
+  }
+
+  async deleteComment(input: {
+    externalCommentId: string;
+    pageAccessToken: string;
+  }): Promise<FacebookMutationResponse> {
+    return this.delete(
+      `/${input.externalCommentId}`,
+      { access_token: input.pageAccessToken },
+      facebookMutationResponseSchema,
+    );
+  }
+
   async updatePagePost(input: {
     externalPostId: string;
     pageAccessToken: string;

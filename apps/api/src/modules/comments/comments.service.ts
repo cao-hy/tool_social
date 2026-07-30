@@ -20,11 +20,14 @@ import type {
   AssignCommentInput,
   CreateCommentTagInput,
   CreateReplyTemplateInput,
+  DeleteCommentQuery,
   ListCommentsQuery,
   ReplyToCommentInput,
   SyncCommentsInput,
+  UpdateCommentMessageInput,
   UpdateCommentStatusInput,
   UpdateCommentTagsInput,
+  UpdateCommentVisibilityInput,
   UpdateReplyTemplateInput,
 } from './comments.schemas';
 
@@ -207,6 +210,175 @@ export class CommentsService implements OnModuleDestroy {
     return this.get(workspaceId, comment.id);
   }
 
+  async updateMessage(
+    workspaceId: string,
+    commentId: string,
+    actorUserId: string,
+    input: UpdateCommentMessageInput,
+    auditContext: AuditContext,
+  ) {
+    const comment = await this.findComment(workspaceId, commentId);
+    const before = { message: comment.message };
+
+    if (input.updatePlatform) {
+      if (!comment.isFromPage) {
+        throw AppError.conflict(
+          'Chỉ sửa được comment/reply do page hoặc channel của bạn gửi. Comment của khách không thể sửa.',
+        );
+      }
+
+      const adapter = this.adapters.requireCapability(comment.platform, 'editComment');
+      if (!adapter.editComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'editComment');
+      }
+      this.ensureCommentActionScopes(comment, 'editComment');
+      const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
+      await adapter.editComment(
+        {
+          accessToken,
+          externalAccountId: comment.socialAccount.externalAccountId,
+          externalPageId: comment.socialAccount.externalPageId ?? undefined,
+          correlationId: auditContext.requestId ?? `comment-edit:${comment.id}`,
+        },
+        comment.externalCommentId,
+        input.message,
+      );
+    }
+
+    const updated = await this.prisma.comment.update({
+      where: { id: comment.id },
+      data: { message: input.message },
+      include: this.commentInclude(),
+    });
+
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'POST_UPDATED',
+      resourceType: 'Comment',
+      resourceId: comment.id,
+      before,
+      after: { message: input.message, updatePlatform: input.updatePlatform },
+    });
+
+    return this.toCommentView(updated);
+  }
+
+  async updateVisibility(
+    workspaceId: string,
+    commentId: string,
+    actorUserId: string,
+    input: UpdateCommentVisibilityInput,
+    auditContext: AuditContext,
+  ) {
+    const comment = await this.findComment(workspaceId, commentId);
+    const adapter = this.adapters.requireCapability(comment.platform, 'hideComment');
+    if (!adapter.hideComment) {
+      throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+    }
+    this.ensureCommentActionScopes(comment, 'hideComment');
+    const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
+    await adapter.hideComment(
+      {
+        accessToken,
+        externalAccountId: comment.socialAccount.externalAccountId,
+        externalPageId: comment.socialAccount.externalPageId ?? undefined,
+        correlationId: auditContext.requestId ?? `comment-hide:${comment.id}`,
+      },
+      comment.externalCommentId,
+      input.hidden,
+    );
+
+    const updated = await this.prisma.comment.update({
+      where: { id: comment.id },
+      data: { isHidden: input.hidden },
+      include: this.commentInclude(),
+    });
+
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'COMMENT_HIDDEN',
+      resourceType: 'Comment',
+      resourceId: comment.id,
+      before: { isHidden: comment.isHidden },
+      after: { isHidden: input.hidden },
+    });
+
+    return this.toCommentView(updated);
+  }
+
+  async deleteComment(
+    workspaceId: string,
+    commentId: string,
+    actorUserId: string,
+    input: DeleteCommentQuery,
+    auditContext: AuditContext,
+  ) {
+    const comment = await this.findComment(workspaceId, commentId);
+
+    if (input.deleteFromPlatform) {
+      const usesModerationDelete = comment.platform === 'YOUTUBE' && !comment.isFromPage;
+      const action = usesModerationDelete ? 'hideComment' : 'deleteComment';
+      const adapter = this.adapters.requireCapability(comment.platform, action);
+      this.ensureCommentActionScopes(comment, action);
+      const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
+
+      if (usesModerationDelete) {
+        if (!adapter.hideComment) {
+          throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+        }
+        await adapter.hideComment(
+          {
+            accessToken,
+            externalAccountId: comment.socialAccount.externalAccountId,
+            externalPageId: comment.socialAccount.externalPageId ?? undefined,
+            correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
+          },
+          comment.externalCommentId,
+          true,
+        );
+      } else {
+        if (!adapter.deleteComment) {
+          throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
+        }
+        await adapter.deleteComment(
+          {
+            accessToken,
+            externalAccountId: comment.socialAccount.externalAccountId,
+            externalPageId: comment.socialAccount.externalPageId ?? undefined,
+            correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
+          },
+          comment.externalCommentId,
+        );
+      }
+    }
+
+    const deletedAt = new Date();
+    await this.prisma.comment.updateMany({
+      where: {
+        workspaceId,
+        deletedAt: null,
+        OR: [{ id: comment.id }, { parentId: comment.id }],
+      },
+      data: { deletedAt },
+    });
+
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'COMMENT_DELETED',
+      resourceType: 'Comment',
+      resourceId: comment.id,
+      metadata: { deleteFromPlatform: input.deleteFromPlatform },
+    });
+
+    return { deleted: true };
+  }
+
   async addNote(
     workspaceId: string,
     commentId: string,
@@ -328,6 +500,46 @@ export class CommentsService implements OnModuleDestroy {
     }
 
     return this.get(workspaceId, comment.id);
+  }
+
+  private ensureCommentActionScopes(
+    comment: Awaited<ReturnType<typeof this.findComment>>,
+    action: 'editComment' | 'deleteComment' | 'hideComment',
+  ) {
+    if (!comment.socialAccount.token || comment.socialAccount.status !== 'CONNECTED') {
+      throw AppError.conflict('Social account chưa kết nối.');
+    }
+    if (
+      comment.platform === 'FACEBOOK' &&
+      !comment.socialAccount.scopes.includes('pages_manage_engagement')
+    ) {
+      throw AppError.conflict(
+        'Facebook token hiện tại thiếu quyền pages_manage_engagement. Hãy ngắt kết nối rồi kết nối lại Facebook Page để quản lý comment.',
+      );
+    }
+    if (
+      comment.platform === 'YOUTUBE' &&
+      !comment.socialAccount.scopes.includes('https://www.googleapis.com/auth/youtube.force-ssl')
+    ) {
+      throw AppError.conflict(
+        'YouTube token hiện tại thiếu scope youtube.force-ssl. Hãy ngắt kết nối rồi kết nối lại YouTube để quản lý comment.',
+      );
+    }
+    if (comment.platform === 'INSTAGRAM') {
+      const missingScopes = ['instagram_manage_comments', 'pages_read_engagement'].filter(
+        (scope) => !comment.socialAccount.scopes.includes(scope),
+      );
+      if (missingScopes.length > 0) {
+        throw AppError.conflict(
+          `Instagram token hiện tại thiếu quyền ${missingScopes.join(
+            ', ',
+          )}. Hãy ngắt kết nối rồi kết nối lại Instagram sau khi quyền đã được bật trong Meta App Dashboard.`,
+        );
+      }
+    }
+    if (action === 'editComment' && comment.platform !== 'YOUTUBE') {
+      throw AppError.capabilityUnsupported(comment.platform, action);
+    }
   }
 
   private async getFreshAccessToken(

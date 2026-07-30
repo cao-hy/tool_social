@@ -233,6 +233,34 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
       sentAt: new Date(),
     };
   }
+
+  async editComment(
+    ctx: AdapterContext,
+    externalCommentId: string,
+    message: string,
+  ): Promise<void> {
+    await this.client.updateComment({
+      accessToken: ctx.accessToken,
+      commentId: externalCommentId,
+      message,
+    });
+  }
+
+  async hideComment(
+    ctx: AdapterContext,
+    externalCommentId: string,
+    hidden: boolean,
+  ): Promise<void> {
+    await this.client.setCommentModerationStatus({
+      accessToken: ctx.accessToken,
+      commentId: externalCommentId,
+      moderationStatus: hidden ? 'rejected' : 'published',
+    });
+  }
+
+  async deleteComment(ctx: AdapterContext, externalCommentId: string): Promise<void> {
+    await this.client.deleteComment(ctx.accessToken, externalCommentId);
+  }
 }
 
 function youtubePublishOptions(options: Record<string, unknown> | undefined): {

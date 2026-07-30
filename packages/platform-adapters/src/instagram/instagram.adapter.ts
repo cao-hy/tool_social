@@ -299,6 +299,25 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     };
   }
 
+  async deleteComment(ctx: AdapterContext, externalCommentId: string): Promise<void> {
+    await this.client.deleteComment({
+      commentId: externalCommentId,
+      accessToken: ctx.accessToken,
+    });
+  }
+
+  async hideComment(
+    ctx: AdapterContext,
+    externalCommentId: string,
+    hidden: boolean,
+  ): Promise<void> {
+    await this.client.hideComment({
+      commentId: externalCommentId,
+      accessToken: ctx.accessToken,
+      hidden,
+    });
+  }
+
   verifyWebhookSignature(rawBody: Buffer, headers: Record<string, string | undefined>): boolean {
     return verifyMetaWebhookSignature({
       rawBody,

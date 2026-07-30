@@ -83,6 +83,7 @@ export interface SocialPlatformAdapter {
     externalCommentId: string,
     message: string,
   ): Promise<CommentReplyResult>;
+  editComment?(ctx: AdapterContext, externalCommentId: string, message: string): Promise<void>;
   deleteComment?(ctx: AdapterContext, externalCommentId: string): Promise<void>;
   hideComment?(ctx: AdapterContext, externalCommentId: string, hidden: boolean): Promise<void>;
 
@@ -101,6 +102,7 @@ export interface SocialPlatformAdapter {
 export const OPTIONAL_METHOD_CAPABILITY_MAP = {
   editPost: 'editPublishedPost',
   replyToComment: 'replyToComment',
+  editComment: 'editComment',
   deleteComment: 'deleteComment',
   hideComment: 'hideComment',
   deletePost: 'deletePublishedPost',

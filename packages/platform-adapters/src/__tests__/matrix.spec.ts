@@ -10,11 +10,11 @@ import { countVerified, findStaleCapabilities, isSupported } from '../core/capab
 
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
   const verifiedCounts = {
-    FACEBOOK: 4,
-    INSTAGRAM: 14,
+    FACEBOOK: 6,
+    INSTAGRAM: 16,
     PINTEREST: 6,
     TIKTOK: 10,
-    YOUTUBE: 8,
+    YOUTUBE: 11,
   } as const;
 
   it('có bảng cho cả 5 nền tảng', () => {
@@ -45,6 +45,8 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
           (platform === 'FACEBOOK' &&
             (key === 'readComments' ||
               key === 'replyToComment' ||
+              key === 'hideComment' ||
+              key === 'deleteComment' ||
               key === 'editPublishedPost' ||
               key === 'deletePublishedPost')) ||
             (platform === 'PINTEREST' &&
@@ -59,6 +61,8 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'deletePublishedPost' ||
                 key === 'readComments' ||
                 key === 'replyToComment' ||
+                key === 'hideComment' ||
+                key === 'deleteComment' ||
                 key === 'postViews' ||
                 key === 'postLikes' ||
                 key === 'postCommentCount' ||
@@ -73,6 +77,9 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'revokeToken' ||
                 key === 'readComments' ||
                 key === 'replyToComment' ||
+                key === 'editComment' ||
+                key === 'hideComment' ||
+                key === 'deleteComment' ||
                 key === 'editPublishedPost' ||
                 key === 'deletePublishedPost')) ||
             (platform === 'TIKTOK' &&
@@ -104,15 +111,15 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       expect(progress[platform].verified).toBe(verifiedCounts[platform]);
       expect(progress[platform].percent).toBe(
         platform === 'FACEBOOK'
-          ? 13
+          ? 18
           : platform === 'INSTAGRAM'
-            ? 44
+            ? 48
             : platform === 'PINTEREST'
-              ? 19
+              ? 18
               : platform === 'YOUTUBE'
-                ? 25
+                ? 33
                 : platform === 'TIKTOK'
-                  ? 31
+                  ? 30
                   : 0,
       );
     }

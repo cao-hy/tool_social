@@ -50,6 +50,24 @@ CAPABILITY_MATRIX.FACEBOOK.capabilities.replyToComment = {
   verifiedBy: 'Codex + Meta Graph API docs',
 };
 
+CAPABILITY_MATRIX.FACEBOOK.capabilities.hideComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Ẩn/hiện comment trên Page post bằng Page access token có pages_manage_engagement và comment thuộc Page quản lý.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/comment/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
+CAPABILITY_MATRIX.FACEBOOK.capabilities.deleteComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Xóa comment trên Page post bằng DELETE /{comment-id} với Page access token có pages_manage_engagement; một số loại comment có thể bị Meta từ chối.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/comment/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
 CAPABILITY_MATRIX.FACEBOOK.capabilities.editPublishedPost = {
   state: 'CONDITIONAL',
   condition:
@@ -133,6 +151,24 @@ CAPABILITY_MATRIX.INSTAGRAM.capabilities.replyToComment = {
     'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-comment/replies',
   verifiedAt: '2026-07-30',
   verifiedBy: 'Codex + Meta Instagram Comment docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.hideComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Ẩn/hiện comment trên Instagram media thuộc tài khoản Business/Creator bằng Instagram Comment Moderation API.',
+  source: 'https://developers.facebook.com/documentation/instagram-platform/comment-moderation',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Comment Moderation docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.deleteComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Xóa comment trên Instagram media thuộc tài khoản Business/Creator bằng Instagram Comment Moderation API.',
+  source: 'https://developers.facebook.com/documentation/instagram-platform/comment-moderation',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Comment Moderation docs',
 };
 
 CAPABILITY_MATRIX.INSTAGRAM.capabilities.postViews = {
@@ -298,6 +334,33 @@ CAPABILITY_MATRIX.YOUTUBE.capabilities.replyToComment = {
   state: 'SUPPORTED',
   source: 'https://developers.google.com/youtube/v3/docs/comments/insert',
   verifiedAt: '2026-07-28',
+  verifiedBy: 'Codex + YouTube Data API docs',
+};
+
+CAPABILITY_MATRIX.YOUTUBE.capabilities.editComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Sửa nội dung comment/reply bằng comments.update; token cần youtube.force-ssl và request chỉ thành công nếu tài khoản có quyền sửa comment đó.',
+  source: 'https://developers.google.com/youtube/v3/docs/comments/update',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + YouTube Data API docs',
+};
+
+CAPABILITY_MATRIX.YOUTUBE.capabilities.hideComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Ẩn comment bằng comments.setModerationStatus với moderationStatus=rejected; hiện lại bằng published. Token cần youtube.force-ssl và quyền moderation trên channel/video.',
+  source: 'https://developers.google.com/youtube/v3/docs/comments/setModerationStatus',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + YouTube Data API docs',
+};
+
+CAPABILITY_MATRIX.YOUTUBE.capabilities.deleteComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Xóa comment/reply do chính channel gửi bằng comments.delete; comment của người xem được xử lý bằng moderation reject.',
+  source: 'https://developers.google.com/youtube/v3/docs/comments/delete',
+  verifiedAt: '2026-07-30',
   verifiedBy: 'Codex + YouTube Data API docs',
 };
 

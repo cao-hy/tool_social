@@ -411,6 +411,27 @@ export const commentsApi = {
       method: 'PATCH',
       body: JSON.stringify({ tagIds }),
     }),
+  updateMessage: (
+    workspaceId: string,
+    commentId: string,
+    input: { message: string; updatePlatform?: boolean },
+  ) =>
+    apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}/message`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  updateVisibility: (workspaceId: string, commentId: string, hidden: boolean) =>
+    apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}/visibility`, {
+      method: 'PATCH',
+      body: JSON.stringify({ hidden }),
+    }),
+  delete: (workspaceId: string, commentId: string, deleteFromPlatform = true) =>
+    apiFetch<{ deleted: true }>(
+      `/workspaces/${workspaceId}/comments/${commentId}?deleteFromPlatform=${String(
+        deleteFromPlatform,
+      )}`,
+      { method: 'DELETE' },
+    ),
   addNote: (workspaceId: string, commentId: string, body: string) =>
     apiFetch<CommentNoteView>(`/workspaces/${workspaceId}/comments/${commentId}/notes`, {
       method: 'POST',

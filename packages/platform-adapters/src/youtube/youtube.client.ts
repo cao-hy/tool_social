@@ -308,6 +308,78 @@ export class YouTubeClient {
     );
   }
 
+  updateComment(input: {
+    accessToken: string;
+    commentId: string;
+    message: string;
+  }): Promise<YouTubeComment> {
+    return this.putJson(
+      '/comments',
+      {
+        id: input.commentId,
+        snippet: {
+          textOriginal: input.message,
+        },
+      },
+      { part: 'snippet' },
+      youtubeCommentSchema,
+      input.accessToken,
+    );
+  }
+
+  async deleteComment(accessToken: string, commentId: string): Promise<void> {
+    const url = new URL(`${this.apiBaseUrl}/comments`);
+    url.searchParams.set('id', commentId);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (error) {
+      throw youtubeNetworkError(error);
+    }
+
+    if (!response.ok) {
+      throw normalizeYouTubeError({
+        status: response.status,
+        payload: await parseJson(response),
+        retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
+      });
+    }
+  }
+
+  async setCommentModerationStatus(input: {
+    accessToken: string;
+    commentId: string;
+    moderationStatus: 'heldForReview' | 'published' | 'rejected';
+  }): Promise<void> {
+    const url = new URL(`${this.apiBaseUrl}/comments/setModerationStatus`);
+    url.searchParams.set('id', input.commentId);
+    url.searchParams.set('moderationStatus', input.moderationStatus);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${input.accessToken}` },
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (error) {
+      throw youtubeNetworkError(error);
+    }
+
+    if (!response.ok) {
+      throw normalizeYouTubeError({
+        status: response.status,
+        payload: await parseJson(response),
+        retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
+      });
+    }
+  }
+
   private async startResumableUpload(input: {
     accessToken: string;
     bytesLength: number;

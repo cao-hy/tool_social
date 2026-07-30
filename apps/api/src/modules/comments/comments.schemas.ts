@@ -31,6 +31,19 @@ export const updateCommentTagsSchema = z.object({
   tagIds: z.array(z.string().min(1)).max(20),
 });
 
+export const updateCommentMessageSchema = z.object({
+  message: z.string().trim().min(1).max(2000),
+  updatePlatform: z.boolean().default(true),
+});
+
+export const updateCommentVisibilitySchema = z.object({
+  hidden: z.boolean(),
+});
+
+export const deleteCommentQuerySchema = z.object({
+  deleteFromPlatform: z.coerce.boolean().default(true),
+});
+
 export const createCommentTagSchema = z.object({
   name: z.string().trim().min(1).max(40),
   color: z
@@ -64,6 +77,9 @@ export type ListCommentsQuery = z.infer<typeof listCommentsQuerySchema>;
 export type UpdateCommentStatusInput = z.infer<typeof updateCommentStatusSchema>;
 export type AssignCommentInput = z.infer<typeof assignCommentSchema>;
 export type UpdateCommentTagsInput = z.infer<typeof updateCommentTagsSchema>;
+export type UpdateCommentMessageInput = z.infer<typeof updateCommentMessageSchema>;
+export type UpdateCommentVisibilityInput = z.infer<typeof updateCommentVisibilitySchema>;
+export type DeleteCommentQuery = z.infer<typeof deleteCommentQuerySchema>;
 export type CreateCommentTagInput = z.infer<typeof createCommentTagSchema>;
 export type AddCommentNoteInput = z.infer<typeof addCommentNoteSchema>;
 export type ReplyToCommentInput = z.infer<typeof replyToCommentSchema>;
