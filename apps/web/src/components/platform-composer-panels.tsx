@@ -636,7 +636,7 @@ function mediaSummary(mediaAssets: MediaAssetView[]): string {
 
 function platformModeHint(platform: Platform): string {
   if (platform === 'YOUTUBE') return 'Dùng title + 1 video chung';
-  if (platform === 'TIKTOK') return 'Dùng caption + media chung';
+  if (platform === 'TIKTOK') return 'Mặc định gửi vào TikTok Inbox';
   if (platform === 'PINTEREST') return 'Dùng title/link/media chung';
   if (platform === 'INSTAGRAM') return 'Dùng caption/media chung';
   return 'Kế thừa nội dung chung';

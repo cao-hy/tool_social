@@ -116,7 +116,12 @@ export default function EditPostPage() {
   function updateOverride(accountId: string, patch: Partial<PlatformOverrideDraft>) {
     setPlatformOverrides((current) => ({
       ...current,
-      [accountId]: { ...EMPTY_PLATFORM_OVERRIDE, ...current[accountId], ...patch },
+      [accountId]: {
+        ...EMPTY_PLATFORM_OVERRIDE,
+        ...current[accountId],
+        customized: patch.customized ?? true,
+        ...patch,
+      },
     }));
   }
 

@@ -419,20 +419,30 @@ function TikTokStatePanel({
     ? platformPost.platformState
     : null;
   const finalIds = state?.publiclyAvailablePostIds?.join(', ') || '-';
+  const publishId = state?.publishId ?? platformPost.externalPostId ?? '';
+  const status = String(state?.status ?? '').toUpperCase();
+  const sentToInbox = status === 'SEND_TO_USER_INBOX' || publishId.startsWith('v_inbox_');
+  const directComplete = status === 'PUBLISH_COMPLETE' || finalIds !== '-';
   const canCancel =
     canPublish &&
     Boolean(platformPost.externalPostId) &&
-    !['PUBLISH_COMPLETE', 'FAILED', 'CANCELLED'].includes(
-      String(state?.status ?? '').toUpperCase(),
-    );
+    !['PUBLISH_COMPLETE', 'FAILED', 'CANCELLED'].includes(status);
 
   return (
     <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+      {sentToInbox ? (
+        <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+          TikTok đã nhận video vào Inbox/Draft. Bài này chưa public cho người khác xem cho tới khi
+          bạn mở TikTok và đăng thủ công.
+        </p>
+      ) : null}
+      {directComplete ? (
+        <p className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+          TikTok đã hoàn tất publish. Nếu privacy là Public, người khác có thể xem bài trên TikTok.
+        </p>
+      ) : null}
       <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
-        <StateRow
-          label="Publish ID"
-          value={state?.publishId ?? platformPost.externalPostId ?? '-'}
-        />
+        <StateRow label="Publish ID" value={publishId || '-'} />
         <StateRow label="Status" value={state?.status ?? '-'} />
         <StateRow
           label="Uploaded"
