@@ -832,19 +832,13 @@ export class PostsService implements OnModuleDestroy {
       | undefined,
   ): Prisma.InputJsonValue | undefined {
     const explicitOptions =
-      override?.options && Object.keys(override.options).length > 0
-        ? (override.options as Prisma.InputJsonValue)
-        : undefined;
-    if (explicitOptions) return explicitOptions;
+      override?.options && Object.keys(override.options).length > 0 ? override.options : undefined;
+    if (explicitOptions) return explicitOptions as Prisma.InputJsonValue;
 
-    if (
-      account.platform === 'TIKTOK' &&
-      this.env.TIKTOK_ENABLE_DIRECT_POST_SCOPE &&
-      account.scopes.includes('video.publish')
-    ) {
+    if (account.platform === 'TIKTOK' && account.scopes.includes('video.publish')) {
       return {
         postMode: 'DIRECT_POST',
-        privacyLevel: 'PUBLIC_TO_EVERYONE',
+        privacyLevel: 'SELF_ONLY',
       };
     }
 
