@@ -1,18 +1,31 @@
 'use client';
 
 import { hasPermission, PLATFORM_LABELS } from '@socialhub/shared';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Download,
+  Eye,
+  Filter,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+  X,
+} from 'lucide-react';
 import Link from 'next/link';
+import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Field,
   InlineError,
-  PrimaryButton,
   SecondaryButton,
   SelectInput,
   TextInput,
 } from '@/components/form-controls';
 import { DeletePostDialog } from '@/components/delete-post-dialog';
-import { MediaPreview } from '@/components/media-preview';
 import { postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { rowsToCsv } from '@/lib/csv';
@@ -29,7 +42,7 @@ const POST_STATUSES = [
   'FAILED',
 ] as const;
 
-const PAGE_SIZE = 10;
+const DEFAULT_PAGE_SIZE = 20;
 const DELETABLE_POST_STATUSES = [
   'DRAFT',
   'FAILED',
@@ -42,6 +55,7 @@ export default function PostsPage() {
   const auth = useAuth();
   const workspace = auth.activeWorkspace;
   const [posts, setPosts] = useState<ContentPostView[]>([]);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
   const [status, setStatus] = useState('');
   const [platform, setPlatform] = useState('');
@@ -52,6 +66,7 @@ export default function PostsPage() {
   const [dateTo, setDateTo] = useState('');
   const [sortBy, setSortBy] = useState<'createdAt' | 'updatedAt'>('createdAt');
   const [direction, setDirection] = useState<'asc' | 'desc'>('desc');
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -59,6 +74,7 @@ export default function PostsPage() {
   const [retrying, setRetrying] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
+  const [previewPost, setPreviewPost] = useState<ContentPostView | null>(null);
   const [duplicating, setDuplicating] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,9 +89,19 @@ export default function PostsPage() {
       dateTo: dateTo ? new Date(`${dateTo}T23:59:59.999`).toISOString() : undefined,
       sortBy,
       direction,
-      limit: PAGE_SIZE,
+      limit: pageSize,
     }),
-    [dateFrom, dateTo, debouncedQuery, direction, platform, socialAccountId, sortBy, status],
+    [
+      dateFrom,
+      dateTo,
+      debouncedQuery,
+      direction,
+      pageSize,
+      platform,
+      socialAccountId,
+      sortBy,
+      status,
+    ],
   );
 
   async function loadPosts(cursor?: string) {
@@ -85,6 +111,7 @@ export default function PostsPage() {
     try {
       const result = await postsApi.list(workspace.id, { ...activeFilters, cursor });
       setPosts(result.items);
+      setStatusCounts(result.statusCounts);
       setNextCursor(result.nextCursor);
     } catch (loadError) {
       setError(getErrorMessage(loadError));
@@ -236,10 +263,7 @@ export default function PostsPage() {
     sortBy !== 'createdAt' ||
     direction !== 'desc',
   );
-  const statusCounts = new Map<string, number>();
-  for (const post of posts) {
-    statusCounts.set(post.status, (statusCounts.get(post.status) ?? 0) + 1);
-  }
+  const totalStatusCount = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
   const emptyState = hasAnyFilter
     ? {
         title: 'Không có bài nào khớp bộ lọc',
@@ -260,95 +284,95 @@ export default function PostsPage() {
     setDateTo('');
     setSortBy('createdAt');
     setDirection('desc');
+    setPageSize(DEFAULT_PAGE_SIZE);
   }
 
   return (
     <div className="space-y-4">
       <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div className="max-w-3xl">
-          <p className="text-sm font-semibold text-brand-700">Publishing queue</p>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-950">Posts</h1>
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-950">Posts</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Màn vận hành bài đăng: theo dõi draft, lịch đăng, queue worker, lỗi từng nền tảng và
-            thao tác retry/duplicate/export.
+            Quản lý, theo dõi và xuất bản bài đăng trên các nền tảng.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <SecondaryButton
+          <IconButton
             disabled={loading}
+            label="Làm mới"
             onClick={() => void loadPosts(cursorStack.at(-1))}
-            type="button"
           >
-            Làm mới
-          </SecondaryButton>
-          <SecondaryButton disabled={exporting} onClick={() => void exportCsv()} type="button">
-            {exporting ? 'Đang export...' : 'Export CSV'}
-          </SecondaryButton>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          </IconButton>
+          <IconButton disabled={exporting} label="Export CSV" onClick={() => void exportCsv()}>
+            <Download className="h-4 w-4" />
+          </IconButton>
           {canCreate ? (
             <Link
-              className="inline-flex h-10 items-center rounded-md bg-brand-600 px-3 text-sm font-semibold text-white transition hover:bg-brand-700"
+              className="inline-flex h-11 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white transition hover:bg-brand-700"
               href="/posts/new"
             >
+              <Plus className="h-4 w-4" />
               Tạo post
             </Link>
           ) : null}
         </div>
       </header>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-3">
-        <div className="grid gap-3 xl:grid-cols-[1fr_auto] xl:items-center">
-          <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap">
-            <PostStatusTab
-              active={status === ''}
-              count={posts.length}
-              label="Tất cả"
-              onClick={() => setStatus('')}
-            />
-            {POST_STATUSES.map((item) => (
-              <PostStatusTab
-                key={item}
-                active={status === item}
-                count={statusCounts.get(item) ?? 0}
-                label={postStatusLabel(item)}
-                onClick={() => setStatus(item)}
-              />
-            ))}
-          </div>
-          <div className="grid gap-2 md:grid-cols-[minmax(240px,380px)_auto]">
+      <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_180px_180px_minmax(280px,1fr)_auto]">
+          <Field label="Nền tảng">
+            <SelectInput
+              value={platform}
+              onChange={(event) => {
+                setPlatform(event.target.value);
+                setSocialAccountId('');
+              }}
+            >
+              <option value="">Tất cả nền tảng</option>
+              {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+          <Field label="Từ ngày">
             <TextInput
-              aria-label="Tìm bài viết"
-              placeholder="Tìm title, nội dung, link..."
+              type="date"
+              value={dateFrom}
+              onChange={(event) => setDateFrom(event.target.value)}
+            />
+          </Field>
+          <Field label="Đến ngày">
+            <TextInput
+              type="date"
+              value={dateTo}
+              onChange={(event) => setDateTo(event.target.value)}
+            />
+          </Field>
+          <Field label="Tìm kiếm">
+            <TextInput
+              placeholder="Tìm theo tiêu đề, nội dung, link..."
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
+          </Field>
+          <div className="flex items-end gap-2">
             <SecondaryButton
               aria-expanded={showAdvancedFilters}
+              className="h-11 gap-2"
               onClick={() => setShowAdvancedFilters((current) => !current)}
               type="button"
             >
+              <Filter className="h-4 w-4" />
               Bộ lọc {activeAdvancedFilterCount > 0 ? `(${activeAdvancedFilterCount})` : ''}
             </SecondaryButton>
           </div>
         </div>
 
         {showAdvancedFilters ? (
-          <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3 md:grid-cols-2 xl:grid-cols-6">
-            <Field label="Nền tảng">
-              <SelectInput
-                value={platform}
-                onChange={(event) => {
-                  setPlatform(event.target.value);
-                  setSocialAccountId('');
-                }}
-              >
-                <option value="">Tất cả nền tảng</option>
-                {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </SelectInput>
-            </Field>
+          <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3 md:grid-cols-3">
             <Field label="Tài khoản">
               <SelectInput
                 value={socialAccountId}
@@ -363,20 +387,6 @@ export default function PostsPage() {
                     </option>
                   ))}
               </SelectInput>
-            </Field>
-            <Field label="Từ ngày tạo">
-              <TextInput
-                type="date"
-                value={dateFrom}
-                onChange={(event) => setDateFrom(event.target.value)}
-              />
-            </Field>
-            <Field label="Đến ngày tạo">
-              <TextInput
-                type="date"
-                value={dateTo}
-                onChange={(event) => setDateTo(event.target.value)}
-              />
             </Field>
             <Field label="Sắp xếp">
               <SelectInput
@@ -398,207 +408,160 @@ export default function PostsPage() {
             </Field>
           </div>
         ) : null}
+
+        <div className="mt-4 flex flex-wrap items-center gap-1 border-b border-slate-200">
+          <PostStatusTab
+            active={status === ''}
+            count={totalStatusCount}
+            label="Tất cả"
+            onClick={() => setStatus('')}
+          />
+          {POST_STATUSES.map((item) => (
+            <PostStatusTab
+              key={item}
+              active={status === item}
+              count={statusCounts[item] ?? 0}
+              label={postStatusLabel(item)}
+              onClick={() => setStatus(item)}
+            />
+          ))}
+          {hasAnyFilter ? (
+            <IconButton
+              className="ml-auto h-9 w-9 border-transparent"
+              label="Xóa lọc"
+              onClick={resetFilters}
+            >
+              <X className="h-4 w-4" />
+            </IconButton>
+          ) : null}
+        </div>
       </section>
 
       <InlineError message={error} />
 
-      <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-          <div>
-            <p className="text-sm font-semibold text-slate-950">
-              {loading ? 'Đang tải...' : `${posts.length} bài trong trang này`}
-            </p>
-            <p className="text-xs text-slate-500">
-              Mỗi bài có thể có nhiều platform post, mỗi platform post có trạng thái riêng.
-            </p>
-          </div>
-          {hasAnyFilter ? (
-            <button
-              className="text-sm font-medium text-brand-700 hover:text-brand-800"
-              onClick={resetFilters}
-              type="button"
-            >
-              Xóa filter
-            </button>
-          ) : null}
+      <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <p className="text-sm font-medium text-slate-700">
+            {loading ? 'Đang tải...' : `Hiển thị ${posts.length} bài`}
+          </p>
+          <p className="text-xs text-slate-500">Trang {cursorStack.length + 1}</p>
         </div>
-        <div className="divide-y divide-slate-200">
-          {posts.map((post) => (
-            <article key={post.id} className="p-4 transition hover:bg-slate-50/60">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_260px]">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[920px] table-fixed text-left text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+              <tr>
+                <th className="w-28 px-4 py-3">Bài đăng</th>
+                <th className="w-36 px-4 py-3">Nền tảng</th>
+                <th className="w-40 px-4 py-3">Trạng thái</th>
+                <th className="w-36 px-4 py-3">Thời gian</th>
+                <th className="w-48 px-4 py-3">Kết quả</th>
+                <th className="w-52 px-4 py-3 text-right">Thao tác</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200">
+              {posts.map((post) => (
+                <tr
+                  key={post.id}
+                  className="border-l-2 border-transparent align-middle transition hover:border-brand-300 hover:bg-slate-50"
+                >
+                  <td className="px-4 py-3">
+                    <PostThumbnail post={post} onPreview={() => setPreviewPost(post)} />
+                    <PlatformErrors post={post} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <PlatformChips post={post} />
+                  </td>
+                  <td className="px-4 py-3">
                     <StatusBadge status={post.status} />
                     {post.derivedStatus !== post.status ? (
-                      <StatusBadge status={post.derivedStatus} muted />
-                    ) : null}
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                      {post.platformPosts.length} target
-                    </span>
-                    {post.media.length > 0 ? (
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                        {post.media.length} media
-                      </span>
-                    ) : null}
-                  </div>
-
-                  <Link
-                    className="mt-3 block truncate text-base font-semibold text-slate-950 hover:text-brand-700"
-                    href={`/posts/${post.id}`}
-                  >
-                    {post.title ?? 'Untitled post'}
-                  </Link>
-                  <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-600">
-                    {post.body ?? 'Không có nội dung.'}
-                  </p>
-                  {post.hashtags.length > 0 ? (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {post.hashtags.slice(0, 8).map((tag) => (
-                        <span
-                          key={tag}
-                          className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700"
-                        >
-                          #{tag.replace(/^#/, '')}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2 xl:grid-cols-4">
-                    <TimelineItem label="Tạo" value={post.createdAt} />
-                    <TimelineItem label="Cập nhật" value={post.updatedAt} />
-                    <TimelineItem label="Lên lịch" value={post.scheduledAt} />
-                    <TimelineItem label="Đã đăng" value={post.publishedAt} />
-                  </div>
-
-                  {post.media.length > 0 ? (
-                    <div className="mt-3 grid max-w-2xl gap-2 sm:grid-cols-2">
-                      {post.media.slice(0, 4).map((asset) => (
-                        <MediaPreview key={asset.id} asset={asset} />
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-
-                <aside className="space-y-2 rounded-md border border-slate-200 bg-white p-3">
-                  <Link
-                    className="inline-flex h-10 w-full items-center justify-center rounded-md bg-brand-600 px-3 text-sm font-semibold text-white transition hover:bg-brand-700"
-                    href={`/posts/${post.id}`}
-                  >
-                    Xem chi tiết
-                  </Link>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Link
-                      className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-                      href={`/posts/${post.id}/edit`}
-                    >
-                      Sửa
-                    </Link>
-                    <SecondaryButton
-                      disabled={duplicating !== null}
-                      onClick={() => void duplicatePost(post.id)}
-                      type="button"
-                    >
-                      {duplicating === post.id ? 'Đang...' : 'Nhân bản'}
-                    </SecondaryButton>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <SecondaryButton
-                      disabled={deleting !== null || !canDeletePostStatus(post.status)}
-                      onClick={() => openDeleteDialog(post)}
-                      type="button"
-                    >
-                      {deleting === post.id ? 'Đang...' : 'Xóa'}
-                    </SecondaryButton>
-                    <PrimaryButton
-                      busy={retrying === post.id}
-                      disabled={
-                        !canRetry ||
-                        !post.platformPosts.some((item) => item.status === 'FAILED') ||
-                        retrying !== null
-                      }
-                      onClick={() => void retry(post.id)}
-                      type="button"
-                    >
-                      Retry
-                    </PrimaryButton>
-                  </div>
-                </aside>
-              </div>
-
-              <div className="mt-4 grid gap-2 xl:grid-cols-2">
-                {post.platformPosts.map((platformPost) => (
-                  <div
-                    key={platformPost.id}
-                    className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-slate-900">
-                          {PLATFORM_LABELS[platformPost.platform]} ·{' '}
-                          {platformPost.socialAccountName}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          Attempts: {platformPost.attemptCount}
-                        </p>
+                      <div className="mt-1">
+                        <StatusBadge status={post.derivedStatus} muted />
                       </div>
-                      <StatusBadge status={platformPost.status} />
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">
+                    <p>{formatShortDate(primaryPostTime(post))}</p>
+                    <p className="mt-1 text-xs text-slate-500">{primaryPostTimeLabel(post)}</p>
+                  </td>
+                  <td className="px-4 py-3 text-slate-700">
+                    <PostResultSummary post={post} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-end gap-1.5">
+                      <IconLink className="h-9 w-9" href={`/posts/${post.id}`} label="Xem chi tiết">
+                        <Eye className="h-4 w-4" />
+                      </IconLink>
+                      <RowActions
+                        canRetry={canRetry}
+                        deleting={deleting === post.id}
+                        duplicating={duplicating === post.id}
+                        post={post}
+                        retrying={retrying === post.id}
+                        retryDisabled={retrying !== null}
+                        onDelete={() => openDeleteDialog(post)}
+                        onDuplicate={() => void duplicatePost(post.id)}
+                        onRetry={() => void retry(post.id)}
+                      />
                     </div>
-                    {platformPost.errorMessage ? (
-                      <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
-                        {platformPost.errorCode}: {platformPost.errorMessage}
-                      </p>
-                    ) : null}
-                    {platformPost.externalUrl ? (
-                      <a
-                        className="mt-2 inline-block text-xs font-medium text-brand-700"
-                        href={platformPost.externalUrl}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        Mở bài trên nền tảng
-                      </a>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </article>
-          ))}
-
-          {!loading && posts.length === 0 ? (
-            <div className="p-6">
-              <p className="text-sm font-semibold text-slate-950">{emptyState.title}</p>
-              <p className="mt-1 text-sm text-slate-600">{emptyState.body}</p>
-            </div>
-          ) : null}
-          {loading ? <p className="p-6 text-sm text-slate-600">Đang tải posts...</p> : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+
+        {!loading && posts.length === 0 ? (
+          <div className="p-6">
+            <p className="text-sm font-semibold text-slate-950">{emptyState.title}</p>
+            <p className="mt-1 text-sm text-slate-600">{emptyState.body}</p>
+          </div>
+        ) : null}
+        {loading ? <p className="p-6 text-sm text-slate-600">Đang tải posts...</p> : null}
       </section>
 
-      <div className="flex items-center justify-between">
-        <SecondaryButton
-          disabled={loading || cursorStack.length === 0}
-          onClick={() => {
-            const previous = cursorStack.slice(0, -1);
-            setCursorStack(previous);
-            void loadPosts(previous.at(-1));
-          }}
-          type="button"
-        >
-          Trang trước
-        </SecondaryButton>
-        <span className="text-sm text-slate-500">Trang {cursorStack.length + 1}</span>
-        <SecondaryButton
-          disabled={loading || !nextCursor}
-          onClick={() => {
-            if (!nextCursor) return;
-            setCursorStack((current) => [...current, nextCursor]);
-            void loadPosts(nextCursor);
-          }}
-          type="button"
-        >
-          Trang sau
-        </SecondaryButton>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <label className="flex items-center whitespace-nowrap text-sm text-slate-600">
+          <SelectInput
+            aria-label="Số bài mỗi trang"
+            className="h-10 w-28 shrink-0"
+            value={String(pageSize)}
+            onChange={(event) => {
+              setCursorStack([]);
+              setPageSize(Number(event.target.value));
+            }}
+          >
+            <option value="10">10 / trang</option>
+            <option value="20">20 / trang</option>
+            <option value="50">50 / trang</option>
+          </SelectInput>
+        </label>
+        <div className="flex items-center gap-3">
+          <IconButton
+            disabled={loading || cursorStack.length === 0}
+            label="Trang trước"
+            onClick={() => {
+              const previous = cursorStack.slice(0, -1);
+              setCursorStack(previous);
+              void loadPosts(previous.at(-1));
+            }}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </IconButton>
+          <span className="min-w-16 text-center text-sm text-slate-500">
+            Trang {cursorStack.length + 1}
+          </span>
+          <IconButton
+            disabled={loading || !nextCursor}
+            label="Trang sau"
+            onClick={() => {
+              if (!nextCursor) return;
+              setCursorStack((current) => [...current, nextCursor]);
+              void loadPosts(nextCursor);
+            }}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </IconButton>
+        </div>
       </div>
       <DeletePostDialog
         busy={deleting !== null}
@@ -606,12 +569,238 @@ export default function PostsPage() {
         onCancel={() => setDeleteTarget(null)}
         onConfirm={(input) => void deletePost(input)}
       />
+      <MediaPreviewDialog post={previewPost} onClose={() => setPreviewPost(null)} />
     </div>
   );
 }
 
 function canDeletePostStatus(status: ContentPostView['status']) {
   return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
+}
+
+function IconButton({
+  label,
+  children,
+  className = '',
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      {...props}
+      aria-label={label}
+      className={`inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:translate-y-0 disabled:hover:border-slate-300 disabled:hover:bg-white disabled:hover:shadow-none ${className}`}
+      title={label}
+      type={props.type ?? 'button'}
+    >
+      {children}
+    </button>
+  );
+}
+
+function IconLink({
+  href,
+  label,
+  children,
+  className = '',
+}: {
+  href: string;
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Link
+      aria-label={label}
+      className={`inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-100 ${className}`}
+      href={href}
+      title={label}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function PostThumbnail({ post, onPreview }: { post: ContentPostView; onPreview: () => void }) {
+  const asset = post.media[0];
+  const source = asset?.readUrl;
+
+  if (!asset || !source) {
+    return (
+      <div className="flex h-12 w-[72px] shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs font-medium text-slate-500">
+        No media
+      </div>
+    );
+  }
+
+  if (asset.type === 'IMAGE') {
+    return (
+      <button
+        className="block h-12 w-[72px] overflow-hidden rounded-md transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+        onClick={onPreview}
+        title="Xem media"
+        type="button"
+      >
+        <img
+          alt={asset.originalFileName ?? 'media'}
+          className="h-full w-full object-cover"
+          src={source}
+        />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      className="relative h-12 w-[72px] shrink-0 overflow-hidden rounded-md bg-slate-950 transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+      onClick={onPreview}
+      title="Xem video"
+      type="button"
+    >
+      <video className="h-full w-full object-cover" muted preload="metadata" src={source} />
+      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold text-white">
+        VIDEO
+      </span>
+    </button>
+  );
+}
+
+function MediaPreviewDialog({
+  post,
+  onClose,
+}: {
+  post: ContentPostView | null;
+  onClose: () => void;
+}) {
+  const asset = post?.media[0];
+  const source = asset?.readUrl;
+  if (!post || !asset || !source) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
+      <div className="w-full max-w-4xl overflow-hidden rounded-md bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <p className="truncate text-sm font-semibold text-slate-950">
+            {post.title ?? asset.originalFileName ?? 'Media preview'}
+          </p>
+          <IconButton className="h-9 w-9" label="Đóng" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+        <div className="bg-slate-950 p-3">
+          {asset.type === 'VIDEO' ? (
+            <video className="max-h-[72vh] w-full rounded bg-black" controls src={source} />
+          ) : (
+            <img
+              alt={asset.originalFileName ?? 'media'}
+              className="max-h-[72vh] w-full rounded object-contain"
+              src={source}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PostResultSummary({ post }: { post: ContentPostView }) {
+  const published = post.platformPosts.filter((item) => item.status === 'PUBLISHED').length;
+  const failed = post.platformPosts.filter((item) => item.status === 'FAILED').length;
+  const attempts = post.platformPosts.reduce((sum, item) => sum + item.attemptCount, 0);
+  const total = post.platformPosts.length;
+
+  return (
+    <div className="grid gap-1 text-xs leading-5">
+      <span className="font-semibold text-slate-900">
+        {published}/{total || 1} đã đăng
+      </span>
+      <span className={failed > 0 ? 'font-medium text-red-700' : 'text-slate-500'}>
+        {failed > 0 ? `${failed} lỗi` : 'Không lỗi'} · Attempts {attempts}/{total || 1}
+      </span>
+    </div>
+  );
+}
+
+function PlatformChips({ post }: { post: ContentPostView }) {
+  return (
+    <div className="flex max-w-40 flex-wrap gap-2">
+      {post.platformPosts.map((item) => (
+        <span
+          key={item.id}
+          className="inline-flex h-8 min-w-10 items-center justify-center rounded-md bg-slate-100 px-2 text-xs font-semibold text-slate-700"
+          title={`${PLATFORM_LABELS[item.platform]} - ${item.socialAccountName}`}
+        >
+          {platformShortLabel(item.platform)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function PlatformErrors({ post }: { post: ContentPostView }) {
+  const failed = post.platformPosts.filter((item) => item.errorMessage);
+  if (failed.length === 0) return null;
+
+  return (
+    <p className="mt-2 max-w-xl truncate rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+      {failed[0]?.errorCode}: {failed[0]?.errorMessage}
+    </p>
+  );
+}
+
+function RowActions({
+  canRetry,
+  deleting,
+  duplicating,
+  post,
+  retrying,
+  retryDisabled,
+  onDelete,
+  onDuplicate,
+  onRetry,
+}: {
+  canRetry: boolean;
+  deleting: boolean;
+  duplicating: boolean;
+  post: ContentPostView;
+  retrying: boolean;
+  retryDisabled: boolean;
+  onDelete: () => void;
+  onDuplicate: () => void;
+  onRetry: () => void;
+}) {
+  const hasFailedPlatformPost = post.platformPosts.some((item) => item.status === 'FAILED');
+
+  return (
+    <div className="flex gap-1">
+      <IconLink className="h-9 w-9" href={`/posts/${post.id}/edit`} label="Sửa">
+        <Pencil className="h-4 w-4" />
+      </IconLink>
+      <IconButton className="h-9 w-9" disabled={duplicating} label="Nhân bản" onClick={onDuplicate}>
+        <Copy className="h-4 w-4" />
+      </IconButton>
+      <IconButton
+        className="h-9 w-9"
+        disabled={deleting || !canDeletePostStatus(post.status)}
+        label="Xóa"
+        onClick={onDelete}
+      >
+        <Trash2 className="h-4 w-4" />
+      </IconButton>
+      {hasFailedPlatformPost ? (
+        <IconButton
+          className="h-9 w-9 border-brand-200 text-brand-700 hover:bg-brand-50"
+          disabled={!canRetry || retryDisabled}
+          label="Retry"
+          onClick={onRetry}
+        >
+          <RotateCcw className={`h-4 w-4 ${retrying ? 'animate-spin' : ''}`} />
+        </IconButton>
+      ) : null}
+    </div>
+  );
 }
 
 function StatusBadge({ status, muted = false }: { status: string; muted?: boolean }) {
@@ -652,10 +841,10 @@ function PostStatusTab({
 }) {
   return (
     <button
-      className={`inline-flex h-11 items-center justify-between gap-3 rounded-md border px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+      className={`inline-flex h-11 items-center justify-between gap-2 border-b-2 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
         active
-          ? 'border-brand-200 bg-brand-50 text-brand-700'
-          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+          ? 'border-brand-600 text-brand-700'
+          : 'border-transparent text-slate-600 hover:text-slate-950'
       }`}
       onClick={onClick}
       type="button"
@@ -663,21 +852,12 @@ function PostStatusTab({
       <span>{label}</span>
       <span
         className={`rounded-full px-2 py-0.5 text-xs ${
-          active ? 'bg-white text-brand-700' : 'bg-slate-100 text-slate-500'
+          active ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'
         }`}
       >
         {count}
       </span>
     </button>
-  );
-}
-
-function TimelineItem({ label, value }: { label: string; value: string | null }) {
-  return (
-    <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-      <p className="font-semibold text-slate-500">{label}</p>
-      <p className="mt-1 text-slate-700">{value ? formatDateTime(value) : '—'}</p>
-    </div>
   );
 }
 
@@ -695,12 +875,38 @@ function postStatusLabel(status: string) {
   return labels[status] ?? status;
 }
 
-function formatDateTime(value: string) {
+function primaryPostTime(post: ContentPostView) {
+  return post.publishedAt ?? post.scheduledAt ?? post.updatedAt ?? post.createdAt;
+}
+
+function primaryPostTimeLabel(post: ContentPostView) {
+  if (post.publishedAt) return 'Đã đăng';
+  if (post.scheduledAt) return 'Lên lịch';
+  if (post.updatedAt) return 'Cập nhật';
+  return 'Tạo';
+}
+
+function formatShortDate(value: string | null) {
+  if (!value) return '-';
   return new Intl.DateTimeFormat('vi-VN', {
-    dateStyle: 'short',
-    timeStyle: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
   }).format(new Date(value));
+}
+
+function platformShortLabel(platform: string) {
+  const labels: Record<string, string> = {
+    FACEBOOK: 'FB',
+    INSTAGRAM: 'IG',
+    YOUTUBE: 'YT',
+    TIKTOK: 'TT',
+    PINTEREST: 'PIN',
+  };
+  return labels[platform] ?? platform;
 }
 
 function downloadCsv(csv: string, fileName: string) {

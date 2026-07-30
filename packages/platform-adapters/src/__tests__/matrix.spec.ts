@@ -11,10 +11,10 @@ import { countVerified, findStaleCapabilities, isSupported } from '../core/capab
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
   const verifiedCounts = {
     FACEBOOK: 4,
-    INSTAGRAM: 0,
+    INSTAGRAM: 14,
     PINTEREST: 6,
     TIKTOK: 10,
-    YOUTUBE: 6,
+    YOUTUBE: 8,
   } as const;
 
   it('có bảng cho cả 5 nền tảng', () => {
@@ -52,6 +52,20 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'publishVideo' ||
                 key === 'publishWithLink' ||
                 key === 'refreshToken')) ||
+            (platform === 'INSTAGRAM' &&
+              (key === 'publishImage' ||
+                key === 'publishMultipleImages' ||
+                key === 'publishVideo' ||
+                key === 'deletePublishedPost' ||
+                key === 'readComments' ||
+                key === 'replyToComment' ||
+                key === 'postViews' ||
+                key === 'postLikes' ||
+                key === 'postCommentCount' ||
+                key === 'postShares' ||
+                key === 'postReach' ||
+                key === 'postImpressions' ||
+                key === 'postSaves')) ||
             (platform === 'YOUTUBE' &&
               (key === 'publishVideo' ||
                 key === 'postTitle' ||
@@ -91,13 +105,15 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       expect(progress[platform].percent).toBe(
         platform === 'FACEBOOK'
           ? 13
-          : platform === 'PINTEREST'
-            ? 19
-            : platform === 'YOUTUBE'
-              ? 25
-              : platform === 'TIKTOK'
-                ? 31
-                : 0,
+          : platform === 'INSTAGRAM'
+            ? 44
+            : platform === 'PINTEREST'
+              ? 19
+              : platform === 'YOUTUBE'
+                ? 25
+                : platform === 'TIKTOK'
+                  ? 31
+                  : 0,
       );
     }
   });

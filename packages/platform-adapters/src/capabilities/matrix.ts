@@ -68,6 +68,141 @@ CAPABILITY_MATRIX.FACEBOOK.capabilities.deletePublishedPost = {
   verifiedBy: 'Codex + Meta PagePost docs',
 };
 
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.publishImage = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đăng ảnh lên Instagram professional account bằng Content Publishing API qua media container + media_publish; token cần instagram_content_publish.',
+  source: 'https://developers.facebook.com/documentation/instagram-platform/content-publishing',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Content Publishing docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.publishMultipleImages = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đăng carousel tối đa 10 media bằng child containers và container media_type=CAROUSEL; media URL phải public HTTPS.',
+  source: 'https://developers.facebook.com/documentation/instagram-platform/content-publishing',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Content Publishing docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.publishVideo = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đăng video/Reels qua Content Publishing API; media URL phải public HTTPS và tài khoản là Business/Creator được kết nối.',
+  source: 'https://developers.facebook.com/documentation/instagram-platform/content-publishing',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Content Publishing docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.editPublishedPost = {
+  state: 'UNSUPPORTED',
+  condition:
+    'Instagram Media API không hỗ trợ sửa caption/media bài đã publish; POST /{ig_media_id} chỉ dùng cho bật/tắt comments.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Media docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.deletePublishedPost = {
+  state: 'CONDITIONAL',
+  condition:
+    'Xóa media thuộc Instagram professional account bằng DELETE /{ig_media_id}; xóa item trong carousel phải xóa cả carousel.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Media docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.readComments = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc comments của media thuộc tài khoản đã kết nối bằng /{ig_media_id}/comments; token cần instagram_manage_comments.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/comments',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Comments docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.replyToComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Trả lời comment Instagram bằng /{ig_comment_id}/replies; token cần instagram_manage_comments.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-comment/replies',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Comment docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.postViews = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc plays/video_views qua media insights khi metric khả dụng với loại media và token có instagram_manage_insights.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/insights',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Insights docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.postLikes = {
+  state: 'CONDITIONAL',
+  condition: 'Đọc like_count từ IG Media fields cho media thuộc tài khoản đã kết nối.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Media docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.postCommentCount = {
+  state: 'CONDITIONAL',
+  condition: 'Đọc comments_count từ IG Media fields cho media thuộc tài khoản đã kết nối.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Media docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.postShares = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc shares qua media insights khi metric khả dụng với loại media và token có instagram_manage_insights.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/insights',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Insights docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.postReach = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc reach qua media insights khi metric khả dụng với loại media và token có instagram_manage_insights.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/insights',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Insights docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.postImpressions = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc impressions qua media insights khi metric khả dụng với loại media và token có instagram_manage_insights.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/insights',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Insights docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.postSaves = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc saved qua media insights khi metric khả dụng với loại media và token có instagram_manage_insights.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/insights',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Instagram Insights docs',
+};
+
 CAPABILITY_MATRIX.PINTEREST.capabilities.publishImage = {
   state: 'CONDITIONAL',
   condition:

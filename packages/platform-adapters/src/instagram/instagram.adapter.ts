@@ -1,19 +1,28 @@
-import type { Paginated } from '@socialhub/shared';
-import { createUnverifiedCapabilityTable } from '../core/capability-table';
+import {
+  computeEngagementRate,
+  emptyPostMetrics,
+  metricFromApi,
+  type Paginated,
+} from '@socialhub/shared';
+import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
   AuthUrlInput,
+  PlatformComment,
   PlatformPostData,
   PublishPostInput,
   PublishResult,
   SocialAccountProfile,
   PostMetrics,
+  SyncCommentsParams,
+  SyncPostsParams,
   TokenSet,
 } from '../core/types';
 import { InstagramGraphClient, type InstagramGraphClientConfig } from './instagram.client';
 import { mapInstagramProfile, mapInstagramToken, selectInstagramAccount } from './instagram.mapper';
+import type { InstagramComment, InstagramMedia } from './instagram.schemas';
 import { validateInstagramPost } from './instagram.validator';
 import { parseMetaWebhookEvents, verifyMetaWebhookSignature } from '../meta/webhook';
 
@@ -24,13 +33,15 @@ export interface InstagramAdapterConfig extends InstagramGraphClientConfig {
 export const INSTAGRAM_OAUTH_SCOPES = [
   'instagram_basic',
   'instagram_content_publish',
+  'instagram_manage_comments',
+  'instagram_manage_insights',
   'pages_show_list',
   'pages_read_engagement',
 ] as const;
 
 export class InstagramAdapter implements SocialPlatformAdapter {
   readonly platform = 'INSTAGRAM' as const;
-  readonly capabilities = createUnverifiedCapabilityTable('INSTAGRAM');
+  readonly capabilities = getCapabilityTable('INSTAGRAM');
 
   private readonly client: InstagramGraphClient;
   private readonly scopes: string[];
@@ -153,12 +164,129 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     throw new Error('Cần ít nhất một ảnh hoặc video để đăng lên Instagram.');
   }
 
-  async getPosts(): Promise<Paginated<PlatformPostData>> {
-    throw capabilityUnsupported('INSTAGRAM', 'getPosts');
+  async getPosts(
+    ctx: AdapterContext,
+    params: SyncPostsParams,
+  ): Promise<Paginated<PlatformPostData>> {
+    const response = await this.client.getUserMedia({
+      igAccountId: ctx.externalAccountId,
+      accessToken: ctx.accessToken,
+      cursor: params.cursor,
+      limit: params.limit,
+    });
+    const items = response.data.map(mapInstagramMedia);
+    const filtered = params.since
+      ? items.filter((post) => post.publishedAt >= (params.since as Date))
+      : items;
+
+    return {
+      items: filtered,
+      nextCursor: response.paging?.cursors?.after ?? null,
+      hasMore: Boolean(response.paging?.next),
+    };
   }
 
-  async getPostMetrics(_ctx: AdapterContext, _externalPostId: string): Promise<PostMetrics> {
-    throw capabilityUnsupported('INSTAGRAM', 'getPostMetrics');
+  async deletePost(ctx: AdapterContext, externalPostId: string): Promise<void> {
+    await this.client.deleteMedia({
+      mediaId: externalPostId,
+      accessToken: ctx.accessToken,
+    });
+  }
+
+  async getPostMetrics(ctx: AdapterContext, externalPostId: string): Promise<PostMetrics> {
+    const media = await this.client.getMedia({
+      mediaId: externalPostId,
+      accessToken: ctx.accessToken,
+    });
+    const metrics = emptyPostMetrics('UNSUPPORTED');
+
+    if (media.like_count !== undefined) metrics.likes = metricFromApi(media.like_count);
+    if (media.comments_count !== undefined) metrics.comments = metricFromApi(media.comments_count);
+
+    const insightValues = await this.readAvailableInsights(ctx, externalPostId, [
+      'impressions',
+      'reach',
+      'saved',
+      'shares',
+      'plays',
+      'video_views',
+    ]);
+
+    if (insightValues.impressions !== undefined) {
+      metrics.impressions = metricFromApi(insightValues.impressions);
+    }
+    if (insightValues.reach !== undefined) metrics.reach = metricFromApi(insightValues.reach);
+    if (insightValues.saved !== undefined) metrics.saves = metricFromApi(insightValues.saved);
+    if (insightValues.shares !== undefined) metrics.shares = metricFromApi(insightValues.shares);
+    if (insightValues.plays !== undefined) metrics.views = metricFromApi(insightValues.plays);
+    if (insightValues.video_views !== undefined) {
+      metrics.views = metricFromApi(insightValues.video_views);
+    }
+
+    const engagement =
+      (metrics.likes.value ?? 0) +
+      (metrics.comments.value ?? 0) +
+      (metrics.shares.value ?? 0) +
+      (metrics.saves.value ?? 0);
+    if (
+      metrics.likes.value !== null ||
+      metrics.comments.value !== null ||
+      metrics.shares.value !== null ||
+      metrics.saves.value !== null
+    ) {
+      metrics.engagement = metricFromApi(engagement);
+    }
+    metrics.engagementRate = computeEngagementRate(metrics);
+    return metrics;
+  }
+
+  async getComments(
+    ctx: AdapterContext,
+    params: SyncCommentsParams,
+  ): Promise<Paginated<PlatformComment>> {
+    if (!params.externalPostId) {
+      throw capabilityUnsupported('INSTAGRAM', 'readCommentsOnExternallyCreatedPosts');
+    }
+
+    const response = await this.client.getMediaComments({
+      mediaId: params.externalPostId,
+      accessToken: ctx.accessToken,
+      cursor: params.cursor,
+      limit: params.limit,
+    });
+    const comments = response.data.map((comment) =>
+      mapInstagramComment({
+        comment,
+        externalPostId: params.externalPostId as string,
+        externalAccountId: ctx.externalAccountId,
+      }),
+    );
+    const filtered = params.since
+      ? comments.filter((comment) => comment.postedAt >= (params.since as Date))
+      : comments;
+
+    return {
+      items: filtered,
+      nextCursor: response.paging?.cursors?.after ?? null,
+      hasMore: Boolean(response.paging?.next),
+    };
+  }
+
+  async replyToComment(
+    ctx: AdapterContext,
+    externalCommentId: string,
+    message: string,
+  ): Promise<{ externalReplyId: string; sentAt: Date }> {
+    const id = await this.client.replyToComment({
+      commentId: externalCommentId,
+      accessToken: ctx.accessToken,
+      message,
+    });
+
+    return {
+      externalReplyId: id,
+      sentAt: new Date(),
+    };
   }
 
   verifyWebhookSignature(rawBody: Buffer, headers: Record<string, string | undefined>): boolean {
@@ -172,6 +300,72 @@ export class InstagramAdapter implements SocialPlatformAdapter {
   parseWebhookEvents(payload: unknown) {
     return parseMetaWebhookEvents(payload);
   }
+
+  private async readAvailableInsights(
+    ctx: AdapterContext,
+    externalPostId: string,
+    metrics: string[],
+  ): Promise<Record<string, number>> {
+    const result: Record<string, number> = {};
+
+    await Promise.all(
+      metrics.map(async (metric) => {
+        try {
+          const response = await this.client.getMediaInsights({
+            mediaId: externalPostId,
+            accessToken: ctx.accessToken,
+            metrics: [metric],
+          });
+          const value = response.data[0]?.values[0]?.value;
+          if (typeof value === 'number') result[metric] = value;
+        } catch (error) {
+          ctx.logger?.debug('Instagram insight metric unavailable', {
+            correlationId: ctx.correlationId,
+            externalPostId,
+            metric,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
+    );
+
+    return result;
+  }
+}
+
+function mapInstagramMedia(media: InstagramMedia): PlatformPostData {
+  return {
+    externalPostId: media.id,
+    externalUrl: media.permalink,
+    caption: media.caption,
+    mediaType: mapInstagramMediaType(media.media_type),
+    thumbnailUrl: media.thumbnail_url ?? media.media_url,
+    publishedAt: media.timestamp ? new Date(media.timestamp) : new Date(),
+  };
+}
+
+function mapInstagramMediaType(mediaType: string | undefined) {
+  if (mediaType === 'IMAGE' || mediaType === 'CAROUSEL_ALBUM') return 'IMAGE';
+  if (mediaType === 'VIDEO') return 'VIDEO';
+  return undefined;
+}
+
+function mapInstagramComment(input: {
+  comment: InstagramComment;
+  externalPostId: string;
+  externalAccountId: string;
+}): PlatformComment {
+  return {
+    externalCommentId: input.comment.id,
+    externalPostId: input.externalPostId,
+    authorExternalId: input.comment.username,
+    authorName: input.comment.username,
+    message: input.comment.text,
+    likeCount: input.comment.like_count,
+    postedAt: input.comment.timestamp ? new Date(input.comment.timestamp) : new Date(),
+    isHidden: input.comment.hidden,
+    isFromOwner: input.comment.username === input.externalAccountId,
+  };
 }
 
 function instagramPublishOptions(options: Record<string, unknown> | undefined): {

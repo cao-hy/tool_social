@@ -262,9 +262,11 @@ export const postsApi = {
     if (query?.cursor) params.set('cursor', query.cursor);
     if (query?.limit) params.set('limit', String(query.limit));
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
-    return apiFetch<{ items: ContentPostView[]; nextCursor: string | null }>(
-      `/workspaces/${workspaceId}/posts${suffix}`,
-    );
+    return apiFetch<{
+      items: ContentPostView[];
+      nextCursor: string | null;
+      statusCounts: Record<string, number>;
+    }>(`/workspaces/${workspaceId}/posts${suffix}`);
   },
   get: (workspaceId: string, postId: string) =>
     apiFetch<ContentPostView>(`/workspaces/${workspaceId}/posts/${postId}`),

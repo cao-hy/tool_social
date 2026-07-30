@@ -1,17 +1,19 @@
 'use client';
 
 import { hasPermission, PLATFORM_LABELS } from '@socialhub/shared';
+import { Edit3, ExternalLink, Eye, RefreshCw, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { DeletePostDialog } from '@/components/delete-post-dialog';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
-import { MediaPreview } from '@/components/media-preview';
 import { postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import type {
   ContentPostView,
+  MediaAssetView,
   PlatformPostView,
   TikTokPlatformState,
   YouTubePlatformState,
@@ -35,6 +37,7 @@ export default function PostDetailPage() {
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<MediaAssetView | null>(null);
   const [platformAction, setPlatformAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -155,37 +158,34 @@ export default function PostDetailPage() {
     <div className="space-y-5">
       <header className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div>
-          <Link className="text-sm font-medium text-brand-700" href="/posts">
-            Back to posts
+          <Link className="text-sm font-medium text-brand-700 hover:text-brand-800" href="/posts">
+            Quay lại Posts
           </Link>
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">
-            {post?.title ?? 'Post detail'}
+            {post?.title ?? 'Chi tiết bài đăng'}
           </h1>
           {post ? (
             <p className="mt-1 text-sm text-slate-600">
-              {post.status} · Created {formatDateTime(post.createdAt)}
+              {postStatusLabel(post.status)} · Tạo {formatDateTime(post.createdAt)}
             </p>
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          <SecondaryButton disabled={loading} onClick={() => void loadPost()} type="button">
-            Làm mới
-          </SecondaryButton>
+          <IconButton disabled={loading} label="Làm mới" onClick={() => void loadPost()}>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          </IconButton>
           {post && canUpdate ? (
-            <Link
-              className="inline-flex h-10 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
-              href={`/posts/${post.id}/edit`}
-            >
-              Edit
-            </Link>
+            <IconLink href={`/posts/${post.id}/edit`} label="Sửa">
+              <Edit3 className="h-4 w-4" />
+            </IconLink>
           ) : null}
-          <SecondaryButton
+          <IconButton
             disabled={!post || !canDelete || !canDeleteStatus || deleting}
+            label="Xóa"
             onClick={openDeleteDialog}
-            type="button"
           >
-            {deleting ? 'Đang xóa...' : 'Delete'}
-          </SecondaryButton>
+            <Trash2 className="h-4 w-4" />
+          </IconButton>
           <PrimaryButton
             busy={retrying}
             disabled={!post || !canRetry || !hasFailedPlatformPost}
@@ -208,47 +208,33 @@ export default function PostDetailPage() {
       {post ? (
         <>
           <section className="grid gap-5 xl:grid-cols-[1fr_360px]">
-            <article className="rounded-lg border border-slate-200 bg-white p-5">
-              <div className="flex flex-wrap gap-2">
+            <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-wrap items-center gap-2">
                 <StatusBadge status={post.status} />
-                <StatusBadge status={`Derived: ${post.derivedStatus}`} />
+                {post.derivedStatus !== post.status ? (
+                  <StatusBadge status={`Derived: ${post.derivedStatus}`} />
+                ) : null}
               </div>
-              <p className="mt-4 whitespace-pre-wrap text-sm text-slate-700">
+              <p className="mt-4 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-slate-700">
                 {post.body ?? 'Không có nội dung.'}
               </p>
-              {post.linkUrl ? (
-                <a
-                  className="mt-3 inline-block text-sm font-medium text-brand-700"
-                  href={post.linkUrl}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  {post.linkUrl}
-                </a>
-              ) : null}
-              {post.hashtags.length > 0 ? (
-                <p className="mt-3 text-sm text-brand-700">
-                  {post.hashtags.map((tag) => `#${tag}`).join(' ')}
-                </p>
-              ) : null}
-              {post.media.length > 0 ? (
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  {post.media.map((asset) => (
-                    <div key={asset.id} className="rounded-md border border-slate-200 p-3">
-                      <MediaPreview asset={asset} />
-                      <p className="mt-2 truncate text-sm font-medium text-slate-900">
-                        {asset.originalFileName ?? asset.id}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {asset.mimeType ?? asset.type} · {asset.sizeBytes ?? 0} bytes
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
+              <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
+                <InfoBlock
+                  label="Link"
+                  value={post.linkUrl ?? '-'}
+                  href={post.linkUrl ?? undefined}
+                />
+                <InfoBlock
+                  label="Hashtags"
+                  value={
+                    post.hashtags.length > 0 ? post.hashtags.map((tag) => `#${tag}`).join(' ') : '-'
+                  }
+                />
+              </div>
+              <MediaStrip media={post.media} onPreview={setPreviewAsset} />
             </article>
 
-            <aside className="rounded-lg border border-slate-200 bg-white p-5">
+            <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-sm font-semibold text-slate-950">Timeline</h2>
               <dl className="mt-3 space-y-2 text-sm">
                 <Row label="Created" value={formatDateTime(post.createdAt)} />
@@ -263,117 +249,86 @@ export default function PostDetailPage() {
                 />
               </dl>
               <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                Manual sync và remote delete chỉ bật sau khi capability chính thức của nền tảng được
-                xác minh trong matrix.
+                Một số thao tác ngoài nền tảng chỉ khả dụng khi tài khoản còn kết nối và nền tảng hỗ
+                trợ API tương ứng.
               </p>
             </aside>
           </section>
 
-          <section className="rounded-lg border border-slate-200 bg-white p-5">
-            <h2 className="text-base font-semibold text-slate-950">Platform posts</h2>
-            <div className="mt-3 grid gap-3 xl:grid-cols-2">
-              {post.platformPosts.map((platformPost) => (
-                <article
-                  key={platformPost.id}
-                  className="rounded-md border border-slate-200 bg-slate-50 p-3"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">
-                        {PLATFORM_LABELS[platformPost.platform]} · {platformPost.socialAccountName}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Attempts: {platformPost.attemptCount}
-                      </p>
-                    </div>
-                    <StatusBadge status={platformPost.status} />
-                  </div>
-                  {platformPost.errorMessage ? (
-                    <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
-                      {platformPost.errorCode}: {platformPost.errorMessage}
-                    </p>
-                  ) : null}
-                  {platformPost.externalUrl ? (
-                    <a
-                      className="mt-2 inline-block text-xs font-medium text-brand-700"
-                      href={platformPost.externalUrl}
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      Mở bài trên nền tảng
-                    </a>
-                  ) : null}
-                  {hasPlatformOverride(platformPost) ? (
-                    <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
-                      <p className="text-xs font-semibold uppercase text-slate-500">
-                        Override cho target này
-                      </p>
-                      <div className="mt-2 space-y-2 text-sm text-slate-700">
-                        {platformPost.title ? (
-                          <p>
-                            <span className="font-semibold text-slate-900">Title:</span>{' '}
-                            {platformPost.title}
-                          </p>
-                        ) : null}
-                        {platformPost.caption ? (
-                          <p className="whitespace-pre-wrap">
-                            <span className="font-semibold text-slate-900">Caption:</span>{' '}
-                            {platformPost.caption}
-                          </p>
-                        ) : null}
-                        {platformPost.description ? (
-                          <p className="whitespace-pre-wrap">
-                            <span className="font-semibold text-slate-900">Description:</span>{' '}
-                            {platformPost.description}
-                          </p>
-                        ) : null}
-                        {platformPost.linkUrl ? (
-                          <p className="break-all">
-                            <span className="font-semibold text-slate-900">Link:</span>{' '}
-                            {platformPost.linkUrl}
-                          </p>
-                        ) : null}
-                      </div>
-                      {platformPost.media.length > 0 ? (
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                          {platformPost.media.map((asset) => (
-                            <MediaPreview key={asset.id} asset={asset} className="max-h-40" />
-                          ))}
+          <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-base font-semibold text-slate-950">Bản đăng theo nền tảng</h2>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] table-fixed text-left text-sm">
+                <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+                  <tr>
+                    <th className="w-56 px-4 py-3">Nền tảng</th>
+                    <th className="w-36 px-4 py-3">Trạng thái</th>
+                    <th className="w-24 px-4 py-3">Attempts</th>
+                    <th className="px-4 py-3">Ghi chú</th>
+                    <th className="w-48 px-4 py-3 text-right">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {post.platformPosts.map((platformPost) => (
+                    <tr key={platformPost.id} className="align-middle hover:bg-slate-50">
+                      <td className="px-4 py-3">
+                        <p className="truncate font-semibold text-slate-950">
+                          {PLATFORM_LABELS[platformPost.platform]}
+                        </p>
+                        <p className="truncate text-xs text-slate-500">
+                          {platformPost.socialAccountName}
+                        </p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={platformPost.status} />
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{platformPost.attemptCount}</td>
+                      <td className="px-4 py-3 text-xs text-slate-600">
+                        <PlatformPostNote platformPost={platformPost} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-1.5">
+                          {platformPost.externalUrl ? (
+                            <IconLink
+                              href={platformPost.externalUrl}
+                              label="Mở bài trên nền tảng"
+                              external
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </IconLink>
+                          ) : null}
+                          <details className="relative">
+                            <summary className="inline-flex h-9 cursor-pointer list-none items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50">
+                              Chi tiết
+                            </summary>
+                            <div className="absolute right-0 z-20 mt-2 w-[420px] rounded-md border border-slate-200 bg-white p-3 shadow-xl">
+                              <PlatformPostDetails
+                                canPublish={canPublish}
+                                onCancel={() => void cancelTikTokPublish(platformPost)}
+                                onMakePublic={() => void makeYouTubePublic(platformPost)}
+                                onPreview={setPreviewAsset}
+                                onRefresh={() => void refreshPlatformState(platformPost)}
+                                platformAction={platformAction}
+                                platformPost={platformPost}
+                              />
+                            </div>
+                          </details>
                         </div>
-                      ) : null}
-                      {platformPost.options ? (
-                        <pre className="mt-3 max-h-40 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
-                          {JSON.stringify(platformPost.options, null, 2)}
-                        </pre>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {platformPost.platform === 'YOUTUBE' ? (
-                    <YouTubeStatePanel
-                      canPublish={canPublish}
-                      onMakePublic={() => void makeYouTubePublic(platformPost)}
-                      onRefresh={() => void refreshPlatformState(platformPost)}
-                      platformAction={platformAction}
-                      platformPost={platformPost}
-                    />
-                  ) : null}
-                  {platformPost.platform === 'TIKTOK' ? (
-                    <TikTokStatePanel
-                      canPublish={canPublish}
-                      onCancel={() => void cancelTikTokPublish(platformPost)}
-                      onRefresh={() => void refreshPlatformState(platformPost)}
-                      platformAction={platformAction}
-                      platformPost={platformPost}
-                    />
-                  ) : null}
-                </article>
-              ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
 
-          <section className="rounded-lg border border-slate-200 bg-white p-5">
-            <h2 className="text-base font-semibold text-slate-950">Job history</h2>
-            <div className="mt-3 overflow-x-auto">
+          <details className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <summary className="cursor-pointer text-base font-semibold text-slate-950">
+              Job history ({post.jobs.length})
+            </summary>
+            <div className="mt-4 overflow-x-auto">
               <table className="min-w-full text-left text-sm">
                 <thead className="border-b border-slate-200 text-xs uppercase text-slate-500">
                   <tr>
@@ -412,7 +367,7 @@ export default function PostDetailPage() {
                 <p className="py-4 text-sm text-slate-600">Chưa có job history cho post này.</p>
               ) : null}
             </div>
-          </section>
+          </details>
         </>
       ) : null}
       <DeletePostDialog
@@ -421,6 +376,7 @@ export default function PostDetailPage() {
         onCancel={() => setDeleteTarget(null)}
         onConfirm={(input) => void deletePost(input)}
       />
+      <MediaPreviewDialog asset={previewAsset} onClose={() => setPreviewAsset(null)} />
     </div>
   );
 }
@@ -488,14 +444,16 @@ function TikTokStatePanel({
           onClick={onRefresh}
           type="button"
         >
-          {platformAction === `refresh:${platformPost.id}` ? 'Đang refresh...' : 'Refresh status'}
+          {platformAction === `refresh:${platformPost.id}`
+            ? 'Đang làm mới...'
+            : 'Làm mới trạng thái'}
         </SecondaryButton>
         <SecondaryButton
           disabled={!canCancel || platformAction !== null}
           onClick={onCancel}
           type="button"
         >
-          {platformAction === `cancel:${platformPost.id}` ? 'Đang hủy...' : 'Cancel publish'}
+          {platformAction === `cancel:${platformPost.id}` ? 'Đang hủy...' : 'Hủy publish'}
         </SecondaryButton>
       </div>
     </div>
@@ -552,7 +510,9 @@ function YouTubeStatePanel({
           onClick={onRefresh}
           type="button"
         >
-          {platformAction === `refresh:${platformPost.id}` ? 'Đang refresh...' : 'Refresh status'}
+          {platformAction === `refresh:${platformPost.id}`
+            ? 'Đang làm mới...'
+            : 'Làm mới trạng thái'}
         </SecondaryButton>
         <PrimaryButton
           busy={platformAction === `public:${platformPost.id}`}
@@ -560,7 +520,7 @@ function YouTubeStatePanel({
           onClick={onMakePublic}
           type="button"
         >
-          Make public
+          Chuyển public
         </PrimaryButton>
       </div>
       {state?.processingStatus === 'processing' ? (
@@ -631,6 +591,20 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span>;
 }
 
+function postStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    DRAFT: 'Draft',
+    SCHEDULED: 'Đã lên lịch',
+    QUEUED: 'Trong queue',
+    PROCESSING: 'Đang xử lý',
+    PUBLISHED: 'Đã đăng',
+    PARTIALLY_PUBLISHED: 'Đăng một phần',
+    FAILED: 'Lỗi',
+    CANCELLED: 'Đã hủy',
+  };
+  return labels[status] ?? status;
+}
+
 function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('vi-VN', {
     dateStyle: 'short',
@@ -641,4 +615,236 @@ function formatDateTime(value: string) {
 
 function canDeletePostStatus(status: ContentPostView['status']) {
   return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
+}
+
+function IconButton({
+  label,
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      {...props}
+      aria-label={label}
+      className={`inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm disabled:cursor-not-allowed disabled:text-slate-400 ${props.className ?? ''}`}
+      title={label}
+      type={props.type ?? 'button'}
+    >
+      {children}
+    </button>
+  );
+}
+
+function IconLink({
+  href,
+  label,
+  children,
+  external = false,
+}: {
+  href: string;
+  label: string;
+  children: ReactNode;
+  external?: boolean;
+}) {
+  return (
+    <Link
+      aria-label={label}
+      className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm"
+      href={href}
+      rel={external ? 'noreferrer' : undefined}
+      target={external ? '_blank' : undefined}
+      title={label}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function InfoBlock({ label, value, href }: { label: string; value: string; href?: string }) {
+  return (
+    <div className="min-w-0 rounded-md bg-slate-50 px-3 py-2">
+      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
+      {href ? (
+        <a
+          className="mt-1 block truncate text-sm font-medium text-brand-700"
+          href={href}
+          rel="noreferrer"
+          target="_blank"
+        >
+          {value}
+        </a>
+      ) : (
+        <p className="mt-1 truncate text-sm text-slate-800">{value}</p>
+      )}
+    </div>
+  );
+}
+
+function MediaStrip({
+  media,
+  onPreview,
+}: {
+  media: MediaAssetView[];
+  onPreview: (asset: MediaAssetView) => void;
+}) {
+  if (media.length === 0) return null;
+  return (
+    <div className="mt-4 flex flex-wrap gap-2">
+      {media.map((asset) => (
+        <button
+          key={asset.id}
+          className="relative h-16 w-24 overflow-hidden rounded-md bg-slate-950 text-xs font-semibold text-white transition hover:-translate-y-px hover:shadow-md"
+          onClick={() => onPreview(asset)}
+          title={asset.originalFileName ?? 'Xem media'}
+          type="button"
+        >
+          {asset.type === 'IMAGE' && asset.readUrl ? (
+            <img
+              alt={asset.originalFileName ?? 'media'}
+              className="h-full w-full object-cover"
+              src={asset.readUrl}
+            />
+          ) : asset.type === 'VIDEO' && asset.readUrl ? (
+            <video
+              className="h-full w-full object-cover"
+              muted
+              preload="metadata"
+              src={asset.readUrl}
+            />
+          ) : (
+            <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
+              {asset.type}
+            </span>
+          )}
+          <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
+            <Eye className="h-5 w-5" />
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MediaPreviewDialog({
+  asset,
+  onClose,
+}: {
+  asset: MediaAssetView | null;
+  onClose: () => void;
+}) {
+  if (!asset?.readUrl) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
+      <div className="w-full max-w-4xl overflow-hidden rounded-md bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <p className="truncate text-sm font-semibold text-slate-950">
+            {asset.originalFileName ?? 'Media preview'}
+          </p>
+          <IconButton className="h-9 w-9" label="Đóng" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+        <div className="bg-slate-950 p-3">
+          {asset.type === 'VIDEO' ? (
+            <video className="max-h-[72vh] w-full rounded bg-black" controls src={asset.readUrl} />
+          ) : (
+            <img
+              alt={asset.originalFileName ?? 'media'}
+              className="max-h-[72vh] w-full rounded object-contain"
+              src={asset.readUrl}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlatformPostNote({ platformPost }: { platformPost: PlatformPostView }) {
+  if (platformPost.errorMessage) {
+    return (
+      <span className="text-red-700">
+        {platformPost.errorCode}: {platformPost.errorMessage}
+      </span>
+    );
+  }
+  if (hasPlatformOverride(platformPost)) return <span>Có override riêng</span>;
+  if (platformPost.externalPostId) return <span>Đã có external ID</span>;
+  return <span>-</span>;
+}
+
+function PlatformPostDetails({
+  platformPost,
+  platformAction,
+  canPublish,
+  onRefresh,
+  onMakePublic,
+  onCancel,
+  onPreview,
+}: {
+  platformPost: PlatformPostView;
+  platformAction: string | null;
+  canPublish: boolean;
+  onRefresh: () => void;
+  onMakePublic: () => void;
+  onCancel: () => void;
+  onPreview: (asset: MediaAssetView) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      {hasPlatformOverride(platformPost) ? (
+        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-semibold uppercase text-slate-500">Override</p>
+          <div className="mt-2 space-y-1 text-sm text-slate-700">
+            {platformPost.title ? <p>Title: {platformPost.title}</p> : null}
+            {platformPost.caption ? (
+              <p className="whitespace-pre-wrap">Caption: {platformPost.caption}</p>
+            ) : null}
+            {platformPost.description ? (
+              <p className="whitespace-pre-wrap">Description: {platformPost.description}</p>
+            ) : null}
+            {platformPost.linkUrl ? (
+              <p className="break-all">Link: {platformPost.linkUrl}</p>
+            ) : null}
+          </div>
+          <MediaStrip media={platformPost.media} onPreview={onPreview} />
+          {platformPost.options ? (
+            <details className="mt-3">
+              <summary className="cursor-pointer text-xs font-semibold text-slate-600">
+                Options kỹ thuật
+              </summary>
+              <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
+                {JSON.stringify(platformPost.options, null, 2)}
+              </pre>
+            </details>
+          ) : null}
+        </div>
+      ) : (
+        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          Target này đang dùng nội dung chung.
+        </p>
+      )}
+      {platformPost.platform === 'YOUTUBE' ? (
+        <YouTubeStatePanel
+          canPublish={canPublish}
+          onMakePublic={onMakePublic}
+          onRefresh={onRefresh}
+          platformAction={platformAction}
+          platformPost={platformPost}
+        />
+      ) : null}
+      {platformPost.platform === 'TIKTOK' ? (
+        <TikTokStatePanel
+          canPublish={canPublish}
+          onCancel={onCancel}
+          onRefresh={onRefresh}
+          platformAction={platformAction}
+          platformPost={platformPost}
+        />
+      ) : null}
+    </div>
+  );
 }

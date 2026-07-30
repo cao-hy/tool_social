@@ -14,6 +14,7 @@
   "dependencies": {
     "@socialhub/shared": "*",
     "@tanstack/react-query": "^5.64.1",
+    "lucide-react": "^1.28.0",
     "next": "^15.1.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

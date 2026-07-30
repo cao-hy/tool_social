@@ -9,10 +9,19 @@ import {
   instagramPagesResponseSchema,
   instagramTokenResponseSchema,
   instagramMediaContainerResponseSchema,
+  instagramMediaPageSchema,
+  instagramMediaSchema,
   instagramPublishResponseSchema,
+  instagramSuccessResponseSchema,
+  instagramCommentsPageSchema,
+  instagramInsightsResponseSchema,
   type InstagramPage,
   type InstagramProfile,
   type InstagramTokenResponse,
+  type InstagramMedia,
+  type InstagramMediaPage,
+  type InstagramCommentsPage,
+  type InstagramInsightsResponse,
 } from './instagram.schemas';
 
 export interface InstagramGraphClientConfig {
@@ -152,6 +161,95 @@ export class InstagramGraphClient {
     return response.id;
   }
 
+  async deleteMedia(input: { mediaId: string; accessToken: string }): Promise<void> {
+    await this.delete(
+      `/${input.mediaId}`,
+      {
+        access_token: input.accessToken,
+      },
+      instagramSuccessResponseSchema,
+    );
+  }
+
+  async getUserMedia(input: {
+    igAccountId: string;
+    accessToken: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<InstagramMediaPage> {
+    return this.get(
+      `/${input.igAccountId}/media`,
+      {
+        fields: 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp',
+        access_token: input.accessToken,
+        ...(input.cursor ? { after: input.cursor } : {}),
+        ...(input.limit ? { limit: String(input.limit) } : {}),
+      },
+      instagramMediaPageSchema,
+    );
+  }
+
+  async getMedia(input: { mediaId: string; accessToken: string }): Promise<InstagramMedia> {
+    return this.get(
+      `/${input.mediaId}`,
+      {
+        fields:
+          'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,like_count,comments_count',
+        access_token: input.accessToken,
+      },
+      instagramMediaSchema,
+    );
+  }
+
+  async getMediaInsights(input: {
+    mediaId: string;
+    accessToken: string;
+    metrics: string[];
+  }): Promise<InstagramInsightsResponse> {
+    return this.get(
+      `/${input.mediaId}/insights`,
+      {
+        metric: input.metrics.join(','),
+        access_token: input.accessToken,
+      },
+      instagramInsightsResponseSchema,
+    );
+  }
+
+  async getMediaComments(input: {
+    mediaId: string;
+    accessToken: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<InstagramCommentsPage> {
+    return this.get(
+      `/${input.mediaId}/comments`,
+      {
+        fields: 'id,text,timestamp,username,like_count,hidden',
+        access_token: input.accessToken,
+        ...(input.cursor ? { after: input.cursor } : {}),
+        ...(input.limit ? { limit: String(input.limit) } : {}),
+      },
+      instagramCommentsPageSchema,
+    );
+  }
+
+  async replyToComment(input: {
+    commentId: string;
+    accessToken: string;
+    message: string;
+  }): Promise<string> {
+    const response = await this.postForm(
+      `/${input.commentId}/replies`,
+      {
+        access_token: input.accessToken,
+        message: input.message,
+      },
+      instagramMediaContainerResponseSchema,
+    );
+    return response.id;
+  }
+
   private async get<T>(
     path: string,
     params: Record<string, string>,
@@ -194,6 +292,40 @@ export class InstagramGraphClient {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(body),
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (error) {
+      throw instagramNetworkError(error);
+    }
+
+    const payload = await parseJson(response);
+    if (!response.ok) {
+      throw normalizeInstagramError({
+        status: response.status,
+        payload,
+        retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
+      });
+    }
+
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) throw instagramUnexpectedPayloadError(parsed.error, payload);
+    return parsed.data;
+  }
+
+  private async delete<T>(
+    path: string,
+    params: Record<string, string>,
+    schema: z.ZodType<T>,
+  ): Promise<T> {
+    const url = new URL(`${this.graphBaseUrl}${path}`);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'DELETE',
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {

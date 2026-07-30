@@ -1,6 +1,7 @@
 'use client';
 
 import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
+import { Eye, X } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -10,7 +11,6 @@ import {
   SecondaryButton,
   TextInput,
 } from '@/components/form-controls';
-import { MediaPreview } from '@/components/media-preview';
 import { PlatformComposerPanels } from '@/components/platform-composer-panels';
 import { postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
@@ -24,7 +24,7 @@ import {
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
 import { validatePostComposer } from '@/lib/post-validation';
-import type { ContentPostView, SocialAccountView } from '@/lib/types';
+import type { ContentPostView, MediaAssetView, SocialAccountView } from '@/lib/types';
 
 const CONTENT_EDITABLE_POST_STATUSES = [
   'DRAFT',
@@ -51,6 +51,7 @@ export default function EditPostPage() {
   const [platformOverrides, setPlatformOverrides] = useState<Record<string, PlatformOverrideDraft>>(
     {},
   );
+  const [previewAsset, setPreviewAsset] = useState<MediaAssetView | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -300,14 +301,44 @@ export default function EditPostPage() {
             {post?.media.length ? (
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-800">Media đã gắn</p>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {post.media.map((asset) => (
                     <label
                       key={asset.id}
-                      className="rounded-md border border-slate-200 p-3 text-sm"
+                      className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-2 text-sm"
                     >
-                      <MediaPreview asset={asset} />
-                      <span className="mt-2 flex items-start gap-2">
+                      <button
+                        className="relative h-16 w-24 shrink-0 overflow-hidden rounded bg-slate-950 text-xs font-semibold text-white transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setPreviewAsset(asset);
+                        }}
+                        title="Xem media"
+                        type="button"
+                      >
+                        {asset.type === 'IMAGE' && asset.readUrl ? (
+                          <img
+                            alt={asset.originalFileName ?? 'media'}
+                            className="h-full w-full object-cover"
+                            src={asset.readUrl}
+                          />
+                        ) : asset.type === 'VIDEO' && asset.readUrl ? (
+                          <video
+                            className="h-full w-full object-cover"
+                            muted
+                            preload="metadata"
+                            src={asset.readUrl}
+                          />
+                        ) : (
+                          <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
+                            {asset.type}
+                          </span>
+                        )}
+                        <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
+                          <Eye className="h-5 w-5" />
+                        </span>
+                      </button>
+                      <span className="flex min-w-0 flex-1 items-start gap-2">
                         <input
                           checked={mediaAssetIds.includes(asset.id)}
                           className="mt-1"
@@ -352,6 +383,14 @@ export default function EditPostPage() {
       </section>
 
       <aside className="space-y-4 xl:sticky xl:top-6 xl:self-start">
+        {isPublishedEdit ? (
+          <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-semibold">Bài đã publish</p>
+            <p className="mt-1 text-amber-800">
+              Chỉ sửa nội dung, caption, link và options. Media và target đang được khóa.
+            </p>
+          </section>
+        ) : null}
         <section className="rounded-lg border border-slate-200 bg-white p-4">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-slate-950">Kênh publish</h2>
@@ -412,6 +451,48 @@ export default function EditPostPage() {
           </SecondaryButton>
         </div>
       </aside>
+      <MediaPreviewDialog asset={previewAsset} onClose={() => setPreviewAsset(null)} />
+    </div>
+  );
+}
+
+function MediaPreviewDialog({
+  asset,
+  onClose,
+}: {
+  asset: MediaAssetView | null;
+  onClose: () => void;
+}) {
+  if (!asset?.readUrl) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
+      <div className="w-full max-w-4xl overflow-hidden rounded-md bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+          <p className="truncate text-sm font-semibold text-slate-950">
+            {asset.originalFileName ?? 'Media preview'}
+          </p>
+          <button
+            aria-label="Đóng"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 text-slate-700 transition hover:bg-slate-50"
+            onClick={onClose}
+            type="button"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="bg-slate-950 p-3">
+          {asset.type === 'VIDEO' ? (
+            <video className="max-h-[72vh] w-full rounded bg-black" controls src={asset.readUrl} />
+          ) : (
+            <img
+              alt={asset.originalFileName ?? 'media'}
+              className="max-h-[72vh] w-full rounded object-contain"
+              src={asset.readUrl}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,7 @@
 import { PLATFORM_LABELS } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
+import { ChevronDown } from 'lucide-react';
+import { useState } from 'react';
 import { Field, SelectInput, TextInput } from '@/components/form-controls';
 import {
   platformOverrideDefaults,
@@ -30,7 +32,27 @@ export function PlatformComposerPanels({
   common,
   onChange,
 }: PlatformComposerPanelsProps) {
+  const [expandedAccountIds, setExpandedAccountIds] = useState<string[]>([]);
   if (accounts.length === 0) return null;
+
+  function toggleExpanded(accountId: string) {
+    setExpandedAccountIds((current) =>
+      current.includes(accountId)
+        ? current.filter((item) => item !== accountId)
+        : [...current, accountId],
+    );
+  }
+
+  function toggleCustomized(accountId: string, customized: boolean) {
+    onChange(accountId, { customized });
+    if (customized) {
+      setExpandedAccountIds((current) =>
+        current.includes(accountId) ? current : [...current, accountId],
+      );
+    } else {
+      setExpandedAccountIds((current) => current.filter((item) => item !== accountId));
+    }
+  }
 
   return (
     <section className="space-y-3">
@@ -38,8 +60,7 @@ export function PlatformComposerPanels({
         <div>
           <h2 className="text-base font-semibold text-slate-950">Nội dung riêng từng nền tảng</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Mặc định mọi tài khoản dùng nội dung chung. Chỉ bật tùy chỉnh cho target cần caption,
-            media hoặc option khác.
+            Chọn Tùy chỉnh khi target này cần caption, link, media hoặc option khác nội dung chung.
           </p>
         </div>
         <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
@@ -47,17 +68,18 @@ export function PlatformComposerPanels({
         </span>
       </div>
 
-      <div className="grid gap-3">
+      <div className="grid gap-2">
         {accounts.map((account) => {
           const draft =
             drafts[account.id] ?? platformOverrideDefaults(account.platform, account.scopes);
           const issues = platformChecklist(account.platform, resolveMedia(draft, mediaAssets));
+          const expanded = expandedAccountIds.includes(account.id);
           return (
             <article
               key={account.id}
-              className="overflow-hidden rounded-lg border border-slate-200 bg-white"
+              className="overflow-hidden rounded-md border border-slate-200 bg-white"
             >
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="truncate text-sm font-semibold text-slate-950">{account.name}</p>
@@ -67,7 +89,7 @@ export function PlatformComposerPanels({
                   </div>
                   <p className="text-xs text-slate-500">{account.username ?? account.id}</p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <span
                     className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
                       issues.length === 0
@@ -77,58 +99,107 @@ export function PlatformComposerPanels({
                   >
                     {issues.length === 0 ? 'Sẵn sàng' : `${issues.length} cần sửa`}
                   </span>
-                  <button
-                    className={`h-9 rounded-md border px-3 text-sm font-medium transition ${
-                      draft.customized
-                        ? 'border-brand-200 bg-brand-50 text-brand-700'
-                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                  <ModeSegmentedControl
+                    customized={draft.customized}
                     disabled={disabled}
+                    onChange={(customized) => toggleCustomized(account.id, customized)}
+                  />
+                  <button
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm"
+                    title={expanded ? 'Thu gọn' : 'Mở chi tiết'}
                     type="button"
-                    onClick={() => onChange(account.id, { customized: !draft.customized })}
+                    onClick={() => toggleExpanded(account.id)}
                   >
-                    {draft.customized ? 'Đang tùy chỉnh' : 'Dùng bản chung'}
+                    <ChevronDown className={`h-4 w-4 transition ${expanded ? 'rotate-180' : ''}`} />
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-3 px-4 py-3">
-                <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-3">
-                  <InheritedChip label="Text" value={commonTextSummary(common)} />
-                  <InheritedChip
-                    label="Media"
-                    value={mediaSummary(resolveMedia(draft, mediaAssets))}
-                  />
-                  <InheritedChip
-                    label="Mode"
-                    value={
-                      draft.customized ? 'Riêng target này' : platformModeHint(account.platform)
-                    }
-                  />
-                </div>
-
-                {issues.length > 0 ? (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    {issues.join(' · ')}
+              {expanded ? (
+                <div className="space-y-3 border-t border-slate-100 px-4 py-3">
+                  <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-3">
+                    <InheritedChip label="Text" value={commonTextSummary(common)} />
+                    <InheritedChip
+                      label="Media"
+                      value={mediaSummary(resolveMedia(draft, mediaAssets))}
+                    />
+                    <InheritedChip
+                      label="Mode"
+                      value={
+                        draft.customized ? 'Riêng target này' : platformModeHint(account.platform)
+                      }
+                    />
                   </div>
-                ) : null}
 
-                {draft.customized ? (
-                  <PlatformFields
-                    account={account}
-                    disabled={disabled}
-                    draft={draft}
-                    mediaLocked={mediaLocked}
-                    mediaAssets={mediaAssets}
-                    onChange={onChange}
-                  />
-                ) : null}
-              </div>
+                  {issues.length > 0 ? (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      {issues.join(' · ')}
+                    </div>
+                  ) : null}
+
+                  {draft.customized ? (
+                    <PlatformFields
+                      account={account}
+                      disabled={disabled}
+                      draft={draft}
+                      mediaLocked={mediaLocked}
+                      mediaAssets={mediaAssets}
+                      onChange={onChange}
+                    />
+                  ) : (
+                    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                      Target này đang lấy tiêu đề, nội dung, link và media từ phần nội dung chung.
+                    </div>
+                  )}
+                </div>
+              ) : null}
             </article>
           );
         })}
       </div>
     </section>
+  );
+}
+
+function ModeSegmentedControl({
+  customized,
+  disabled,
+  onChange,
+}: {
+  customized: boolean;
+  disabled: boolean;
+  onChange: (customized: boolean) => void;
+}) {
+  const baseClass =
+    'h-8 rounded px-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60';
+
+  return (
+    <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-0.5">
+      <button
+        className={`${baseClass} ${
+          customized
+            ? 'text-slate-600 hover:bg-white hover:text-slate-950'
+            : 'bg-white text-slate-950 shadow-sm'
+        }`}
+        disabled={disabled}
+        type="button"
+        onClick={() => onChange(false)}
+      >
+        Dùng chung
+      </button>
+      <button
+        className={`${baseClass} ${
+          customized
+            ? 'bg-brand-600 text-white shadow-sm hover:bg-brand-700'
+            : 'text-slate-600 hover:bg-white hover:text-slate-950'
+        }`}
+        disabled={disabled}
+        type="button"
+        onClick={() => onChange(true)}
+      >
+        Tùy chỉnh
+      </button>
+    </div>
   );
 }
 

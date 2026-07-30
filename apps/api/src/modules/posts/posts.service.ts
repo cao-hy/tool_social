@@ -86,22 +86,34 @@ export class PostsService implements OnModuleDestroy {
         : undefined,
       AND: cursor ? [buildCursorWhere(cursor, query.sortBy, query.direction)] : undefined,
     };
+    const countWhere: Prisma.ContentPostWhereInput = {
+      ...where,
+      status: undefined,
+      AND: undefined,
+    };
 
-    const posts = await this.prisma.contentPost.findMany({
-      where,
-      include: {
-        platformPosts: {
-          include: {
-            socialAccount: { include: { token: true } },
-            media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
+    const [posts, statusCounts] = await Promise.all([
+      this.prisma.contentPost.findMany({
+        where,
+        include: {
+          platformPosts: {
+            include: {
+              socialAccount: { include: { token: true } },
+              media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
+            },
+            orderBy: { createdAt: 'asc' },
           },
-          orderBy: { createdAt: 'asc' },
+          media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
         },
-        media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
-      },
-      orderBy: [{ [query.sortBy]: query.direction }, { id: query.direction }],
-      take: query.limit + 1,
-    });
+        orderBy: [{ [query.sortBy]: query.direction }, { id: query.direction }],
+        take: query.limit + 1,
+      }),
+      this.prisma.contentPost.groupBy({
+        by: ['status'],
+        where: countWhere,
+        _count: { _all: true },
+      }),
+    ]);
 
     const page = posts.slice(0, query.limit);
     const last = page.at(-1);
@@ -109,6 +121,7 @@ export class PostsService implements OnModuleDestroy {
 
     return {
       items: await Promise.all(page.map((post) => this.toPostView(post))),
+      statusCounts: Object.fromEntries(statusCounts.map((item) => [item.status, item._count._all])),
       nextCursor:
         hasMore && last
           ? encodePostCursor({
@@ -1284,7 +1297,7 @@ export class PostsService implements OnModuleDestroy {
             override?.linkUrl ?? input.linkUrl ?? platformPost.linkUrl ?? post.linkUrl ?? undefined,
           hashtags: input.hashtags ?? post.hashtags,
           mediaTypes,
-          options: override?.options ?? jsonObject(platformPost.options),
+          options: override?.options ?? jsonObject(platformPost.options) ?? undefined,
         },
       );
     }
@@ -1632,9 +1645,4 @@ function buildCursorWhere(
       },
     ],
   };
-}
-
-function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  return value as Record<string, unknown>;
 }
