@@ -50,7 +50,7 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   youtubeMadeForKids: false,
   youtubeContainsSyntheticMedia: false,
   tiktokPostMode: 'MEDIA_UPLOAD',
-  tiktokPrivacyLevel: 'PUBLIC_TO_EVERYONE',
+  tiktokPrivacyLevel: 'SELF_ONLY',
   tiktokDisableComment: false,
   tiktokDisableDuet: false,
   tiktokDisableStitch: false,
@@ -116,7 +116,7 @@ export function platformOverrideFromOptions(input: {
     tiktokPrivacyLevel: readEnum(
       options.privacyLevel,
       ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],
-      'PUBLIC_TO_EVERYONE',
+      'SELF_ONLY',
     ),
     tiktokDisableComment: readBoolean(options.disableComment, false),
     tiktokDisableDuet: readBoolean(options.disableDuet, false),

@@ -804,6 +804,7 @@ export class PostsService implements OnModuleDestroy {
 
     for (const account of accounts) {
       const override = overrideByAccountId.get(account.id);
+      const options = this.resolvePlatformPostOptions(account, override);
       const platformPost = await tx.platformPost.create({
         data: {
           workspaceId,
@@ -815,7 +816,7 @@ export class PostsService implements OnModuleDestroy {
           title: override?.title,
           description: override?.description,
           linkUrl: override?.linkUrl,
-          options: override?.options as Prisma.InputJsonValue | undefined,
+          options,
         },
       });
 
@@ -834,6 +835,27 @@ export class PostsService implements OnModuleDestroy {
         });
       }
     }
+  }
+
+  private resolvePlatformPostOptions(
+    account: { platform: Platform; scopes: string[] },
+    override:
+      | CreatePostInput['platformOverrides'][number]
+      | NonNullable<UpdatePostInput['platformOverrides']>[number]
+      | undefined,
+  ): Prisma.InputJsonValue | undefined {
+    const explicitOptions =
+      override?.options && Object.keys(override.options).length > 0 ? override.options : undefined;
+    if (explicitOptions) return explicitOptions as Prisma.InputJsonValue;
+
+    if (account.platform === 'TIKTOK' && account.scopes.includes('video.publish')) {
+      return {
+        postMode: 'DIRECT_POST',
+        privacyLevel: 'SELF_ONLY',
+      };
+    }
+
+    return undefined;
   }
 
   private async replaceMedia(
@@ -1572,11 +1594,6 @@ function hasTikTokStatusMethods(
   adapter: SocialPlatformAdapter,
 ): adapter is SocialPlatformAdapter & TikTokStatusAdapter {
   return adapter.platform === 'TIKTOK' && 'getPublishPlatformState' in adapter;
-}
-
-function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
 }
 
 function assertYouTubeReadyForPublic(state: YouTubeVideoPlatformState): void {

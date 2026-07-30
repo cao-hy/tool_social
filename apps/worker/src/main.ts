@@ -4,9 +4,7 @@ import { loadEnvOrExit, loadWorkerEnv, type WorkerEnv } from '@socialhub/config'
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
-  TIKTOK_DIRECT_POST_SCOPE,
   TIKTOK_OAUTH_SCOPES,
-  TIKTOK_VIDEO_LIST_SCOPE,
 } from '@socialhub/platform-adapters';
 import { Keyring } from '@socialhub/security';
 import Redis from 'ioredis';
@@ -157,11 +155,7 @@ function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
     tiktok: {
       clientKey: env.TIKTOK_CLIENT_KEY,
       clientSecret: env.TIKTOK_CLIENT_SECRET,
-      scopes: [
-        ...TIKTOK_OAUTH_SCOPES,
-        ...(env.TIKTOK_ENABLE_DIRECT_POST_SCOPE ? [TIKTOK_DIRECT_POST_SCOPE] : []),
-        ...(env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE ? [TIKTOK_VIDEO_LIST_SCOPE] : []),
-      ],
+      scopes: [...TIKTOK_OAUTH_SCOPES],
     },
   });
 }

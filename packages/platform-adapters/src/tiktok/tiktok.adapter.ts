@@ -25,9 +25,12 @@ export interface TikTokAdapterConfig extends TikTokClientConfig {
   scopes?: string[];
 }
 
-export const TIKTOK_OAUTH_SCOPES = ['user.info.basic', 'video.upload'] as const;
-export const TIKTOK_DIRECT_POST_SCOPE = 'video.publish';
-export const TIKTOK_VIDEO_LIST_SCOPE = 'video.list';
+export const TIKTOK_OAUTH_SCOPES = [
+  'user.info.basic',
+  'video.upload',
+  'video.publish',
+  'video.list',
+] as const;
 
 export interface TikTokPublishPlatformState {
   publishId: string;

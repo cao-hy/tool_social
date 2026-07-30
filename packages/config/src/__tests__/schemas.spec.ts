@@ -138,8 +138,6 @@ describe('apiEnvSchema — credential nền tảng là optional', () => {
     const env = parseEnv('api', apiEnvSchema, validApiEnv);
     expect(env.FACEBOOK_APP_ID).toBeUndefined();
     expect(env.TIKTOK_CLIENT_KEY).toBeUndefined();
-    expect(env.TIKTOK_ENABLE_DIRECT_POST_SCOPE).toBe(false);
-    expect(env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE).toBe(false);
   });
 
   it('bật TikTok adapter thật thì phải có đủ Client Key và Client Secret', () => {
@@ -161,12 +159,10 @@ describe('apiEnvSchema — credential nền tảng là optional', () => {
         ...validApiEnv,
         TIKTOK_CLIENT_KEY: 'client-key',
         TIKTOK_CLIENT_SECRET: 'client-secret',
-        TIKTOK_ENABLE_DIRECT_POST_SCOPE: 'true',
-        TIKTOK_ENABLE_VIDEO_LIST_SCOPE: 'true',
       }),
     ).toMatchObject({
-      TIKTOK_ENABLE_DIRECT_POST_SCOPE: true,
-      TIKTOK_ENABLE_VIDEO_LIST_SCOPE: true,
+      TIKTOK_CLIENT_KEY: 'client-key',
+      TIKTOK_CLIENT_SECRET: 'client-secret',
     });
   });
 });
