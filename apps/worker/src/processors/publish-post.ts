@@ -9,7 +9,7 @@ import {
 } from '@socialhub/platform-adapters';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
-import { decryptToken, type Keyring } from '@socialhub/security';
+import type { Keyring } from '@socialhub/security';
 import {
   deriveContentPostStatus,
   type MediaType,
@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { logger } from '../logger';
 import { decideOnError } from '../queue/error-policy';
 import { JobLockService } from '../queue/job-lock';
+import { getFreshAccessToken } from './token-refresh';
 
 const publishPostPayloadSchema = z.object({
   platformPostId: z.string().min(1),
@@ -160,9 +161,18 @@ async function publishPlatformPost(
     return { published: false, reason: 'fixture_account_with_real_adapter' };
   }
 
-  const accessToken = decryptToken(platformPost.socialAccount.token.accessToken, input.keyring);
-
   try {
+    const accessToken = await getFreshAccessToken({
+      prisma: input.prisma,
+      keyring: input.keyring,
+      adapter,
+      account: {
+        id: platformPost.socialAccount.id,
+        workspaceId: platformPost.socialAccount.workspaceId,
+        platform: platformPost.socialAccount.platform,
+        token: platformPost.socialAccount.token,
+      },
+    });
     const sourceMedia =
       platformPost.media.length > 0 ? platformPost.media : platformPost.contentPost.media;
     const media = await Promise.all(

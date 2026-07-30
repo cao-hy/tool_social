@@ -4,10 +4,11 @@ import {
   type SocialPlatformAdapter,
 } from '@socialhub/platform-adapters';
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
-import { decryptToken, type Keyring } from '@socialhub/security';
+import type { Keyring } from '@socialhub/security';
 import type { PlatformComment } from '@socialhub/platform-adapters';
 import { z } from 'zod';
 import { logger } from '../logger';
+import { getFreshAccessToken } from './token-refresh';
 
 const syncCommentsPayloadSchema = z.object({
   socialAccountId: z.string().min(1),
@@ -97,8 +98,20 @@ async function syncComments(
     return { synced: 0, reason: 'account_disconnected' };
   }
 
+  const accessToken = await getFreshAccessToken({
+    prisma: input.prisma,
+    keyring: input.keyring,
+    adapter,
+    account: {
+      id: account.id,
+      workspaceId: account.workspaceId,
+      platform: account.platform,
+      token: account.token,
+    },
+  });
+
   const ctx = {
-    accessToken: decryptToken(account.token.accessToken, input.keyring),
+    accessToken,
     externalAccountId: account.externalAccountId,
     externalPageId: account.externalPageId ?? undefined,
     correlationId: payload.correlationId ?? `sync-comments:${account.id}`,

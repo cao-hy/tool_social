@@ -7,8 +7,10 @@ import {
   type AdapterRegistry,
   type SocialPlatformAdapter,
   type YouTubeVideoPlatformState,
+  isPlatformError,
+  type TokenSet,
 } from '@socialhub/platform-adapters';
-import { decryptToken, type Keyring } from '@socialhub/security';
+import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import { deriveContentPostStatus, buildJobId } from '@socialhub/shared';
 import type { Platform, PlatformPostStatus } from '@socialhub/shared';
 import { Queue } from 'bullmq';
@@ -959,10 +961,19 @@ export class PostsService implements OnModuleDestroy {
       platform: Platform;
       externalPostId: string;
       socialAccount: {
+        id: string;
+        workspaceId: string;
+        platform: Platform;
         externalAccountId: string;
         externalPageId: string | null;
         status: string;
-        token: { accessToken: string } | null;
+        token: {
+          id: string;
+          accessToken: string;
+          refreshToken: string | null;
+          accessTokenExpiresAt: Date | null;
+          refreshTokenExpiresAt: Date | null;
+        } | null;
       };
     };
     adapter: SocialPlatformAdapter & YouTubeStatusAdapter;
@@ -992,8 +1003,9 @@ export class PostsService implements OnModuleDestroy {
       throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
     }
 
+    const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
     const ctx = {
-      accessToken: decryptToken(platformPost.socialAccount.token.accessToken, this.keyring),
+      accessToken,
       externalAccountId: platformPost.socialAccount.externalAccountId,
       externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
       correlationId: `youtube-state:${platformPostId}`,
@@ -1004,11 +1016,87 @@ export class PostsService implements OnModuleDestroy {
         id: platformPost.id,
         platform: platformPost.platform as Platform,
         externalPostId: platformPost.externalPostId,
-        socialAccount: platformPost.socialAccount,
+        socialAccount: {
+          id: platformPost.socialAccount.id,
+          workspaceId: platformPost.socialAccount.workspaceId,
+          platform: platformPost.socialAccount.platform as Platform,
+          externalAccountId: platformPost.socialAccount.externalAccountId,
+          externalPageId: platformPost.socialAccount.externalPageId,
+          status: platformPost.socialAccount.status,
+          token: platformPost.socialAccount.token,
+        },
       },
       adapter,
       ctx,
     };
+  }
+
+  private async getFreshAccessToken(
+    account: {
+      id: string;
+      workspaceId: string;
+      platform: Platform;
+      token: {
+        id: string;
+        accessToken: string;
+        refreshToken: string | null;
+        accessTokenExpiresAt: Date | null;
+        refreshTokenExpiresAt: Date | null;
+      } | null;
+    },
+    adapter: SocialPlatformAdapter,
+  ): Promise<string> {
+    if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
+
+    const refreshThreshold = Date.now() + 2 * 60 * 1000;
+    if (
+      !account.token.accessTokenExpiresAt ||
+      account.token.accessTokenExpiresAt.getTime() > refreshThreshold
+    ) {
+      return decryptToken(account.token.accessToken, this.keyring);
+    }
+
+    if (!account.token.refreshToken || !adapter.refreshToken) {
+      throw AppError.conflict('Token đã hết hạn. Hãy ngắt kết nối rồi kết nối lại tài khoản.');
+    }
+
+    const refreshToken = decryptToken(account.token.refreshToken, this.keyring);
+    let tokenSet: TokenSet;
+    try {
+      tokenSet = await adapter.refreshToken(refreshToken);
+    } catch (error) {
+      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
+        await this.prisma.socialAccount.update({
+          where: { id: account.id },
+          data: {
+            status: 'DISCONNECTED',
+            lastErrorAt: new Date(),
+            lastErrorMessage: error.message,
+          },
+        });
+      }
+      throw error;
+    }
+    const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
+    const encryptedRefreshToken = tokenSet.refreshToken
+      ? encryptToken(tokenSet.refreshToken, this.keyring)
+      : null;
+
+    await this.prisma.socialToken.update({
+      where: { id: account.token.id },
+      data: {
+        accessToken: encryptedAccessToken.ciphertext,
+        refreshToken: encryptedRefreshToken?.ciphertext ?? account.token.refreshToken,
+        encryptionKeyVersion: encryptedAccessToken.keyVersion,
+        accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
+        refreshTokenExpiresAt:
+          tokenSet.refreshTokenExpiresAt ?? account.token.refreshTokenExpiresAt,
+        lastRefreshedAt: new Date(),
+        refreshFailedCount: 0,
+      },
+    });
+
+    return tokenSet.accessToken;
   }
 }
 

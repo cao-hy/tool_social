@@ -12,13 +12,17 @@ const googleErrorItemSchema = z.object({
 
 const googleErrorPayloadSchema = z.object({
   error: z
-    .object({
-      code: z.union([z.string(), z.number()]).optional(),
-      message: z.string().optional(),
-      errors: z.array(googleErrorItemSchema).optional(),
-      status: z.string().optional(),
-    })
+    .union([
+      z.string(),
+      z.object({
+        code: z.union([z.string(), z.number()]).optional(),
+        message: z.string().optional(),
+        errors: z.array(googleErrorItemSchema).optional(),
+        status: z.string().optional(),
+      }),
+    ])
     .optional(),
+  error_description: z.string().optional(),
 });
 
 export function normalizeYouTubeError(input: {
@@ -29,13 +33,19 @@ export function normalizeYouTubeError(input: {
 }): PlatformError {
   const parsed = googleErrorPayloadSchema.safeParse(input.payload);
   const error = parsed.success ? parsed.data.error : undefined;
-  const reason = error?.errors?.[0]?.reason ?? error?.status;
+  const errorObject = error && typeof error === 'object' ? error : undefined;
+  const reason =
+    typeof error === 'string' ? error : (errorObject?.errors?.[0]?.reason ?? errorObject?.status);
   const message =
-    error?.errors?.[0]?.message ?? error?.message ?? `YouTube API trả về lỗi HTTP ${input.status}.`;
+    errorObject?.errors?.[0]?.message ??
+    errorObject?.message ??
+    (parsed.success ? parsed.data.error_description : undefined) ??
+    `YouTube API trả về lỗi HTTP ${input.status}.`;
 
   return createPlatformError(mapYouTubeErrorKind(input.status, reason), 'YOUTUBE', message, {
     httpStatus: input.status,
-    platformCode: reason ?? (error?.code === undefined ? undefined : String(error.code)),
+    platformCode:
+      reason ?? (errorObject?.code === undefined ? undefined : String(errorObject.code)),
     retryAfterMs: input.retryAfterMs,
     raw: redactSecrets(input.payload),
     cause: input.cause,
@@ -66,6 +76,12 @@ export function youtubeUnexpectedPayloadError(cause: unknown, payload: unknown):
 
 function mapYouTubeErrorKind(status: number, reason: string | undefined): PlatformErrorKind {
   const normalizedReason = reason?.toLowerCase();
+  if (normalizedReason && ['invalid_grant', 'invalid_client'].includes(normalizedReason)) {
+    return 'AUTH_INVALID';
+  }
+  if (normalizedReason && ['unauthorized', 'autherror'].includes(normalizedReason)) {
+    return 'AUTH_INVALID';
+  }
   if (status === 401) return 'AUTH_INVALID';
   if (
     status === 403 &&

@@ -6,7 +6,9 @@ import {
   PINTEREST_OAUTH_SCOPES,
   TIKTOK_OAUTH_SCOPES,
   YOUTUBE_OAUTH_SCOPES,
+  isPlatformError,
   type AdapterRegistry,
+  type SocialPlatformAdapter,
   type TokenSet,
 } from '@socialhub/platform-adapters';
 import type { Platform } from '@socialhub/shared';
@@ -328,7 +330,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
 
     const adapter = this.adapters.get(account.platform);
-    const accessToken = decryptToken(account.token.accessToken, this.keyring);
+    const accessToken = await this.getFreshAccessToken(account, adapter);
     const profile = await adapter.getAccountProfile({
       accessToken,
       externalAccountId: account.externalAccountId,
@@ -392,6 +394,74 @@ export class SocialAccountsService implements OnModuleDestroy {
       refreshFailedCount: 0,
       lastRefreshedAt: new Date(),
     };
+  }
+
+  private async getFreshAccessToken(
+    account: {
+      id: string;
+      workspaceId: string;
+      platform: Platform;
+      token: {
+        id: string;
+        accessToken: string;
+        refreshToken: string | null;
+        accessTokenExpiresAt: Date | null;
+        refreshTokenExpiresAt: Date | null;
+      } | null;
+    },
+    adapter: SocialPlatformAdapter,
+  ): Promise<string> {
+    if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
+
+    const refreshThreshold = Date.now() + 2 * 60 * 1000;
+    if (
+      !account.token.accessTokenExpiresAt ||
+      account.token.accessTokenExpiresAt.getTime() > refreshThreshold
+    ) {
+      return decryptToken(account.token.accessToken, this.keyring);
+    }
+
+    if (!account.token.refreshToken || !adapter.refreshToken) {
+      throw AppError.conflict('Token đã hết hạn. Hãy ngắt kết nối rồi kết nối lại tài khoản.');
+    }
+
+    const refreshToken = decryptToken(account.token.refreshToken, this.keyring);
+    let tokenSet: TokenSet;
+    try {
+      tokenSet = await adapter.refreshToken(refreshToken);
+    } catch (error) {
+      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
+        await this.prisma.socialAccount.update({
+          where: { id: account.id },
+          data: {
+            status: 'DISCONNECTED',
+            lastErrorAt: new Date(),
+            lastErrorMessage: error.message,
+          },
+        });
+      }
+      throw error;
+    }
+    const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
+    const encryptedRefreshToken = tokenSet.refreshToken
+      ? encryptToken(tokenSet.refreshToken, this.keyring)
+      : null;
+
+    await this.prisma.socialToken.update({
+      where: { id: account.token.id },
+      data: {
+        accessToken: encryptedAccessToken.ciphertext,
+        refreshToken: encryptedRefreshToken?.ciphertext ?? account.token.refreshToken,
+        encryptionKeyVersion: encryptedAccessToken.keyVersion,
+        accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
+        refreshTokenExpiresAt:
+          tokenSet.refreshTokenExpiresAt ?? account.token.refreshTokenExpiresAt,
+        lastRefreshedAt: new Date(),
+        refreshFailedCount: 0,
+      },
+    });
+
+    return tokenSet.accessToken;
   }
 
   private async consumeState(state: string): Promise<OAuthStatePayload> {
