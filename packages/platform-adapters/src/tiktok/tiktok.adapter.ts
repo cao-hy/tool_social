@@ -15,6 +15,7 @@ import type {
   PublishResult,
   SocialAccountProfile,
   SyncPostsParams,
+  TikTokCreatorInfo,
   TokenSet,
 } from '../core/types';
 import { TikTokClient, type TikTokClientConfig } from './tiktok.client';
@@ -96,6 +97,20 @@ export class TikTokAdapter implements SocialPlatformAdapter {
     return mapTikTokProfile(profile.data.user);
   }
 
+  async queryCreatorInfo(ctx: AdapterContext): Promise<TikTokCreatorInfo> {
+    const creator = await this.client.queryCreatorInfo(ctx.accessToken);
+    return {
+      creatorAvatarUrl: creator.data.creator_avatar_url ?? undefined,
+      creatorUsername: creator.data.creator_username ?? undefined,
+      creatorNickname: creator.data.creator_nickname ?? undefined,
+      privacyLevelOptions: creator.data.privacy_level_options ?? [],
+      commentDisabled: creator.data.comment_disabled ?? false,
+      duetDisabled: creator.data.duet_disabled ?? false,
+      stitchDisabled: creator.data.stitch_disabled ?? false,
+      maxVideoPostDurationSec: creator.data.max_video_post_duration_sec,
+    };
+  }
+
   validatePost(input: PublishPostInput) {
     return validateTikTokPost(input);
   }
@@ -139,6 +154,9 @@ export class TikTokAdapter implements SocialPlatformAdapter {
           disableDuet: options.disableDuet || (creator.data.duet_disabled ?? false),
           disableStitch: options.disableStitch || (creator.data.stitch_disabled ?? false),
           videoCoverTimestampMs: options.videoCoverTimestampMs,
+          brandContentToggle: options.brandContentToggle,
+          brandOrganicToggle: options.brandOrganicToggle,
+          isAiGenerated: options.isAiGenerated,
         });
       }
     } else {
@@ -164,6 +182,7 @@ export class TikTokAdapter implements SocialPlatformAdapter {
         autoAddMusic: options.autoAddMusic,
         brandContentToggle: options.brandContentToggle,
         brandOrganicToggle: options.brandOrganicToggle,
+        isAiGenerated: options.isAiGenerated,
       });
     }
 
@@ -252,6 +271,7 @@ function tiktokPublishOptions(options: Record<string, unknown> | undefined): {
   autoAddMusic?: boolean;
   brandContentToggle?: boolean;
   brandOrganicToggle?: boolean;
+  isAiGenerated?: boolean;
 } {
   const timestamp = Number(options?.videoCoverTimestampMs);
   const photoCoverIndex = Number(options?.photoCoverIndex);
@@ -270,13 +290,16 @@ function tiktokPublishOptions(options: Record<string, unknown> | undefined): {
     autoAddMusic: options?.autoAddMusic === true,
     brandContentToggle: options?.brandContentToggle === true,
     brandOrganicToggle: options?.brandOrganicToggle === true,
+    isAiGenerated: options?.isAiGenerated === true,
   };
 }
 
 function selectPrivacyLevel(options: string[], requested?: string): string {
   if (requested && options.includes(requested)) return requested;
-  if (options.includes('PUBLIC_TO_EVERYONE')) return 'PUBLIC_TO_EVERYONE';
-  if (options.includes('MUTUAL_FOLLOW_FRIENDS')) return 'MUTUAL_FOLLOW_FRIENDS';
-  if (options.includes('FOLLOWER_OF_CREATOR')) return 'FOLLOWER_OF_CREATOR';
-  return options[0] ?? 'SELF_ONLY';
+  if (!requested) {
+    throw new Error(
+      'TikTok Direct Post cần người dùng chọn privacy từ creator info trước khi publish.',
+    );
+  }
+  throw new Error('TikTok privacy đã chọn không nằm trong danh sách creator info hiện tại.');
 }

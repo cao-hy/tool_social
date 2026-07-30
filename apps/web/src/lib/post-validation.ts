@@ -12,6 +12,7 @@ export interface PostComposerValidationInput {
     caption?: string;
     linkUrl?: string;
     mediaAssets?: Pick<MediaAssetView, 'type' | 'status' | 'readUrl'>[];
+    options?: Record<string, unknown>;
   }>;
   requireTargets: boolean;
   requirePublishableContent: boolean;
@@ -109,6 +110,31 @@ export function validatePostComposer(input: PostComposerValidationInput): string
 
       if (videoCount === 0 && imageCount === 0) {
         return `${prefix}cần 1 video hoặc 1-35 ảnh.`;
+      }
+
+      if (override?.options?.postMode === 'DIRECT_POST') {
+        if (!override.options.privacyLevel) {
+          return `${prefix}Direct Post cần chọn privacy từ creator info TikTok.`;
+        }
+
+        if (override.options.consentConfirmed !== true) {
+          return `${prefix}Direct Post cần xác nhận Music Usage Confirmation.`;
+        }
+
+        if (
+          override.options.commercialContentEnabled === true &&
+          override.options.brandContentToggle !== true &&
+          override.options.brandOrganicToggle !== true
+        ) {
+          return `${prefix}commercial content cần chọn Your brand hoặc Branded content.`;
+        }
+
+        if (
+          override.options.brandContentToggle === true &&
+          override.options.privacyLevel === 'SELF_ONLY'
+        ) {
+          return `${prefix}branded content không được chọn privacy Only me.`;
+        }
       }
     }
   }

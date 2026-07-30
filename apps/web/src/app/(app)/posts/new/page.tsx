@@ -214,6 +214,7 @@ export default function NewPostPage() {
           caption: draft.caption.trim() || undefined,
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssets: selectedMedia,
+          options: platformOptions(account.platform, draft),
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -261,12 +262,7 @@ export default function NewPostPage() {
         });
         let uploadedDirectly = false;
         try {
-          const uploadResponse = await fetch(request.uploadUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': file.type || 'application/octet-stream' },
-            body: file,
-          });
-          uploadedDirectly = uploadResponse.ok;
+          uploadedDirectly = await uploadDirectly(request.uploadUrl, file);
         } catch {
           uploadedDirectly = false;
         }
@@ -282,6 +278,16 @@ export default function NewPostPage() {
     } finally {
       setUploading(false);
     }
+  }
+
+  async function uploadDirectly(uploadUrl: string, file: File): Promise<boolean> {
+    const response = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+      signal: AbortSignal.timeout(120_000),
+    });
+    return response.ok;
   }
 
   function removeMedia(mediaAssetId: string) {
@@ -406,6 +412,7 @@ export default function NewPostPage() {
           common={{ title, body, linkUrl }}
           drafts={platformOverrides}
           mediaAssets={mediaAssets}
+          workspaceId={workspace.id}
           onChange={updateOverride}
         />
       </section>

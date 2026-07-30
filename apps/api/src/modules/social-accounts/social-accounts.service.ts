@@ -9,6 +9,7 @@ import {
   isPlatformError,
   type AdapterRegistry,
   type SocialPlatformAdapter,
+  type TikTokCreatorInfo,
   type TokenSet,
 } from '@socialhub/platform-adapters';
 import type { Platform } from '@socialhub/shared';
@@ -364,6 +365,42 @@ export class SocialAccountsService implements OnModuleDestroy {
     };
   }
 
+  async getTikTokCreatorInfo(
+    workspaceId: string,
+    socialAccountId: string,
+    auditContext: AuditContext,
+  ): Promise<TikTokCreatorInfo & { fetchedAt: string }> {
+    const account = await this.prisma.socialAccount.findFirst({
+      where: { id: socialAccountId, workspaceId, deletedAt: null },
+      include: { token: true },
+    });
+    if (!account) throw AppError.notFound('social account');
+    if (account.platform !== 'TIKTOK') {
+      throw AppError.validation('Creator info chỉ áp dụng cho TikTok account.');
+    }
+    if (!account.token) throw AppError.conflict('TikTok account chưa có token để kiểm tra.');
+    if (!account.scopes.includes('video.publish')) {
+      throw AppError.conflict(
+        'TikTok account thiếu scope video.publish. Hãy ngắt kết nối rồi kết nối lại sau khi app được cấp Direct Post.',
+      );
+    }
+
+    const adapter = this.adapters.get(account.platform);
+    if (!hasTikTokCreatorInfo(adapter)) {
+      throw AppError.capabilityUnsupported('TIKTOK', 'queryCreatorInfo');
+    }
+
+    const accessToken = await this.getFreshAccessToken(account, adapter);
+    const creatorInfo = await adapter.queryCreatorInfo({
+      accessToken,
+      externalAccountId: account.externalAccountId,
+      externalPageId: account.externalPageId ?? undefined,
+      correlationId: auditContext.requestId ?? 'tiktok-creator-info',
+    });
+
+    return { ...creatorInfo, fetchedAt: new Date().toISOString() };
+  }
+
   private tokenCreateData(
     socialAccountId: string,
     tokenSet: TokenSet,
@@ -558,4 +595,15 @@ export class SocialAccountsService implements OnModuleDestroy {
   private stateKey(state: string): string {
     return `oauth:state:${state}`;
   }
+}
+
+function hasTikTokCreatorInfo(adapter: SocialPlatformAdapter): adapter is SocialPlatformAdapter & {
+  queryCreatorInfo(ctx: {
+    accessToken: string;
+    externalAccountId: string;
+    externalPageId?: string;
+    correlationId: string;
+  }): Promise<TikTokCreatorInfo>;
+} {
+  return typeof (adapter as { queryCreatorInfo?: unknown }).queryCreatorInfo === 'function';
 }

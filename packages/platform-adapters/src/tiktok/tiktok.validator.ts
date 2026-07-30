@@ -52,6 +52,13 @@ export function validateTikTokPost(input: PublishPostInput): ValidationResult {
         message: 'TikTok cần bytes từ storage để upload video trực tiếp.',
       });
     }
+
+    if (postMode === 'DIRECT_POST' && !input.options?.privacyLevel) {
+      issues.push({
+        field: 'options.privacyLevel',
+        message: 'TikTok Direct Video Post cần chọn privacy từ creator info.',
+      });
+    }
   }
 
   if (images.length > 0 && videos.length === 0) {
@@ -78,6 +85,33 @@ export function validateTikTokPost(input: PublishPostInput): ValidationResult {
       issues.push({
         field: 'options.privacyLevel',
         message: 'TikTok Direct Photo Post cần privacy level hợp lệ.',
+      });
+    }
+  }
+
+  if (postMode === 'DIRECT_POST') {
+    if (input.options?.consentConfirmed !== true) {
+      issues.push({
+        field: 'options.consentConfirmed',
+        message: 'TikTok Direct Post cần xác nhận Music Usage Confirmation trước khi publish.',
+      });
+    }
+
+    if (
+      input.options?.commercialContentEnabled === true &&
+      input.options.brandContentToggle !== true &&
+      input.options.brandOrganicToggle !== true
+    ) {
+      issues.push({
+        field: 'options.commercialContent',
+        message: 'TikTok commercial content cần chọn Your brand hoặc Branded content.',
+      });
+    }
+
+    if (input.options?.brandContentToggle === true && input.options?.privacyLevel === 'SELF_ONLY') {
+      issues.push({
+        field: 'options.privacyLevel',
+        message: 'TikTok branded content không được chọn privacy Only me.',
       });
     }
   }

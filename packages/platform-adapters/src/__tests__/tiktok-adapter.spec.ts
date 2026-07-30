@@ -162,7 +162,11 @@ describe('TikTokAdapter', () => {
               sizeBytes: 3,
             },
           ],
-          options: { postMode: 'DIRECT_POST' },
+          options: {
+            postMode: 'DIRECT_POST',
+            privacyLevel: 'PUBLIC_TO_EVERYONE',
+            consentConfirmed: true,
+          },
         },
       ),
     ).resolves.toMatchObject({
@@ -272,7 +276,11 @@ describe('TikTokAdapter', () => {
               sizeBytes: 3000,
             },
           ],
-          options: { postMode: 'DIRECT_POST', privacyLevel: 'SELF_ONLY' },
+          options: {
+            postMode: 'DIRECT_POST',
+            privacyLevel: 'SELF_ONLY',
+            consentConfirmed: true,
+          },
         },
       ),
     ).resolves.toMatchObject({

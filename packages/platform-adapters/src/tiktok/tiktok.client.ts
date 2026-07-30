@@ -38,6 +38,9 @@ export interface TikTokDirectVideoPostInput {
   disableDuet?: boolean;
   disableStitch?: boolean;
   videoCoverTimestampMs?: number;
+  brandContentToggle?: boolean;
+  brandOrganicToggle?: boolean;
+  isAiGenerated?: boolean;
 }
 
 export interface TikTokInboxVideoUploadInput {
@@ -58,6 +61,7 @@ export interface TikTokPhotoPostInput {
   autoAddMusic?: boolean;
   brandContentToggle?: boolean;
   brandOrganicToggle?: boolean;
+  isAiGenerated?: boolean;
 }
 
 const API_BASE_URL = 'https://open.tiktokapis.com';
@@ -150,6 +154,9 @@ export class TikTokClient {
           disable_duet: input.disableDuet ?? false,
           disable_stitch: input.disableStitch ?? false,
           video_cover_timestamp_ms: input.videoCoverTimestampMs,
+          brand_content_toggle: input.brandContentToggle,
+          brand_organic_toggle: input.brandOrganicToggle,
+          is_aigc: input.isAiGenerated,
         },
         source_info: {
           source: 'FILE_UPLOAD',
@@ -222,6 +229,7 @@ export class TikTokClient {
             input.postMode === 'DIRECT_POST' ? input.brandContentToggle : undefined,
           brand_organic_toggle:
             input.postMode === 'DIRECT_POST' ? input.brandOrganicToggle : undefined,
+          is_aigc: input.postMode === 'DIRECT_POST' ? input.isAiGenerated : undefined,
         },
         source_info: {
           source: 'PULL_FROM_URL',

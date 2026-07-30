@@ -21,13 +21,18 @@ export interface PlatformOverrideDraft {
   youtubeContainsSyntheticMedia: boolean;
   tiktokPostMode: 'DIRECT_POST' | 'MEDIA_UPLOAD';
   tiktokPrivacyLevel:
-    'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'FOLLOWER_OF_CREATOR' | 'SELF_ONLY';
+    '' | 'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'FOLLOWER_OF_CREATOR' | 'SELF_ONLY';
   tiktokDisableComment: boolean;
   tiktokDisableDuet: boolean;
   tiktokDisableStitch: boolean;
   tiktokCoverTimestampMs: string;
   tiktokAutoAddMusic: boolean;
   tiktokPhotoCoverIndex: string;
+  tiktokConsentConfirmed: boolean;
+  tiktokCommercialContent: boolean;
+  tiktokBrandContent: boolean;
+  tiktokBrandOrganic: boolean;
+  tiktokIsAiGenerated: boolean;
 }
 
 export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
@@ -50,13 +55,18 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   youtubeMadeForKids: false,
   youtubeContainsSyntheticMedia: false,
   tiktokPostMode: 'MEDIA_UPLOAD',
-  tiktokPrivacyLevel: 'SELF_ONLY',
-  tiktokDisableComment: false,
-  tiktokDisableDuet: false,
-  tiktokDisableStitch: false,
+  tiktokPrivacyLevel: '',
+  tiktokDisableComment: true,
+  tiktokDisableDuet: true,
+  tiktokDisableStitch: true,
   tiktokCoverTimestampMs: '',
   tiktokAutoAddMusic: false,
   tiktokPhotoCoverIndex: '',
+  tiktokConsentConfirmed: false,
+  tiktokCommercialContent: false,
+  tiktokBrandContent: false,
+  tiktokBrandOrganic: false,
+  tiktokIsAiGenerated: false,
 };
 
 export function platformOverrideDefaults(platform: Platform, scopes: string[] = []) {
@@ -115,12 +125,12 @@ export function platformOverrideFromOptions(input: {
     tiktokPostMode: readEnum(options.postMode, ['DIRECT_POST', 'MEDIA_UPLOAD'], 'MEDIA_UPLOAD'),
     tiktokPrivacyLevel: readEnum(
       options.privacyLevel,
-      ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],
-      'SELF_ONLY',
+      ['', 'PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],
+      '',
     ),
-    tiktokDisableComment: readBoolean(options.disableComment, false),
-    tiktokDisableDuet: readBoolean(options.disableDuet, false),
-    tiktokDisableStitch: readBoolean(options.disableStitch, false),
+    tiktokDisableComment: readBoolean(options.disableComment, true),
+    tiktokDisableDuet: readBoolean(options.disableDuet, true),
+    tiktokDisableStitch: readBoolean(options.disableStitch, true),
     tiktokCoverTimestampMs:
       typeof options.videoCoverTimestampMs === 'number'
         ? String(options.videoCoverTimestampMs)
@@ -128,6 +138,11 @@ export function platformOverrideFromOptions(input: {
     tiktokAutoAddMusic: readBoolean(options.autoAddMusic, false),
     tiktokPhotoCoverIndex:
       typeof options.photoCoverIndex === 'number' ? String(options.photoCoverIndex) : '',
+    tiktokConsentConfirmed: readBoolean(options.consentConfirmed, false),
+    tiktokCommercialContent: readBoolean(options.commercialContentEnabled, false),
+    tiktokBrandContent: readBoolean(options.brandContentToggle, false),
+    tiktokBrandOrganic: readBoolean(options.brandOrganicToggle, false),
+    tiktokIsAiGenerated: readBoolean(options.isAiGenerated, false),
   };
 }
 
@@ -174,6 +189,11 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
         photoCoverIndex: draft.tiktokPhotoCoverIndex
           ? Number(draft.tiktokPhotoCoverIndex)
           : undefined,
+        consentConfirmed: draft.tiktokConsentConfirmed,
+        commercialContentEnabled: draft.tiktokCommercialContent,
+        brandContentToggle: draft.tiktokCommercialContent ? draft.tiktokBrandContent : undefined,
+        brandOrganicToggle: draft.tiktokCommercialContent ? draft.tiktokBrandOrganic : undefined,
+        isAiGenerated: draft.tiktokIsAiGenerated,
       });
     default:
       return undefined;
