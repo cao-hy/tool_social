@@ -1,6 +1,10 @@
-import { emptyPostMetrics, type Paginated } from '@socialhub/shared';
+import {
+  computeEngagementRate,
+  emptyPostMetrics,
+  metricFromApi,
+  type Paginated,
+} from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
-import { capabilityUnsupported } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
@@ -10,6 +14,7 @@ import type {
   PublishPostInput,
   PublishResult,
   SocialAccountProfile,
+  SyncPostsParams,
   TokenSet,
 } from '../core/types';
 import { TikTokClient, type TikTokClientConfig } from './tiktok.client';
@@ -98,27 +103,64 @@ export class TikTokAdapter implements SocialPlatformAdapter {
       );
     }
 
-    const video = input.media.find((item) => item.type === 'VIDEO');
-    if (!video?.bytes?.length) throw new Error('TikTok cần bytes video từ storage để upload.');
-
-    const creator = await this.client.queryCreatorInfo(ctx.accessToken);
     const options = tiktokPublishOptions(input.options);
-    const privacyLevel = selectPrivacyLevel(
-      creator.data.privacy_level_options,
-      options.privacyLevel,
-    );
     const caption = tiktokCaption(input);
-    const init = await this.client.directPostVideo({
-      accessToken: ctx.accessToken,
-      title: caption || undefined,
-      bytes: video.bytes,
-      mimeType: video.mimeType,
-      privacyLevel,
-      disableComment: options.disableComment || (creator.data.comment_disabled ?? false),
-      disableDuet: options.disableDuet || (creator.data.duet_disabled ?? false),
-      disableStitch: options.disableStitch || (creator.data.stitch_disabled ?? false),
-      videoCoverTimestampMs: options.videoCoverTimestampMs,
-    });
+    const video = input.media.find((item) => item.type === 'VIDEO');
+    const images = input.media.filter((item) => item.type === 'IMAGE');
+
+    let init;
+    if (video) {
+      if (!video.bytes?.length) throw new Error('TikTok cần bytes video từ storage để upload.');
+
+      if (options.postMode === 'MEDIA_UPLOAD') {
+        init = await this.client.uploadVideoToInbox({
+          accessToken: ctx.accessToken,
+          bytes: video.bytes,
+          mimeType: video.mimeType,
+        });
+      } else {
+        const creator = await this.client.queryCreatorInfo(ctx.accessToken);
+        const privacyLevel = selectPrivacyLevel(
+          creator.data.privacy_level_options,
+          options.privacyLevel,
+        );
+        init = await this.client.directPostVideo({
+          accessToken: ctx.accessToken,
+          title: caption || undefined,
+          bytes: video.bytes,
+          mimeType: video.mimeType,
+          privacyLevel,
+          disableComment: options.disableComment || (creator.data.comment_disabled ?? false),
+          disableDuet: options.disableDuet || (creator.data.duet_disabled ?? false),
+          disableStitch: options.disableStitch || (creator.data.stitch_disabled ?? false),
+          videoCoverTimestampMs: options.videoCoverTimestampMs,
+        });
+      }
+    } else {
+      const creator =
+        options.postMode === 'DIRECT_POST'
+          ? await this.client.queryCreatorInfo(ctx.accessToken)
+          : null;
+      const privacyLevel = creator
+        ? selectPrivacyLevel(creator.data.privacy_level_options, options.privacyLevel)
+        : undefined;
+      init = await this.client.publishPhoto({
+        accessToken: ctx.accessToken,
+        postMode: options.postMode,
+        title: input.title?.trim() || undefined,
+        description: caption || input.description || undefined,
+        photoUrls: images.map((image) => image.url),
+        photoCoverIndex: options.photoCoverIndex,
+        privacyLevel,
+        disableComment:
+          options.postMode === 'DIRECT_POST'
+            ? options.disableComment || (creator?.data.comment_disabled ?? false)
+            : undefined,
+        autoAddMusic: options.autoAddMusic,
+        brandContentToggle: options.brandContentToggle,
+        brandOrganicToggle: options.brandOrganicToggle,
+      });
+    }
 
     return {
       externalPostId: init.data.publish_id,
@@ -142,12 +184,49 @@ export class TikTokAdapter implements SocialPlatformAdapter {
     };
   }
 
-  async getPosts(): Promise<Paginated<PlatformPostData>> {
-    throw capabilityUnsupported('TIKTOK', 'getPosts');
+  async getPosts(
+    ctx: AdapterContext,
+    params: SyncPostsParams = {},
+  ): Promise<Paginated<PlatformPostData>> {
+    const page = await this.client.listVideos({
+      accessToken: ctx.accessToken,
+      cursor: params.cursor ? Number(params.cursor) : undefined,
+      limit: params.limit,
+    });
+    return {
+      items: page.data.videos.map((video) => ({
+        externalPostId: video.id,
+        externalUrl: video.share_url,
+        caption: video.video_description ?? video.title,
+        title: video.title,
+        mediaType: 'VIDEO',
+        thumbnailUrl: video.cover_image_url,
+        publishedAt: video.create_time ? new Date(video.create_time * 1000) : new Date(0),
+      })),
+      nextCursor: page.data.has_more && page.data.cursor ? String(page.data.cursor) : null,
+      hasMore: page.data.has_more,
+    };
   }
 
-  async getPostMetrics(_ctx: AdapterContext, _externalPostId: string): Promise<PostMetrics> {
-    return emptyPostMetrics();
+  async getPostMetrics(ctx: AdapterContext, externalPostId: string): Promise<PostMetrics> {
+    const response = await this.client.queryVideos(ctx.accessToken, [externalPostId]);
+    const video = response.data.videos[0];
+    if (!video) return emptyPostMetrics();
+
+    const metrics = emptyPostMetrics('UNSUPPORTED');
+    metrics.views = metricFromApi(video.view_count ?? 0);
+    metrics.likes = metricFromApi(video.like_count ?? 0);
+    metrics.comments = metricFromApi(video.comment_count ?? 0);
+    metrics.shares = metricFromApi(video.share_count ?? 0);
+    metrics.engagement = metricFromApi(
+      (video.like_count ?? 0) + (video.comment_count ?? 0) + (video.share_count ?? 0),
+    );
+    metrics.engagementRate = computeEngagementRate(metrics);
+    return metrics;
+  }
+
+  async cancelPublish(ctx: AdapterContext, publishId: string): Promise<void> {
+    await this.client.cancelPublish(ctx.accessToken, publishId);
   }
 }
 
@@ -158,20 +237,34 @@ function tiktokCaption(input: PublishPostInput): string {
 }
 
 function tiktokPublishOptions(options: Record<string, unknown> | undefined): {
+  postMode: 'DIRECT_POST' | 'MEDIA_UPLOAD';
   privacyLevel?: string;
   disableComment: boolean;
   disableDuet: boolean;
   disableStitch: boolean;
   videoCoverTimestampMs?: number;
+  photoCoverIndex?: number;
+  autoAddMusic?: boolean;
+  brandContentToggle?: boolean;
+  brandOrganicToggle?: boolean;
 } {
   const timestamp = Number(options?.videoCoverTimestampMs);
+  const photoCoverIndex = Number(options?.photoCoverIndex);
   return {
+    postMode: options?.postMode === 'MEDIA_UPLOAD' ? 'MEDIA_UPLOAD' : 'DIRECT_POST',
     privacyLevel: typeof options?.privacyLevel === 'string' ? options.privacyLevel : undefined,
     disableComment: options?.disableComment === true,
     disableDuet: options?.disableDuet === true,
     disableStitch: options?.disableStitch === true,
     videoCoverTimestampMs:
       Number.isFinite(timestamp) && timestamp >= 0 ? Math.floor(timestamp) : undefined,
+    photoCoverIndex:
+      Number.isFinite(photoCoverIndex) && photoCoverIndex >= 0
+        ? Math.floor(photoCoverIndex)
+        : undefined,
+    autoAddMusic: options?.autoAddMusic === true,
+    brandContentToggle: options?.brandContentToggle === true,
+    brandOrganicToggle: options?.brandOrganicToggle === true,
   };
 }
 

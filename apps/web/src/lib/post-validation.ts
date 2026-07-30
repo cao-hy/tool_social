@@ -5,13 +5,13 @@ export interface PostComposerValidationInput {
   body?: string;
   linkUrl?: string;
   selectedAccounts: SocialAccountView[];
-  mediaAssets: Pick<MediaAssetView, 'type' | 'status'>[];
+  mediaAssets: Pick<MediaAssetView, 'type' | 'status' | 'readUrl'>[];
   platformOverrides?: Array<{
     socialAccountId: string;
     title?: string;
     caption?: string;
     linkUrl?: string;
-    mediaAssets?: Pick<MediaAssetView, 'type' | 'status'>[];
+    mediaAssets?: Pick<MediaAssetView, 'type' | 'status' | 'readUrl'>[];
   }>;
   requireTargets: boolean;
   requirePublishableContent: boolean;
@@ -91,8 +91,24 @@ export function validatePostComposer(input: PostComposerValidationInput): string
     }
 
     if (account.platform === 'TIKTOK') {
-      if (videoCount !== 1 || imageCount > 0 || resolvedMedia.length !== 1) {
-        return `${prefix}hiện hỗ trợ đúng 1 video cho mỗi bài đăng.`;
+      if (videoCount > 0 && (videoCount !== 1 || imageCount > 0 || resolvedMedia.length !== 1)) {
+        return `${prefix}video post hiện hỗ trợ đúng 1 video, không kèm ảnh.`;
+      }
+
+      if (imageCount > 0 && videoCount > 0) {
+        return `${prefix}không trộn ảnh và video trong cùng một TikTok post.`;
+      }
+
+      if (imageCount > 35) {
+        return `${prefix}photo post tối đa 35 ảnh.`;
+      }
+
+      if (imageCount > 0 && resolvedMedia.some((asset) => !asset.readUrl?.startsWith('https://'))) {
+        return `${prefix}photo post cần URL ảnh HTTPS public đã verify trong TikTok Developer Portal.`;
+      }
+
+      if (videoCount === 0 && imageCount === 0) {
+        return `${prefix}cần 1 video hoặc 1-35 ảnh.`;
       }
     }
   }

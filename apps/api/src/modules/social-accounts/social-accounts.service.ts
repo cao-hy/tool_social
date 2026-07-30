@@ -551,7 +551,11 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (platform === 'INSTAGRAM') return [...INSTAGRAM_OAUTH_SCOPES];
     if (platform === 'PINTEREST') return [...PINTEREST_OAUTH_SCOPES];
     if (platform === 'YOUTUBE') return [...YOUTUBE_OAUTH_SCOPES];
-    if (platform === 'TIKTOK') return [...TIKTOK_OAUTH_SCOPES];
+    if (platform === 'TIKTOK') {
+      return this.env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE
+        ? [...TIKTOK_OAUTH_SCOPES, 'video.list']
+        : [...TIKTOK_OAUTH_SCOPES];
+    }
     return ['development-fixture'];
   }
 

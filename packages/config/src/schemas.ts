@@ -78,6 +78,7 @@ const platformOAuthSchema = z.object({
 
   TIKTOK_CLIENT_KEY: z.string().optional(),
   TIKTOK_CLIENT_SECRET: z.string().optional(),
+  TIKTOK_ENABLE_VIDEO_LIST_SCOPE: booleanFromString(false),
 });
 
 function validatePlatformOAuth(

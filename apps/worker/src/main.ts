@@ -151,6 +151,9 @@ function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
     tiktok: {
       clientKey: env.TIKTOK_CLIENT_KEY,
       clientSecret: env.TIKTOK_CLIENT_SECRET,
+      scopes: env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE
+        ? ['user.info.basic', 'video.publish', 'video.upload', 'video.list']
+        : undefined,
     },
   });
 }

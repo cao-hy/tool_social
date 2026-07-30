@@ -187,6 +187,23 @@ export class PostsController {
     );
   }
 
+  @Post(':postId/platform-posts/:platformPostId/tiktok/cancel')
+  @RequirePermissions('post:publish')
+  cancelTikTokPublish(
+    @Param('workspaceId') workspaceId: string,
+    @Param('postId') postId: string,
+    @Param('platformPostId') platformPostId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ): Promise<unknown> {
+    return this.posts.cancelTikTokPublish(
+      workspaceId,
+      postId,
+      platformPostId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
   @Post(':postId/duplicate')
   @RequirePermissions('post:create')
   duplicate(

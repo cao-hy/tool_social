@@ -151,10 +151,51 @@ CAPABILITY_MATRIX.YOUTUBE.capabilities.replyToComment = {
 CAPABILITY_MATRIX.TIKTOK.capabilities.publishVideo = {
   state: 'CONDITIONAL',
   condition:
-    'TikTok Direct Post dùng Content Posting API /v2/post/publish/video/init/ với scope video.publish. Client chưa audit có thể bị giới hạn private viewing mode.',
+    'TikTok video hỗ trợ Direct Post qua /v2/post/publish/video/init/ với scope video.publish, hoặc Upload to Inbox qua /v2/post/publish/inbox/video/init/ với scope video.upload. Client chưa audit có thể bị giới hạn private viewing mode.',
   source: 'https://developers.tiktok.com/doc/content-posting-api-reference-direct-post',
-  verifiedAt: '2026-07-28',
+  verifiedAt: '2026-07-30',
   verifiedBy: 'Codex + TikTok Content Posting API docs',
+};
+
+CAPABILITY_MATRIX.TIKTOK.capabilities.publishImage = {
+  state: 'CONDITIONAL',
+  condition:
+    'TikTok photo post dùng /v2/post/publish/content/init/ với media_type PHOTO. Ảnh chỉ hỗ trợ PULL_FROM_URL: URL phải public HTTPS và domain/prefix phải được verify trong TikTok Developer Portal.',
+  source: 'https://developers.tiktok.com/doc/content-posting-api-reference-photo-post/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + TikTok Content Posting API docs',
+};
+
+CAPABILITY_MATRIX.TIKTOK.capabilities.postViews = {
+  state: 'CONDITIONAL',
+  condition: 'Đọc view_count qua Display API /v2/video/query/ khi token có scope video.list.',
+  source: 'https://developers.tiktok.com/doc/tiktok-api-v2-video-query/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + TikTok Display API docs',
+};
+
+CAPABILITY_MATRIX.TIKTOK.capabilities.postLikes = {
+  state: 'CONDITIONAL',
+  condition: 'Đọc like_count qua Display API /v2/video/query/ khi token có scope video.list.',
+  source: 'https://developers.tiktok.com/doc/tiktok-api-v2-video-query/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + TikTok Display API docs',
+};
+
+CAPABILITY_MATRIX.TIKTOK.capabilities.postCommentCount = {
+  state: 'CONDITIONAL',
+  condition: 'Đọc comment_count qua Display API /v2/video/query/ khi token có scope video.list.',
+  source: 'https://developers.tiktok.com/doc/tiktok-api-v2-video-query/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + TikTok Display API docs',
+};
+
+CAPABILITY_MATRIX.TIKTOK.capabilities.postShares = {
+  state: 'CONDITIONAL',
+  condition: 'Đọc share_count qua Display API /v2/video/query/ khi token có scope video.list.',
+  source: 'https://developers.tiktok.com/doc/tiktok-api-v2-video-query/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + TikTok Display API docs',
 };
 
 CAPABILITY_MATRIX.TIKTOK.capabilities.refreshToken = {

@@ -169,6 +169,116 @@ describe('TikTokAdapter', () => {
     });
   });
 
+  it('upload video TikTok vào Inbox bằng FILE_UPLOAD', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/post/publish/inbox/video/init/') {
+        expect(String(init?.body)).toContain('"video_size":3');
+        return jsonResponse({
+          data: {
+            publish_id: 'v_inbox_file~123',
+            upload_url: 'https://open-upload.tiktokapis.com/upload/?upload_id=inbox',
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      if (url.origin === 'https://open-upload.tiktokapis.com') {
+        expect(init?.method).toBe('PUT');
+        return new Response(null, { status: 201 });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new TikTokAdapter({
+      clientKey: 'tt-key',
+      clientSecret: 'tt-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'tt-access',
+          externalAccountId: 'open-1',
+          correlationId: 'test',
+        },
+        {
+          caption: 'Upload later',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+          options: { postMode: 'MEDIA_UPLOAD' },
+        },
+      ),
+    ).resolves.toMatchObject({
+      externalPostId: 'v_inbox_file~123',
+      pending: true,
+    });
+  });
+
+  it('publish TikTok photo post bằng URL public đã verify', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/post/publish/creator_info/query/') {
+        return jsonResponse({
+          data: {
+            privacy_level_options: ['SELF_ONLY'],
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      if (url.pathname === '/v2/post/publish/content/init/') {
+        expect(String(init?.body)).toContain('"media_type":"PHOTO"');
+        expect(String(init?.body)).toContain('"post_mode":"DIRECT_POST"');
+        expect(String(init?.body)).toContain('"photo_images":["https://media.example/photo.jpg"]');
+        return jsonResponse({
+          data: {
+            publish_id: 'p_pub_url~123',
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new TikTokAdapter({
+      clientKey: 'tt-key',
+      clientSecret: 'tt-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'tt-access',
+          externalAccountId: 'open-1',
+          correlationId: 'test',
+        },
+        {
+          caption: 'Photo TikTok',
+          media: [
+            {
+              type: 'IMAGE',
+              url: 'https://media.example/photo.jpg',
+              mimeType: 'image/jpeg',
+              sizeBytes: 3000,
+            },
+          ],
+          options: { privacyLevel: 'SELF_ONLY' },
+        },
+      ),
+    ).resolves.toMatchObject({
+      externalPostId: 'p_pub_url~123',
+      pending: true,
+    });
+  });
+
   it('chặn bài TikTok không đúng 1 video', () => {
     const adapter = new TikTokAdapter({
       clientKey: 'tt-key',

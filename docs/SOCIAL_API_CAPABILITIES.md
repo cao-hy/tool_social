@@ -275,6 +275,14 @@ Với mỗi nền tảng, người phụ trách phải trả lời **toàn bộ*
 9. App review: quy trình, thời gian, có yêu cầu URL demo/video demo không?
 10. Có yêu cầu hiển thị nhãn/UX bắt buộc trong app của bên thứ ba không (một số nền tảng bắt buộc điều này và **có thể ảnh hưởng thiết kế UI**)?
 
+**Kết luận đã xác minh 2026-07-30:**
+
+- Video: có cả Direct Post (`/v2/post/publish/video/init/`, scope `video.publish`) và Upload to Inbox (`/v2/post/publish/inbox/video/init/`, scope `video.upload`). Cả hai hỗ trợ `FILE_UPLOAD` chunked, nên video có thể lấy bytes từ storage private/local của hệ thống.
+- Photo: hỗ trợ qua `/v2/post/publish/content/init/` với `media_type=PHOTO`, nhưng chỉ nhận `PULL_FROM_URL`. Vì vậy ảnh phải có URL HTTPS public và domain/prefix phải verify trong TikTok Developer Portal.
+- Status/cancel: trạng thái publish đọc bằng `/v2/post/publish/status/fetch/`; cancel dùng `/v2/post/publish/cancel/` best-effort cho task chưa vào final state.
+- Display API: `/v2/video/list/` và `/v2/video/query/` dùng scope `video.list` để đọc video/metric cơ bản (`view_count`, `like_count`, `comment_count`, `share_count`). Scope này bật bằng `TIKTOK_ENABLE_VIDEO_LIST_SCOPE=true` sau khi app đã được cấp quyền, vì app chưa được cấp quyền sẽ fail OAuth nếu request mặc định.
+- Comment inbox/reply organic: chưa có trong public Content Posting/Display API; không bật UI cho TikTok comments/replies trong adapter hiện tại.
+
 ---
 
 ## 9. Quy trình cập nhật ma trận

@@ -13,7 +13,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
     FACEBOOK: 2,
     INSTAGRAM: 0,
     PINTEREST: 6,
-    TIKTOK: 5,
+    TIKTOK: 10,
     YOUTUBE: 6,
   } as const;
 
@@ -56,7 +56,14 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'readComments' ||
                 key === 'replyToComment')) ||
             (platform === 'TIKTOK' &&
-              (key === 'publishVideo' || key === 'refreshToken' || key === 'revokeToken')),
+              (key === 'publishImage' ||
+                key === 'publishVideo' ||
+                key === 'postViews' ||
+                key === 'postLikes' ||
+                key === 'postCommentCount' ||
+                key === 'postShares' ||
+                key === 'refreshToken' ||
+                key === 'revokeToken')),
         );
       }
     }
@@ -83,7 +90,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
             : platform === 'YOUTUBE'
               ? 19
               : platform === 'TIKTOK'
-                ? 16
+                ? 31
                 : 0,
       );
     }
