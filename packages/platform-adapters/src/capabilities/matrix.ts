@@ -50,6 +50,24 @@ CAPABILITY_MATRIX.FACEBOOK.capabilities.replyToComment = {
   verifiedBy: 'Codex + Meta Graph API docs',
 };
 
+CAPABILITY_MATRIX.FACEBOOK.capabilities.editPublishedPost = {
+  state: 'CONDITIONAL',
+  condition:
+    'Chỉ cập nhật message/link của Page post do Page quản lý, bằng Page access token có pages_manage_posts.',
+  source: 'https://developers.facebook.com/documentation/pages-api/posts',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta Pages API docs',
+};
+
+CAPABILITY_MATRIX.FACEBOOK.capabilities.deletePublishedPost = {
+  state: 'CONDITIONAL',
+  condition:
+    'Chỉ xóa Page post do Page quản lý, bằng DELETE /{page_post_id} với Page access token có pages_manage_posts.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/page-post/',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + Meta PagePost docs',
+};
+
 CAPABILITY_MATRIX.PINTEREST.capabilities.publishImage = {
   state: 'CONDITIONAL',
   condition:
@@ -145,6 +163,24 @@ CAPABILITY_MATRIX.YOUTUBE.capabilities.replyToComment = {
   state: 'SUPPORTED',
   source: 'https://developers.google.com/youtube/v3/docs/comments/insert',
   verifiedAt: '2026-07-28',
+  verifiedBy: 'Codex + YouTube Data API docs',
+};
+
+CAPABILITY_MATRIX.YOUTUBE.capabilities.editPublishedPost = {
+  state: 'CONDITIONAL',
+  condition:
+    'Cập nhật metadata video bằng videos.update; token cần scope youtube.force-ssl và video phải thuộc channel đã kết nối.',
+  source: 'https://developers.google.com/youtube/v3/docs/videos/update',
+  verifiedAt: '2026-07-30',
+  verifiedBy: 'Codex + YouTube Data API docs',
+};
+
+CAPABILITY_MATRIX.YOUTUBE.capabilities.deletePublishedPost = {
+  state: 'CONDITIONAL',
+  condition:
+    'Xóa video bằng videos.delete; token cần scope youtube.force-ssl/youtube và video phải thuộc channel đã kết nối.',
+  source: 'https://developers.google.com/youtube/v3/docs/videos/delete',
+  verifiedAt: '2026-07-30',
   verifiedBy: 'Codex + YouTube Data API docs',
 };
 

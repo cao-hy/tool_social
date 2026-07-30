@@ -10,6 +10,7 @@ import type {
   PublishResult,
   SocialAccountProfile,
   PostMetrics,
+  EditPostInput,
   SyncCommentsParams,
   TokenSet,
 } from '../core/types';
@@ -161,6 +162,76 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
 
   async getPosts(): Promise<Paginated<PlatformPostData>> {
     throw capabilityUnsupported('FACEBOOK', 'getPosts');
+  }
+
+  async editPost(ctx: AdapterContext, externalPostId: string, input: EditPostInput): Promise<void> {
+    const message = [
+      input.caption ?? input.description,
+      input.hashtags?.map((tag) => `#${tag}`).join(' '),
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    const isVideoPost = input.mediaTypes?.includes('VIDEO') ?? false;
+
+    ctx.logger?.info(
+      `Facebook edit post request ${JSON.stringify({
+        correlationId: ctx.correlationId,
+        externalPostId,
+        externalAccountId: ctx.externalAccountId,
+        mode: isVideoPost ? 'video' : 'feed',
+        hasMessage: message.length > 0,
+        messageLength: message.length,
+        hasLink: input.linkUrl !== undefined,
+      })}`,
+    );
+
+    const result = isVideoPost
+      ? await this.client.updatePageVideo({
+          externalPostId,
+          pageAccessToken: ctx.accessToken,
+          title: input.title,
+          description: message || input.description,
+        })
+      : await this.client.updatePagePost({
+          externalPostId,
+          pageAccessToken: ctx.accessToken,
+          message: message || undefined,
+          link: input.linkUrl,
+        });
+
+    ctx.logger?.info(
+      `Facebook edit post response ${JSON.stringify({
+        correlationId: ctx.correlationId,
+        externalPostId,
+        mode: isVideoPost ? 'video' : 'feed',
+        success: result.success,
+        id: result.id,
+      })}`,
+    );
+  }
+
+  async deletePost(ctx: AdapterContext, externalPostId: string): Promise<void> {
+    ctx.logger?.info(
+      `Facebook delete post request ${JSON.stringify({
+        correlationId: ctx.correlationId,
+        externalPostId,
+        externalAccountId: ctx.externalAccountId,
+      })}`,
+    );
+
+    const result = await this.client.deletePagePost({
+      externalPostId,
+      pageAccessToken: ctx.accessToken,
+    });
+
+    ctx.logger?.info(
+      `Facebook delete post response ${JSON.stringify({
+        correlationId: ctx.correlationId,
+        externalPostId,
+        success: result.success,
+        id: result.id,
+      })}`,
+    );
   }
 
   async getComments(

@@ -13,9 +13,10 @@ import {
 } from '@socialhub/platform-adapters';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import { deriveContentPostStatus, buildJobId } from '@socialhub/shared';
-import type { Platform, PlatformPostStatus } from '@socialhub/shared';
+import type { MediaType, Platform, PlatformPostStatus } from '@socialhub/shared';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
+import { logger } from '../../common/logger';
 import { ADAPTER_REGISTRY, KEYRING } from '../../infrastructure/infrastructure.module';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -91,7 +92,7 @@ export class PostsService implements OnModuleDestroy {
       include: {
         platformPosts: {
           include: {
-            socialAccount: true,
+            socialAccount: { include: { token: true } },
             media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
           },
           orderBy: { createdAt: 'asc' },
@@ -195,8 +196,22 @@ export class PostsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const existing = await this.findPost(workspaceId, postId);
-    if (!['DRAFT', 'SCHEDULED', 'FAILED'].includes(existing.status)) {
-      throw AppError.conflict('Chỉ sửa được draft, bài đã lên lịch hoặc bài thất bại.');
+    const publishedEdit = ['PUBLISHED', 'PARTIALLY_PUBLISHED'].includes(existing.status);
+    if (
+      !['DRAFT', 'SCHEDULED', 'FAILED', 'PUBLISHED', 'PARTIALLY_PUBLISHED'].includes(
+        existing.status,
+      )
+    ) {
+      throw AppError.conflict('Bài này không ở trạng thái có thể sửa.');
+    }
+
+    if (publishedEdit) {
+      if (input.socialAccountIds || input.mediaAssetIds) {
+        throw AppError.conflict(
+          'Bài đã publish chỉ sửa được nội dung/caption/link/options, không đổi target hoặc media.',
+        );
+      }
+      await this.editPublishedPlatformPosts(existing, input, auditContext.requestId);
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -222,6 +237,9 @@ export class PostsService implements OnModuleDestroy {
       if (input.mediaAssetIds) {
         await this.replaceMedia(tx, workspaceId, postId, input.mediaAssetIds);
       }
+      if (publishedEdit && input.platformOverrides) {
+        await this.updatePublishedOverrides(tx, workspaceId, postId, input.platformOverrides);
+      }
     });
 
     await this.audit.record({
@@ -240,20 +258,49 @@ export class PostsService implements OnModuleDestroy {
     workspaceId: string,
     postId: string,
     actorUserId: string,
+    options: { deleteFromPlatforms?: boolean; platformPostIds?: string[] },
     auditContext: AuditContext,
   ) {
     const post = await this.findPost(workspaceId, postId);
-    if (!['DRAFT', 'FAILED', 'SCHEDULED'].includes(post.status)) {
-      throw AppError.conflict('Chỉ xóa được draft, bài đã lên lịch hoặc bài thất bại.');
+    const deletePublished = ['PUBLISHED', 'PARTIALLY_PUBLISHED'].includes(post.status);
+    if (
+      !['DRAFT', 'FAILED', 'SCHEDULED', 'PUBLISHED', 'PARTIALLY_PUBLISHED'].includes(post.status)
+    ) {
+      throw AppError.conflict('Bài này không ở trạng thái có thể xóa.');
     }
 
+    const remoteDeletePlatformPostIds =
+      deletePublished && options.deleteFromPlatforms !== false
+        ? (options.platformPostIds ??
+          post.platformPosts
+            .filter((item) => item.status === 'PUBLISHED' && item.externalPostId)
+            .map((item) => item.id))
+        : [];
+
     await this.removeScheduledJobs(post.id, workspaceId, auditContext.requestId);
+    if (remoteDeletePlatformPostIds.length > 0) {
+      await this.deletePublishedPlatformPosts(
+        post,
+        auditContext.requestId,
+        remoteDeletePlatformPostIds,
+      );
+    }
 
     await this.prisma.$transaction([
       this.prisma.platformPost.updateMany({
         where: {
           contentPostId: postId,
-          status: { in: ['PENDING', 'QUEUED', 'FAILED', 'CANCELLED'] },
+          OR: [
+            { status: { in: ['PENDING', 'QUEUED', 'FAILED', 'CANCELLED'] } },
+            ...(remoteDeletePlatformPostIds.length > 0
+              ? [
+                  {
+                    id: { in: remoteDeletePlatformPostIds },
+                    status: { in: ['PROCESSING', 'PUBLISHED'] as PlatformPostStatus[] },
+                  },
+                ]
+              : []),
+          ],
         },
         data: { status: 'CANCELLED' },
       }),
@@ -853,7 +900,7 @@ export class PostsService implements OnModuleDestroy {
       include: {
         platformPosts: {
           include: {
-            socialAccount: true,
+            socialAccount: { include: { token: true } },
             media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
           },
           orderBy: { createdAt: 'asc' },
@@ -1204,6 +1251,146 @@ export class PostsService implements OnModuleDestroy {
     };
   }
 
+  private async editPublishedPlatformPosts(
+    post: Awaited<ReturnType<typeof this.findPost>>,
+    input: UpdatePostInput,
+    correlationId = 'manual',
+  ): Promise<void> {
+    const targets = post.platformPosts.filter(
+      (item) => item.status === 'PUBLISHED' && item.externalPostId,
+    );
+    if (targets.length === 0) return;
+
+    const operations = targets.map((platformPost) => {
+      const adapter = this.adapters.requireCapability(
+        platformPost.platform as Platform,
+        'editPublishedPost',
+      );
+      if (!adapter.editPost) {
+        throw AppError.capabilityUnsupported(
+          platformPost.platform as Platform,
+          'editPublishedPost',
+        );
+      }
+      if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
+        throw AppError.conflict(
+          `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
+        );
+      }
+      return { platformPost, adapter };
+    });
+
+    for (const { platformPost, adapter } of operations) {
+      const override = input.platformOverrides?.find(
+        (item) => item.socialAccountId === platformPost.socialAccountId,
+      );
+      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+      const mediaTypes =
+        platformPost.media.length > 0
+          ? platformPost.media.map((item) => item.mediaAsset.type as MediaType)
+          : post.media.map((item) => item.mediaAsset.type as MediaType);
+      await adapter.editPost?.(
+        {
+          accessToken,
+          externalAccountId: platformPost.socialAccount.externalAccountId,
+          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+          correlationId,
+          logger,
+        },
+        platformPost.externalPostId as string,
+        {
+          caption:
+            override?.caption ?? input.body ?? platformPost.caption ?? post.body ?? undefined,
+          title: override?.title ?? input.title ?? platformPost.title ?? post.title ?? undefined,
+          description:
+            override?.description ??
+            input.body ??
+            platformPost.description ??
+            post.body ??
+            undefined,
+          linkUrl:
+            override?.linkUrl ?? input.linkUrl ?? platformPost.linkUrl ?? post.linkUrl ?? undefined,
+          hashtags: input.hashtags ?? post.hashtags,
+          mediaTypes,
+          options: override?.options ?? jsonObject(platformPost.options),
+        },
+      );
+    }
+  }
+
+  private async deletePublishedPlatformPosts(
+    post: Awaited<ReturnType<typeof this.findPost>>,
+    correlationId = 'manual',
+    platformPostIds?: string[],
+  ): Promise<void> {
+    const selectedIds = platformPostIds ? new Set(platformPostIds) : null;
+    const targets = post.platformPosts.filter(
+      (item) =>
+        item.status === 'PUBLISHED' &&
+        item.externalPostId &&
+        (!selectedIds || selectedIds.has(item.id)),
+    );
+    if (targets.length === 0) return;
+
+    const operations = targets.map((platformPost) => {
+      const adapter = this.adapters.requireCapability(
+        platformPost.platform as Platform,
+        'deletePublishedPost',
+      );
+      if (!adapter.deletePost) {
+        throw AppError.capabilityUnsupported(
+          platformPost.platform as Platform,
+          'deletePublishedPost',
+        );
+      }
+      if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
+        throw AppError.conflict(
+          `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
+        );
+      }
+      return { platformPost, adapter };
+    });
+
+    for (const { platformPost, adapter } of operations) {
+      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+      await adapter.deletePost?.(
+        {
+          accessToken,
+          externalAccountId: platformPost.socialAccount.externalAccountId,
+          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+          correlationId,
+          logger,
+        },
+        platformPost.externalPostId as string,
+      );
+    }
+  }
+
+  private async updatePublishedOverrides(
+    tx: Prisma.TransactionClient,
+    workspaceId: string,
+    postId: string,
+    platformOverrides: NonNullable<UpdatePostInput['platformOverrides']>,
+  ): Promise<void> {
+    for (const override of platformOverrides) {
+      await tx.platformPost.updateMany({
+        where: {
+          workspaceId,
+          contentPostId: postId,
+          socialAccountId: override.socialAccountId,
+          status: 'PUBLISHED',
+        },
+        data: {
+          caption: override.caption,
+          title: override.title,
+          description: override.description,
+          linkUrl: override.linkUrl,
+          options: override.options as Prisma.InputJsonValue | undefined,
+        },
+      });
+    }
+  }
+
   private async youtubePlatformPostContext(
     workspaceId: string,
     postId: string,
@@ -1473,4 +1660,9 @@ function buildCursorWhere(
       },
     ],
   };
+}
+
+function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
 }

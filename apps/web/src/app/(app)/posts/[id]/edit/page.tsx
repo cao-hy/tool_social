@@ -26,6 +26,15 @@ import {
 import { validatePostComposer } from '@/lib/post-validation';
 import type { ContentPostView, SocialAccountView } from '@/lib/types';
 
+const CONTENT_EDITABLE_POST_STATUSES = [
+  'DRAFT',
+  'FAILED',
+  'SCHEDULED',
+  'PUBLISHED',
+  'PARTIALLY_PUBLISHED',
+] as const;
+const TARGET_EDITABLE_POST_STATUSES = ['DRAFT', 'FAILED', 'SCHEDULED'] as const;
+
 export default function EditPostPage() {
   const auth = useAuth();
   const router = useRouter();
@@ -100,7 +109,9 @@ export default function EditPostPage() {
   }
 
   const canUpdate = hasPermission(workspace.role, 'post:update');
-  const canEditState = post ? ['DRAFT', 'FAILED', 'SCHEDULED'].includes(post.status) : false;
+  const canEditContent = post ? canEditPostContent(post.status) : false;
+  const canEditTargets = post ? canEditPostTargets(post.status) : false;
+  const isPublishedEdit = post ? isPublishedPostStatus(post.status) : false;
 
   function toggleAccount(accountId: string) {
     setSelectedIds((current) =>
@@ -149,7 +160,7 @@ export default function EditPostPage() {
     setSaving(true);
     setError(null);
     try {
-      await postsApi.update(workspace.id, post.id, {
+      const payload = {
         title: title.trim() || undefined,
         body: body.trim() || undefined,
         linkUrl: linkUrl.trim() || undefined,
@@ -157,10 +168,13 @@ export default function EditPostPage() {
           .split(/[,\s]+/)
           .map((item) => item.replace(/^#/, '').trim())
           .filter(Boolean),
-        socialAccountIds: selectedIds,
-        mediaAssetIds,
         platformOverrides: platformOverridePayload,
-      });
+      };
+      await postsApi.update(
+        workspace.id,
+        post.id,
+        isPublishedEdit ? payload : { ...payload, socialAccountIds: selectedIds, mediaAssetIds },
+      );
       router.push('/posts');
     } catch (saveError) {
       setError(getErrorMessage(saveError));
@@ -201,7 +215,8 @@ export default function EditPostPage() {
           caption: draft.caption.trim() || undefined,
           description: draft.description.trim() || undefined,
           linkUrl: draft.linkUrl.trim() || undefined,
-          mediaAssetIds: draft.mediaAssetIds.length > 0 ? draft.mediaAssetIds : undefined,
+          mediaAssetIds:
+            canEditTargets && draft.mediaAssetIds.length > 0 ? draft.mediaAssetIds : undefined,
           options,
         };
       })
@@ -249,7 +264,7 @@ export default function EditPostPage() {
 
             <Field label="Tiêu đề nội bộ">
               <TextInput
-                disabled={!canEditState}
+                disabled={!canEditContent}
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
               />
@@ -258,7 +273,7 @@ export default function EditPostPage() {
             <Field label="Nội dung">
               <textarea
                 className="min-h-48 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
-                disabled={!canEditState}
+                disabled={!canEditContent}
                 value={body}
                 onChange={(event) => setBody(event.target.value)}
               />
@@ -267,7 +282,7 @@ export default function EditPostPage() {
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Link">
                 <TextInput
-                  disabled={!canEditState}
+                  disabled={!canEditContent}
                   placeholder="https://..."
                   value={linkUrl}
                   onChange={(event) => setLinkUrl(event.target.value)}
@@ -275,7 +290,7 @@ export default function EditPostPage() {
               </Field>
               <Field label="Hashtags">
                 <TextInput
-                  disabled={!canEditState}
+                  disabled={!canEditContent}
                   value={hashtags}
                   onChange={(event) => setHashtags(event.target.value)}
                 />
@@ -296,7 +311,7 @@ export default function EditPostPage() {
                         <input
                           checked={mediaAssetIds.includes(asset.id)}
                           className="mt-1"
-                          disabled={!canEditState}
+                          disabled={!canEditTargets}
                           type="checkbox"
                           onChange={() =>
                             setMediaAssetIds((current) =>
@@ -325,8 +340,9 @@ export default function EditPostPage() {
               <PlatformComposerPanels
                 accounts={selectedAccounts}
                 common={{ title, body, linkUrl }}
-                disabled={!canEditState}
+                disabled={!canEditContent}
                 drafts={platformOverrides}
+                mediaLocked={!canEditTargets}
                 mediaAssets={post?.media.filter((asset) => mediaAssetIds.includes(asset.id)) ?? []}
                 onChange={updateOverride}
               />
@@ -362,7 +378,7 @@ export default function EditPostPage() {
                       <input
                         checked={selectedIds.includes(account.id)}
                         className="mt-1"
-                        disabled={!canEditState}
+                        disabled={!canEditTargets}
                         type="checkbox"
                         onChange={() => toggleAccount(account.id)}
                       />
@@ -385,7 +401,7 @@ export default function EditPostPage() {
         <div className="grid gap-2">
           <PrimaryButton
             busy={saving}
-            disabled={!canUpdate || !canEditState || loading}
+            disabled={!canUpdate || !canEditContent || loading}
             onClick={save}
             type="button"
           >
@@ -398,4 +414,20 @@ export default function EditPostPage() {
       </aside>
     </div>
   );
+}
+
+function canEditPostContent(status: ContentPostView['status']) {
+  return CONTENT_EDITABLE_POST_STATUSES.includes(
+    status as (typeof CONTENT_EDITABLE_POST_STATUSES)[number],
+  );
+}
+
+function canEditPostTargets(status: ContentPostView['status']) {
+  return TARGET_EDITABLE_POST_STATUSES.includes(
+    status as (typeof TARGET_EDITABLE_POST_STATUSES)[number],
+  );
+}
+
+function isPublishedPostStatus(status: ContentPostView['status']) {
+  return status === 'PUBLISHED' || status === 'PARTIALLY_PUBLISHED';
 }

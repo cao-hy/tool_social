@@ -112,6 +112,16 @@ export interface PublishResult {
   pending?: boolean;
 }
 
+export interface EditPostInput {
+  caption?: string;
+  title?: string;
+  description?: string;
+  linkUrl?: string;
+  hashtags?: string[];
+  mediaTypes?: MediaType[];
+  options?: Record<string, unknown>;
+}
+
 export interface ValidationIssue {
   field: string;
   message: string;

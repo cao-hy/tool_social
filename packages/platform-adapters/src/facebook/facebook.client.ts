@@ -9,6 +9,7 @@ import {
   facebookPagesResponseSchema,
   facebookCommentReplyResponseSchema,
   facebookCommentsResponseSchema,
+  facebookMutationResponseSchema,
   facebookPhotoUploadResponseSchema,
   facebookPublishPostResponseSchema,
   facebookTokenResponseSchema,
@@ -16,6 +17,7 @@ import {
   type FacebookCommentReplyResponse,
   type FacebookPage,
   type FacebookPageProfile,
+  type FacebookMutationResponse,
   type FacebookPhotoUploadResponse,
   type FacebookPublishPostResponse,
   type FacebookTokenResponse,
@@ -205,6 +207,43 @@ export class FacebookGraphClient {
     );
   }
 
+  async updatePagePost(input: {
+    externalPostId: string;
+    pageAccessToken: string;
+    message?: string;
+    link?: string;
+  }): Promise<FacebookMutationResponse> {
+    const body: Record<string, string> = { access_token: input.pageAccessToken };
+    if (input.message !== undefined) body.message = input.message;
+    if (input.link !== undefined) body.link = input.link;
+
+    return this.postForm(`/${input.externalPostId}`, body, facebookMutationResponseSchema);
+  }
+
+  async updatePageVideo(input: {
+    externalPostId: string;
+    pageAccessToken: string;
+    title?: string;
+    description?: string;
+  }): Promise<FacebookMutationResponse> {
+    const body: Record<string, string> = { access_token: input.pageAccessToken };
+    if (input.title !== undefined) body.title = input.title;
+    if (input.description !== undefined) body.description = input.description;
+
+    return this.postForm(`/${input.externalPostId}`, body, facebookMutationResponseSchema);
+  }
+
+  async deletePagePost(input: {
+    externalPostId: string;
+    pageAccessToken: string;
+  }): Promise<FacebookMutationResponse> {
+    return this.delete(
+      `/${input.externalPostId}`,
+      { access_token: input.pageAccessToken },
+      facebookMutationResponseSchema,
+    );
+  }
+
   private async get<T>(
     path: string,
     params: Record<string, string>,
@@ -274,6 +313,40 @@ export class FacebookGraphClient {
         method: 'POST',
         body,
         signal: AbortSignal.timeout(120000),
+      });
+    } catch (error) {
+      throw facebookNetworkError(error);
+    }
+
+    const payload = await parseJson(response);
+    if (!response.ok) {
+      throw normalizeFacebookError({
+        status: response.status,
+        payload,
+        retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
+      });
+    }
+
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) throw facebookUnexpectedPayloadError(parsed.error, payload);
+    return parsed.data;
+  }
+
+  private async delete<T>(
+    path: string,
+    params: Record<string, string>,
+    schema: z.ZodType<T>,
+  ): Promise<T> {
+    const url = new URL(`${this.graphBaseUrl}${path}`);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
       throw facebookNetworkError(error);

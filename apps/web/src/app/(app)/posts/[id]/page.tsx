@@ -4,6 +4,7 @@ import { hasPermission, PLATFORM_LABELS } from '@socialhub/shared';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { DeletePostDialog } from '@/components/delete-post-dialog';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
 import { MediaPreview } from '@/components/media-preview';
 import { postsApi } from '@/lib/api-client';
@@ -16,6 +17,14 @@ import type {
   YouTubePlatformState,
 } from '@/lib/types';
 
+const DELETABLE_POST_STATUSES = [
+  'DRAFT',
+  'FAILED',
+  'SCHEDULED',
+  'PUBLISHED',
+  'PARTIALLY_PUBLISHED',
+] as const;
+
 export default function PostDetailPage() {
   const auth = useAuth();
   const router = useRouter();
@@ -25,6 +34,7 @@ export default function PostDetailPage() {
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
   const [platformAction, setPlatformAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -59,13 +69,25 @@ export default function PostDetailPage() {
     }
   }
 
-  async function deletePost() {
+  function openDeleteDialog() {
+    if (!post) return;
+    if (!canDeletePostStatus(post.status)) {
+      setError('Bài này không ở trạng thái có thể xóa.');
+      return;
+    }
+    setDeleteTarget(post);
+  }
+
+  async function deletePost(input: { platformPostIds: string[] }) {
     if (!workspace || !post) return;
-    if (!window.confirm('Xóa bài viết này khỏi workspace?')) return;
     setDeleting(true);
     setError(null);
     try {
-      await postsApi.delete(workspace.id, post.id);
+      await postsApi.delete(workspace.id, post.id, {
+        deleteFromPlatforms: input.platformPostIds.length > 0,
+        platformPostIds: input.platformPostIds,
+      });
+      setDeleteTarget(null);
       router.push('/posts');
     } catch (deleteError) {
       setError(getErrorMessage(deleteError));
@@ -127,7 +149,7 @@ export default function PostDetailPage() {
   const canUpdate = hasPermission(workspace.role, 'post:update');
   const hasFailedPlatformPost =
     post?.platformPosts.some((item) => item.status === 'FAILED') ?? false;
-  const canDeleteLocal = post ? ['DRAFT', 'FAILED', 'SCHEDULED'].includes(post.status) : false;
+  const canDeleteStatus = post ? canDeletePostStatus(post.status) : false;
 
   return (
     <div className="space-y-5">
@@ -158,13 +180,8 @@ export default function PostDetailPage() {
             </Link>
           ) : null}
           <SecondaryButton
-            disabled={!post || !canDelete || !canDeleteLocal || deleting}
-            onClick={() => void deletePost()}
-            title={
-              post?.status === 'PUBLISHED'
-                ? 'Remote delete chưa được capability matrix xác minh; local delete bị khóa để tránh lệch dữ liệu.'
-                : undefined
-            }
+            disabled={!post || !canDelete || !canDeleteStatus || deleting}
+            onClick={openDeleteDialog}
             type="button"
           >
             {deleting ? 'Đang xóa...' : 'Delete'}
@@ -398,6 +415,12 @@ export default function PostDetailPage() {
           </section>
         </>
       ) : null}
+      <DeletePostDialog
+        busy={deleting}
+        post={deleteTarget}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={(input) => void deletePost(input)}
+      />
     </div>
   );
 }
@@ -614,4 +637,8 @@ function formatDateTime(value: string) {
     timeStyle: 'short',
     hour12: false,
   }).format(new Date(value));
+}
+
+function canDeletePostStatus(status: ContentPostView['status']) {
+  return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
 }

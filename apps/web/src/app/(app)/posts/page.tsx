@@ -11,6 +11,7 @@ import {
   SelectInput,
   TextInput,
 } from '@/components/form-controls';
+import { DeletePostDialog } from '@/components/delete-post-dialog';
 import { MediaPreview } from '@/components/media-preview';
 import { postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
@@ -29,6 +30,13 @@ const POST_STATUSES = [
 ] as const;
 
 const PAGE_SIZE = 10;
+const DELETABLE_POST_STATUSES = [
+  'DRAFT',
+  'FAILED',
+  'SCHEDULED',
+  'PUBLISHED',
+  'PARTIALLY_PUBLISHED',
+] as const;
 
 export default function PostsPage() {
   const auth = useAuth();
@@ -50,6 +58,7 @@ export default function PostsPage() {
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
   const [duplicating, setDuplicating] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,18 +125,29 @@ export default function PostsPage() {
     }
   }
 
-  async function deletePost(post: ContentPostView) {
-    if (!workspace) return;
-    if (!['DRAFT', 'FAILED', 'SCHEDULED'].includes(post.status)) {
-      setError('Chỉ xóa local record được draft, bài đã lên lịch hoặc bài thất bại.');
+  function openDeleteDialog(post: ContentPostView) {
+    if (!canDeletePostStatus(post.status)) {
+      setError('Bài này không ở trạng thái có thể xóa.');
       return;
     }
-    if (!window.confirm('Xóa bài viết này khỏi workspace?')) return;
+    setDeleteTarget(post);
+  }
 
-    setDeleting(post.id);
+  async function deletePost(input: { platformPostIds: string[] }) {
+    if (!workspace) return;
+    if (!deleteTarget || !canDeletePostStatus(deleteTarget.status)) {
+      setError('Bài này không ở trạng thái có thể xóa.');
+      return;
+    }
+
+    setDeleting(deleteTarget.id);
     setError(null);
     try {
-      await postsApi.delete(workspace.id, post.id);
+      await postsApi.delete(workspace.id, deleteTarget.id, {
+        deleteFromPlatforms: input.platformPostIds.length > 0,
+        platformPostIds: input.platformPostIds,
+      });
+      setDeleteTarget(null);
       await loadPosts(cursorStack.at(-1));
     } catch (deleteError) {
       setError(getErrorMessage(deleteError));
@@ -484,15 +504,8 @@ export default function PostsPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <SecondaryButton
-                      disabled={
-                        deleting !== null || !['DRAFT', 'FAILED', 'SCHEDULED'].includes(post.status)
-                      }
-                      onClick={() => void deletePost(post)}
-                      title={
-                        post.status === 'PUBLISHED'
-                          ? 'Xóa bài đã đăng trên nền tảng chưa được capability matrix xác minh.'
-                          : undefined
-                      }
+                      disabled={deleting !== null || !canDeletePostStatus(post.status)}
+                      onClick={() => openDeleteDialog(post)}
                       type="button"
                     >
                       {deleting === post.id ? 'Đang...' : 'Xóa'}
@@ -587,8 +600,18 @@ export default function PostsPage() {
           Trang sau
         </SecondaryButton>
       </div>
+      <DeletePostDialog
+        busy={deleting !== null}
+        post={deleteTarget}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={(input) => void deletePost(input)}
+      />
     </div>
   );
+}
+
+function canDeletePostStatus(status: ContentPostView['status']) {
+  return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
 }
 
 function StatusBadge({ status, muted = false }: { status: string; muted?: boolean }) {

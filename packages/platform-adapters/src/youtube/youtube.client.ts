@@ -208,6 +208,66 @@ export class YouTubeClient {
     );
   }
 
+  async updateVideoMetadata(input: {
+    accessToken: string;
+    videoId: string;
+    title: string;
+    description?: string;
+    tags?: string[];
+    categoryId: string;
+    privacyStatus?: string;
+    selfDeclaredMadeForKids?: boolean;
+  }): Promise<YouTubeVideoResponse> {
+    const body: Record<string, unknown> = {
+      id: input.videoId,
+      snippet: {
+        title: input.title,
+        description: input.description,
+        tags: input.tags,
+        categoryId: input.categoryId,
+      },
+    };
+
+    if (input.privacyStatus) {
+      body.status = {
+        privacyStatus: input.privacyStatus,
+        selfDeclaredMadeForKids: input.selfDeclaredMadeForKids ?? false,
+      };
+    }
+
+    return this.putJson(
+      '/videos',
+      body,
+      { part: input.privacyStatus ? 'snippet,status' : 'snippet' },
+      youtubeVideoResponseSchema,
+      input.accessToken,
+    );
+  }
+
+  async deleteVideo(accessToken: string, videoId: string): Promise<void> {
+    const url = new URL(`${this.apiBaseUrl}/videos`);
+    url.searchParams.set('id', videoId);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (error) {
+      throw youtubeNetworkError(error);
+    }
+
+    if (!response.ok) {
+      throw normalizeYouTubeError({
+        status: response.status,
+        payload: await parseJson(response),
+        retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
+      });
+    }
+  }
+
   getVideoComments(input: {
     accessToken: string;
     videoId: string;

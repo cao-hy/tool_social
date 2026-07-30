@@ -8,6 +8,7 @@ import type {
   PlatformComment,
   PlatformPostData,
   PostMetrics,
+  EditPostInput,
   PublishPostInput,
   PublishResult,
   SocialAccountProfile,
@@ -63,6 +64,7 @@ export interface SocialPlatformAdapter {
   /** Đồng bộ, không gọi mạng — kiểm tra luật riêng của nền tảng. */
   validatePost(input: PublishPostInput): ValidationResult;
   publishPost(ctx: AdapterContext, input: PublishPostInput): Promise<PublishResult>;
+  editPost?(ctx: AdapterContext, externalPostId: string, input: EditPostInput): Promise<void>;
   deletePost?(ctx: AdapterContext, externalPostId: string): Promise<void>;
 
   /* ------------------------------------------------------------------- Read */
@@ -97,6 +99,7 @@ export interface SocialPlatformAdapter {
  * tra được tự động, thay vì một dòng ghi chú trong tài liệu mà không ai đọc.
  */
 export const OPTIONAL_METHOD_CAPABILITY_MAP = {
+  editPost: 'editPublishedPost',
   replyToComment: 'replyToComment',
   deleteComment: 'deleteComment',
   hideComment: 'hideComment',
