@@ -116,9 +116,14 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         creationId,
       });
 
+      const publishedMedia = await this.client.getMedia({
+        mediaId: postId,
+        accessToken: ctx.accessToken,
+      });
+
       return {
         externalPostId: postId,
-        externalUrl: `https://www.instagram.com/p/${postId}`,
+        externalUrl: publishedMedia.permalink ?? `https://www.instagram.com/p/${postId}`,
         publishedAt: new Date(),
       };
     }
@@ -154,9 +159,14 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         creationId: carouselCreationId,
       });
 
+      const media = await this.client.getMedia({
+        mediaId: postId,
+        accessToken: ctx.accessToken,
+      });
+
       return {
         externalPostId: postId,
-        externalUrl: `https://www.instagram.com/p/${postId}`,
+        externalUrl: media.permalink ?? `https://www.instagram.com/p/${postId}`,
         publishedAt: new Date(),
       };
     }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InstagramAdapter } from '../instagram/instagram.adapter';
+import { normalizeInstagramError } from '../instagram/instagram.errors';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -36,6 +37,23 @@ describe('InstagramAdapter', () => {
     expect(url.searchParams.get('scope')).toContain('instagram_content_publish');
     expect(url.searchParams.get('scope')).toContain('instagram_manage_comments');
     expect(url.searchParams.get('scope')).toContain('instagram_manage_insights');
+  });
+
+  it('map lỗi Missing Permission thành PERMISSION_DENIED rõ nguyên nhân', () => {
+    const error = normalizeInstagramError({
+      status: 400,
+      payload: {
+        error: {
+          message: '(#100) Missing Permission',
+          type: 'OAuthException',
+          code: 100,
+        },
+      },
+    });
+
+    expect(error.kind).toBe('PERMISSION_DENIED');
+    expect(error.message).toContain('instagram_manage_comments');
+    expect(error.platformCode).toBe('100');
   });
 
   it('xóa media Instagram bằng DELETE /{ig_media_id}', async () => {

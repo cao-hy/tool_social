@@ -30,9 +30,10 @@ export function normalizeInstagramError(input: {
   const subcode =
     graphError?.error_subcode === undefined ? undefined : String(graphError.error_subcode);
   const platformCode = [code, subcode].filter(Boolean).join(':') || undefined;
-  const message = graphError?.message ?? `Instagram Graph API trả về lỗi HTTP ${input.status}.`;
+  const rawMessage = graphError?.message ?? `Instagram Graph API trả về lỗi HTTP ${input.status}.`;
+  const message = instagramPermissionMessage(rawMessage) ?? rawMessage;
 
-  const kind = mapInstagramErrorKind(input.status, code);
+  const kind = mapInstagramErrorKind(input.status, code, rawMessage);
 
   return createPlatformError(kind, 'INSTAGRAM', message, {
     httpStatus: input.status,
@@ -69,14 +70,30 @@ export function instagramUnexpectedPayloadError(cause: unknown, payload: unknown
   );
 }
 
-function mapInstagramErrorKind(status: number, code: string | undefined): PlatformErrorKind {
+function mapInstagramErrorKind(
+  status: number,
+  code: string | undefined,
+  message?: string,
+): PlatformErrorKind {
   if (status === 401 || (code && AUTH_CODES.has(code))) return 'AUTH_INVALID';
-  if (status === 403 || (code && PERMISSION_CODES.has(code))) return 'PERMISSION_DENIED';
+  if (
+    status === 403 ||
+    (code && PERMISSION_CODES.has(code)) ||
+    message?.toLowerCase().includes('missing permission')
+  ) {
+    return 'PERMISSION_DENIED';
+  }
   if (status === 429 || (code && RATE_LIMIT_CODES.has(code))) return 'RATE_LIMITED';
   if (status === 404) return 'NOT_FOUND';
   if (status >= 500) return 'PLATFORM_ERROR';
   if (status >= 400) return 'VALIDATION';
   return 'UNKNOWN';
+}
+
+function instagramPermissionMessage(message: string): string | null {
+  if (!message.toLowerCase().includes('missing permission')) return null;
+
+  return 'Instagram token thiếu quyền quản lý comment. Hãy bật instagram_manage_comments và pages_read_engagement trong Meta App Dashboard, rồi ngắt kết nối và kết nối lại Instagram.';
 }
 
 function summarizeNetworkCause(cause: unknown): string | null {

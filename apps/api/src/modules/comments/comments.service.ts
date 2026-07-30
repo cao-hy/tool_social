@@ -265,6 +265,18 @@ export class CommentsService implements OnModuleDestroy {
         'YouTube token hiện tại thiếu scope youtube.force-ssl. Hãy ngắt kết nối rồi kết nối lại YouTube để cấp quyền quản lý comment.',
       );
     }
+    if (comment.platform === 'INSTAGRAM') {
+      const missingScopes = ['instagram_manage_comments', 'pages_read_engagement'].filter(
+        (scope) => !comment.socialAccount.scopes.includes(scope),
+      );
+      if (missingScopes.length > 0) {
+        throw AppError.conflict(
+          `Instagram token hiện tại thiếu quyền ${missingScopes.join(
+            ', ',
+          )}. Hãy ngắt kết nối rồi kết nối lại Instagram sau khi quyền đã được bật trong Meta App Dashboard.`,
+        );
+      }
+    }
 
     const reply = await this.prisma.commentReply.create({
       data: { workspaceId, commentId: comment.id, message: input.message, sentById: actorUserId },

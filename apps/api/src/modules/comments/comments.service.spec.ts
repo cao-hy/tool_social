@@ -65,6 +65,44 @@ describe('CommentsService', () => {
     expect(commentReplyCreate).not.toHaveBeenCalled();
   });
 
+  it('reply Instagram bị chặn sớm nếu token thiếu quyền quản lý comment', async () => {
+    const adapter = { replyToComment: vi.fn() };
+    vi.mocked(adapters.requireCapability).mockReturnValueOnce(adapter as never);
+    commentFindFirst.mockResolvedValueOnce({
+      id: 'comment_ig',
+      workspaceId: 'workspace_1',
+      platform: 'INSTAGRAM',
+      externalCommentId: 'ig_comment_1',
+      status: 'OPEN',
+      socialAccount: {
+        token: { accessToken: 'encrypted-token' },
+        status: 'CONNECTED',
+        scopes: ['instagram_basic', 'pages_read_engagement'],
+      },
+      platformPost: { contentPostId: 'post_1', contentPost: { title: 'Post' } },
+      assignment: null,
+      tags: [],
+      notes: [],
+      replies: [],
+    });
+    const service = new CommentsService(prisma, redis, audit, adapters, keyring);
+
+    await expect(
+      service.reply(
+        'workspace_1',
+        'comment_ig',
+        'user_1',
+        { message: 'Cảm ơn bạn' },
+        { requestId: 'req_1' },
+      ),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('instagram_manage_comments'),
+    });
+    expect(commentReplyCreate).not.toHaveBeenCalled();
+    expect(adapter.replyToComment).not.toHaveBeenCalled();
+  });
+
   it('không gán comment cho member ngoài workspace', async () => {
     memberFindFirst.mockResolvedValueOnce(null);
     const service = new CommentsService(prisma, redis, audit, adapters, keyring);
