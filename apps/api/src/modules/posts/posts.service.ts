@@ -1596,6 +1596,11 @@ function hasTikTokStatusMethods(
   return adapter.platform === 'TIKTOK' && 'getPublishPlatformState' in adapter;
 }
 
+function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
 function assertYouTubeReadyForPublic(state: YouTubeVideoPlatformState): void {
   const status = state.processingStatus?.toLowerCase();
   if (status === 'processing') {
