@@ -25,6 +25,7 @@
     "test:watch": "turbo run test:watch",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "security:audit": "node scripts/check-audit.mjs",
     "db:generate": "npm run db:generate -w @socialhub/db",
     "db:migrate": "npm run db:migrate -w @socialhub/db",
     "db:seed": "npm run db:seed -w @socialhub/db",
@@ -48,6 +49,21 @@
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.21.0",
     "vitest": "^2.1.8"
+  },
+  "overrides": {
+    "@nestjs/platform-fastify@11.1.28": {
+      "find-my-way": "9.7.0"
+    },
+    "brace-expansion": "5.0.8",
+    "esbuild": "0.25.12",
+    "find-my-way": "9.7.0",
+    "minimatch": "10.2.5",
+    "next": {
+      "postcss": "8.5.23",
+      "sharp": "0.35.3"
+    },
+    "postcss": "8.5.23",
+    "sharp": "0.35.3"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

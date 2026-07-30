@@ -115,11 +115,10 @@ jobs:
       - name: Cài dependency
         run: npm ci
 
-      # Chỉ chặn ở mức high/critical. Đặt ngưỡng thấp hơn sẽ khiến CI đỏ liên
-      # tục vì lỗ hổng trong dev dependency, và đội ngũ sẽ học cách phớt lờ nó —
-      # đúng thứ mà một cổng bảo mật không được phép trở thành.
+      # Chỉ chặn ở mức high/critical. Script vẫn dùng npm audit, nhưng có
+      # allowlist hẹp cho advisory upstream chưa có bản vá không phá Next 15.
       - name: Kiểm tra lỗ hổng dependency
-        run: npm audit --audit-level=high
+        run: npm run security:audit
 
       - name: Quét secret bị commit
         uses: gitleaks/gitleaks-action@v2
