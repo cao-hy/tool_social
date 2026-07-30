@@ -51,7 +51,7 @@ jobs:
           cache: npm
 
       - name: Cài dependency
-        run: npm ci
+        run: npm ci --include=optional
 
       # Prisma cần DATABASE_URL để generate client, và các script db:* đọc file
       # .env ở thư mục gốc. Tạo .env từ .env.example rồi ghi đè bằng giá trị của
@@ -113,7 +113,7 @@ jobs:
           cache: npm
 
       - name: Cài dependency
-        run: npm ci
+        run: npm ci --include=optional
 
       # Chỉ chặn ở mức high/critical. Script vẫn dùng npm audit, nhưng có
       # allowlist hẹp cho advisory upstream chưa có bản vá không phá Next 15.

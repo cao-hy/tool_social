@@ -75,5 +75,8 @@
     "*.{json,md,yml,yaml}": [
       "prettier --write"
     ]
+  },
+  "optionalDependencies": {
+    "@swc/core-linux-x64-gnu": "^1.15.46"
   }
 }
