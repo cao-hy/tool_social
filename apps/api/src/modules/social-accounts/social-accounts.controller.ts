@@ -86,6 +86,21 @@ export class SocialAccountsController {
     );
   }
 
+  @Post('workspaces/:workspaceId/social-accounts/:socialAccountId/tiktok/creator-info')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:view')
+  tiktokCreatorInfo(
+    @Param('workspaceId') workspaceId: string,
+    @Param('socialAccountId') socialAccountId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.getTikTokCreatorInfo(
+      workspaceId,
+      socialAccountId,
+      this.auditContext(request),
+    );
+  }
+
   @Get('oauth/:platform/callback')
   async callback(
     @Param('platform') platform: string,

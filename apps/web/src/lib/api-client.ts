@@ -16,6 +16,7 @@ import type {
   ReplyTemplateView,
   SocialAccountView,
   StorageUsageView,
+  TikTokCreatorInfoView,
   WorkspaceInvitation,
   WorkspaceMember,
   WorkspaceSummary,
@@ -152,6 +153,11 @@ export const socialAccountsApi = {
   testConnection: (workspaceId: string, socialAccountId: string) =>
     apiFetch<{ ok: true; checkedAt: string; profile: { name: string; username?: string } }>(
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/test`,
+      { method: 'POST' },
+    ),
+  tiktokCreatorInfo: (workspaceId: string, socialAccountId: string) =>
+    apiFetch<TikTokCreatorInfoView>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/tiktok/creator-info`,
       { method: 'POST' },
     ),
 };

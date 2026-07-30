@@ -73,6 +73,17 @@ export interface SocialAccountProfile {
   followersCount?: number;
 }
 
+export interface TikTokCreatorInfo {
+  creatorAvatarUrl?: string;
+  creatorUsername?: string;
+  creatorNickname?: string;
+  privacyLevelOptions: string[];
+  commentDisabled: boolean;
+  duetDisabled: boolean;
+  stitchDisabled: boolean;
+  maxVideoPostDurationSec?: number;
+}
+
 export interface MediaInput {
   type: MediaType;
   /** URL tải được của media. Xem lưu ý về bucket private trong docs §7. */

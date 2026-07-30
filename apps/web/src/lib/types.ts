@@ -83,6 +83,18 @@ export interface OAuthStartResult {
   developmentFixture: boolean;
 }
 
+export interface TikTokCreatorInfoView {
+  creatorAvatarUrl?: string;
+  creatorUsername?: string;
+  creatorNickname?: string;
+  privacyLevelOptions: string[];
+  commentDisabled: boolean;
+  duetDisabled: boolean;
+  stitchDisabled: boolean;
+  maxVideoPostDurationSec?: number;
+  fetchedAt: string;
+}
+
 export interface PlatformCapabilitiesView {
   platform: Platform;
   label: string;

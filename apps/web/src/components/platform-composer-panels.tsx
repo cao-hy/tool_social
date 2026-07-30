@@ -1,13 +1,15 @@
 import { PLATFORM_LABELS } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
-import { ChevronDown } from 'lucide-react';
-import { useState } from 'react';
+import { ChevronDown, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Field, SelectInput, TextInput } from '@/components/form-controls';
+import { socialAccountsApi } from '@/lib/api-client';
+import { getErrorMessage } from '@/lib/errors';
 import {
   platformOverrideDefaults,
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
-import type { MediaAssetView, SocialAccountView } from '@/lib/types';
+import type { MediaAssetView, SocialAccountView, TikTokCreatorInfoView } from '@/lib/types';
 
 interface PlatformComposerPanelsProps {
   accounts: SocialAccountView[];
@@ -15,6 +17,7 @@ interface PlatformComposerPanelsProps {
   drafts: Record<string, PlatformOverrideDraft>;
   disabled?: boolean;
   mediaLocked?: boolean;
+  workspaceId?: string;
   common?: {
     title?: string;
     body?: string;
@@ -29,11 +32,53 @@ export function PlatformComposerPanels({
   drafts,
   disabled = false,
   mediaLocked = false,
+  workspaceId,
   common,
   onChange,
 }: PlatformComposerPanelsProps) {
   const [expandedAccountIds, setExpandedAccountIds] = useState<string[]>([]);
+  const [creatorInfoByAccountId, setCreatorInfoByAccountId] = useState<
+    Record<string, TikTokCreatorInfoView>
+  >({});
+  const [creatorLoadingIds, setCreatorLoadingIds] = useState<string[]>([]);
+  const [creatorErrors, setCreatorErrors] = useState<Record<string, string>>({});
+  const tiktokAccountKey = accounts
+    .filter((account) => account.platform === 'TIKTOK')
+    .map((account) => `${account.id}:${account.scopes.join(',')}`)
+    .join('|');
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    for (const account of accounts) {
+      if (account.platform !== 'TIKTOK') continue;
+      if (!account.scopes.includes('video.publish')) continue;
+      if (creatorErrors[account.id]) continue;
+      if (creatorInfoByAccountId[account.id] || creatorLoadingIds.includes(account.id)) continue;
+      void loadTikTokCreatorInfo(account.id);
+    }
+  }, [workspaceId, tiktokAccountKey, creatorInfoByAccountId, creatorLoadingIds, creatorErrors]);
+
   if (accounts.length === 0) return null;
+
+  async function loadTikTokCreatorInfo(accountId: string) {
+    if (!workspaceId) return;
+    setCreatorLoadingIds((current) =>
+      current.includes(accountId) ? current : [...current, accountId],
+    );
+    setCreatorErrors((current) => {
+      const next = { ...current };
+      delete next[accountId];
+      return next;
+    });
+    try {
+      const creatorInfo = await socialAccountsApi.tiktokCreatorInfo(workspaceId, accountId);
+      setCreatorInfoByAccountId((current) => ({ ...current, [accountId]: creatorInfo }));
+    } catch (error) {
+      setCreatorErrors((current) => ({ ...current, [accountId]: getErrorMessage(error) }));
+    } finally {
+      setCreatorLoadingIds((current) => current.filter((id) => id !== accountId));
+    }
+  }
 
   function toggleExpanded(accountId: string) {
     setExpandedAccountIds((current) =>
@@ -144,6 +189,10 @@ export function PlatformComposerPanels({
                       draft={draft}
                       mediaLocked={mediaLocked}
                       mediaAssets={mediaAssets}
+                      tiktokCreatorInfo={creatorInfoByAccountId[account.id]}
+                      tiktokCreatorInfoError={creatorErrors[account.id]}
+                      tiktokCreatorInfoLoading={creatorLoadingIds.includes(account.id)}
+                      onRefreshTikTokCreatorInfo={() => loadTikTokCreatorInfo(account.id)}
                       onChange={onChange}
                     />
                   ) : (
@@ -218,6 +267,10 @@ function PlatformFields({
   draft,
   mediaLocked,
   mediaAssets,
+  tiktokCreatorInfo,
+  tiktokCreatorInfoError,
+  tiktokCreatorInfoLoading,
+  onRefreshTikTokCreatorInfo,
   onChange,
 }: {
   account: SocialAccountView;
@@ -225,8 +278,14 @@ function PlatformFields({
   draft: PlatformOverrideDraft;
   mediaLocked: boolean;
   mediaAssets: MediaAssetView[];
+  tiktokCreatorInfo?: TikTokCreatorInfoView;
+  tiktokCreatorInfoError?: string;
+  tiktokCreatorInfoLoading?: boolean;
+  onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
 }) {
+  const resolvedMedia = resolveMedia(draft, mediaAssets);
+
   return (
     <div className="mt-4 space-y-4">
       <div className="grid gap-3 md:grid-cols-2">
@@ -277,7 +336,17 @@ function PlatformFields({
         ) : null}
       </div>
 
-      <PlatformOptions account={account} disabled={disabled} draft={draft} onChange={onChange} />
+      <PlatformOptions
+        account={account}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={resolvedMedia}
+        tiktokCreatorInfo={tiktokCreatorInfo}
+        tiktokCreatorInfoError={tiktokCreatorInfoError}
+        tiktokCreatorInfoLoading={tiktokCreatorInfoLoading ?? false}
+        onRefreshTikTokCreatorInfo={onRefreshTikTokCreatorInfo}
+        onChange={onChange}
+      />
       <MediaSelector
         account={account}
         disabled={disabled || mediaLocked}
@@ -293,11 +362,21 @@ function PlatformOptions({
   account,
   disabled,
   draft,
+  mediaAssets,
+  tiktokCreatorInfo,
+  tiktokCreatorInfoError,
+  tiktokCreatorInfoLoading,
+  onRefreshTikTokCreatorInfo,
   onChange,
 }: {
   account: SocialAccountView;
   disabled: boolean;
   draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
+  tiktokCreatorInfo?: TikTokCreatorInfoView;
+  tiktokCreatorInfoError?: string;
+  tiktokCreatorInfoLoading: boolean;
+  onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
 }) {
   if (account.platform === 'FACEBOOK') {
@@ -457,6 +536,119 @@ function PlatformOptions({
 
   if (account.platform === 'TIKTOK') {
     return (
+      <TikTokOptionsPanel
+        account={account}
+        creatorInfo={tiktokCreatorInfo}
+        creatorInfoError={tiktokCreatorInfoError}
+        creatorInfoLoading={tiktokCreatorInfoLoading}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={mediaAssets}
+        onChange={onChange}
+        onRefreshCreatorInfo={onRefreshTikTokCreatorInfo}
+      />
+    );
+  }
+
+  return null;
+}
+
+function TikTokOptionsPanel({
+  account,
+  creatorInfo,
+  creatorInfoError,
+  creatorInfoLoading,
+  disabled,
+  draft,
+  mediaAssets,
+  onChange,
+  onRefreshCreatorInfo,
+}: {
+  account: SocialAccountView;
+  creatorInfo?: TikTokCreatorInfoView;
+  creatorInfoError?: string;
+  creatorInfoLoading: boolean;
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onRefreshCreatorInfo: () => void;
+}) {
+  const directPost = draft.tiktokPostMode === 'DIRECT_POST';
+  const videos = mediaAssets.filter((asset) => asset.type === 'VIDEO');
+  const images = mediaAssets.filter((asset) => asset.type === 'IMAGE');
+  const firstVideo = videos[0];
+  const privacyOptions = creatorInfo?.privacyLevelOptions ?? [];
+  const selectedPrivacy = privacyOptions.includes(draft.tiktokPrivacyLevel)
+    ? draft.tiktokPrivacyLevel
+    : '';
+  const durationTooLong =
+    Boolean(firstVideo?.durationSec && creatorInfo?.maxVideoPostDurationSec) &&
+    Number(firstVideo?.durationSec) > Number(creatorInfo?.maxVideoPostDurationSec);
+  const brandedPrivateConflict =
+    directPost && draft.tiktokBrandContent && draft.tiktokPrivacyLevel === 'SELF_ONLY';
+
+  return (
+    <div className="space-y-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+        <div className="flex min-w-0 items-center gap-3">
+          {creatorInfo?.creatorAvatarUrl ? (
+            <img
+              alt=""
+              className="h-10 w-10 rounded-full border border-slate-200 object-cover"
+              src={creatorInfo.creatorAvatarUrl}
+            />
+          ) : (
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-500">
+              TT
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-slate-950">
+              {creatorInfo?.creatorNickname || account.name}
+            </p>
+            <p className="truncate text-xs text-slate-500">
+              {creatorInfo?.creatorUsername
+                ? `@${creatorInfo.creatorUsername}`
+                : (account.username ?? account.id)}
+            </p>
+          </div>
+        </div>
+        <button
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 disabled:cursor-wait disabled:opacity-60"
+          disabled={disabled || creatorInfoLoading}
+          type="button"
+          onClick={onRefreshCreatorInfo}
+        >
+          <RefreshCw className={`h-4 w-4 ${creatorInfoLoading ? 'animate-spin' : ''}`} />
+          Creator settings
+        </button>
+      </div>
+
+      {creatorInfo ? (
+        <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-4">
+          <InheritedChip label="Privacy options" value={`${privacyOptions.length} lựa chọn`} />
+          <InheritedChip
+            label="Max video"
+            value={formatSeconds(creatorInfo.maxVideoPostDurationSec)}
+          />
+          <InheritedChip label="Interactions" value={tiktokInteractionSummary(creatorInfo)} />
+          <InheritedChip label="Fetched" value={formatShortDate(creatorInfo.fetchedAt)} />
+        </div>
+      ) : null}
+
+      {creatorInfoError ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {creatorInfoError}
+        </div>
+      ) : null}
+
+      {directPost && !creatorInfo && !creatorInfoError ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Direct Post cần tải creator settings từ TikTok trước khi publish.
+        </div>
+      ) : null}
+
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Publish mode">
           <SelectInput
@@ -469,13 +661,14 @@ function PlatformOptions({
             }
           >
             <option value="DIRECT_POST">Direct post</option>
-            <option value="MEDIA_UPLOAD">Upload to TikTok Inbox</option>
+            <option value="MEDIA_UPLOAD">Send to user inbox</option>
           </SelectInput>
         </Field>
+
         <Field label="Privacy TikTok">
           <SelectInput
-            disabled={disabled || draft.tiktokPostMode !== 'DIRECT_POST'}
-            value={draft.tiktokPrivacyLevel}
+            disabled={disabled || !directPost || !creatorInfo}
+            value={selectedPrivacy}
             onChange={(event) =>
               onChange(account.id, {
                 tiktokPrivacyLevel: event.target
@@ -483,67 +676,153 @@ function PlatformOptions({
               })
             }
           >
-            <option value="PUBLIC_TO_EVERYONE">Public</option>
-            <option value="MUTUAL_FOLLOW_FRIENDS">Friends</option>
-            <option value="FOLLOWER_OF_CREATOR">Followers</option>
-            <option value="SELF_ONLY">Only me</option>
+            <option value="">Chọn privacy từ TikTok</option>
+            {privacyOptions.map((privacy) => (
+              <option key={privacy} value={privacy}>
+                {tiktokPrivacyLabel(privacy)}
+              </option>
+            ))}
           </SelectInput>
         </Field>
-        <Field label="Cover timestamp ms">
+      </div>
+
+      {directPost ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          <SwitchRow
+            checked={!draft.tiktokDisableComment && !creatorInfo?.commentDisabled}
+            disabled={disabled || creatorInfo?.commentDisabled === true}
+            label={creatorInfo?.commentDisabled ? 'Comment bị tắt trên TikTok' : 'Cho phép comment'}
+            onChange={(checked) => onChange(account.id, { tiktokDisableComment: !checked })}
+          />
+          <SwitchRow
+            checked={!draft.tiktokDisableDuet && !creatorInfo?.duetDisabled}
+            disabled={disabled || images.length > 0 || creatorInfo?.duetDisabled === true}
+            label={creatorInfo?.duetDisabled ? 'Duet bị tắt trên TikTok' : 'Cho phép duet'}
+            onChange={(checked) => onChange(account.id, { tiktokDisableDuet: !checked })}
+          />
+          <SwitchRow
+            checked={!draft.tiktokDisableStitch && !creatorInfo?.stitchDisabled}
+            disabled={disabled || images.length > 0 || creatorInfo?.stitchDisabled === true}
+            label={creatorInfo?.stitchDisabled ? 'Stitch bị tắt trên TikTok' : 'Cho phép stitch'}
+            onChange={(checked) => onChange(account.id, { tiktokDisableStitch: !checked })}
+          />
+        </div>
+      ) : (
+        <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+          Send to user inbox chỉ upload video vào TikTok app. Người dùng mở TikTok để chỉnh sửa và
+          đăng.
+        </div>
+      )}
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label={videos.length > 0 ? 'Cover timestamp ms' : 'Photo cover index'}>
           <TextInput
-            disabled={disabled}
+            disabled={disabled || !directPost}
             inputMode="numeric"
-            placeholder="Ví dụ 1500"
-            value={draft.tiktokCoverTimestampMs}
+            placeholder={videos.length > 0 ? 'Ví dụ 1500' : '0'}
+            value={videos.length > 0 ? draft.tiktokCoverTimestampMs : draft.tiktokPhotoCoverIndex}
             onChange={(event) =>
-              onChange(account.id, {
-                tiktokCoverTimestampMs: event.target.value.replace(/\D/g, ''),
-              })
+              onChange(
+                account.id,
+                videos.length > 0
+                  ? { tiktokCoverTimestampMs: event.target.value.replace(/\D/g, '') }
+                  : { tiktokPhotoCoverIndex: event.target.value.replace(/\D/g, '') },
+              )
             }
           />
         </Field>
-        <Field label="Photo cover index">
-          <TextInput
-            disabled={disabled}
-            inputMode="numeric"
-            placeholder="0"
-            value={draft.tiktokPhotoCoverIndex}
-            onChange={(event) =>
-              onChange(account.id, {
-                tiktokPhotoCoverIndex: event.target.value.replace(/\D/g, ''),
-              })
-            }
-          />
-        </Field>
         <SwitchRow
-          checked={draft.tiktokDisableComment}
-          disabled={disabled || draft.tiktokPostMode !== 'DIRECT_POST'}
-          label="Tắt comment"
-          onChange={(checked) => onChange(account.id, { tiktokDisableComment: checked })}
-        />
-        <SwitchRow
-          checked={draft.tiktokDisableDuet}
-          disabled={disabled}
-          label="Tắt duet"
-          onChange={(checked) => onChange(account.id, { tiktokDisableDuet: checked })}
-        />
-        <SwitchRow
-          checked={draft.tiktokDisableStitch}
-          disabled={disabled}
-          label="Tắt stitch"
-          onChange={(checked) => onChange(account.id, { tiktokDisableStitch: checked })}
-        />
-        <SwitchRow
-          checked={draft.tiktokAutoAddMusic}
-          disabled={disabled || draft.tiktokPostMode !== 'DIRECT_POST'}
-          label="Auto add music cho ảnh"
-          onChange={(checked) => onChange(account.id, { tiktokAutoAddMusic: checked })}
+          checked={draft.tiktokIsAiGenerated}
+          disabled={disabled || !directPost}
+          label="Nội dung có AI-generated"
+          onChange={(checked) => onChange(account.id, { tiktokIsAiGenerated: checked })}
         />
       </div>
-    );
-  }
 
-  return null;
+      {directPost && images.length > 0 ? (
+        <SwitchRow
+          checked={draft.tiktokAutoAddMusic}
+          disabled={disabled}
+          label="TikTok tự thêm nhạc cho photo post"
+          onChange={(checked) => onChange(account.id, { tiktokAutoAddMusic: checked })}
+        />
+      ) : null}
+
+      {directPost ? (
+        <div className="space-y-3 rounded-md border border-slate-200 bg-white p-3">
+          <SwitchRow
+            checked={draft.tiktokCommercialContent}
+            disabled={disabled}
+            label="Có nội dung thương mại"
+            onChange={(checked) =>
+              onChange(account.id, {
+                tiktokCommercialContent: checked,
+                tiktokBrandContent: checked ? draft.tiktokBrandContent : false,
+                tiktokBrandOrganic: checked ? draft.tiktokBrandOrganic : false,
+              })
+            }
+          />
+          {draft.tiktokCommercialContent ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <SwitchRow
+                checked={draft.tiktokBrandOrganic}
+                disabled={disabled}
+                label="Your brand"
+                onChange={(checked) => onChange(account.id, { tiktokBrandOrganic: checked })}
+              />
+              <SwitchRow
+                checked={draft.tiktokBrandContent}
+                disabled={disabled}
+                label="Branded content"
+                onChange={(checked) => onChange(account.id, { tiktokBrandContent: checked })}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {durationTooLong ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Video dài {formatSeconds(firstVideo?.durationSec)} vượt giới hạn TikTok hiện tại{' '}
+          {formatSeconds(creatorInfo?.maxVideoPostDurationSec)}.
+        </div>
+      ) : null}
+
+      {brandedPrivateConflict ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Branded content không được đăng ở privacy Only me.
+        </div>
+      ) : null}
+
+      {directPost ? (
+        <SwitchRow
+          checked={draft.tiktokConsentConfirmed}
+          disabled={disabled}
+          label="Tôi đồng ý TikTok Music Usage Confirmation trước khi đăng"
+          onChange={(checked) => onChange(account.id, { tiktokConsentConfirmed: checked })}
+        />
+      ) : null}
+
+      <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+        <p className="font-semibold text-slate-900">Media preview</p>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          {mediaAssets.length > 0 ? (
+            mediaAssets.map((asset) => (
+              <div key={asset.id} className="rounded-md bg-slate-50 px-3 py-2">
+                <p className="truncate font-medium">{asset.originalFileName ?? asset.id}</p>
+                <p className="text-xs text-slate-500">
+                  {asset.mimeType ?? asset.type} · {formatBytes(asset.sizeBytes)}
+                  {asset.durationSec ? ` · ${formatSeconds(asset.durationSec)}` : ''}
+                </p>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-slate-500">Chưa có media cho target TikTok.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function MediaSelector({
@@ -629,6 +908,53 @@ function SwitchRow({
       {label}
     </label>
   );
+}
+
+function tiktokPrivacyLabel(value: string): string {
+  switch (value) {
+    case 'PUBLIC_TO_EVERYONE':
+      return 'Public';
+    case 'MUTUAL_FOLLOW_FRIENDS':
+      return 'Friends';
+    case 'FOLLOWER_OF_CREATOR':
+      return 'Followers';
+    case 'SELF_ONLY':
+      return 'Only me';
+    default:
+      return value;
+  }
+}
+
+function tiktokInteractionSummary(creatorInfo: TikTokCreatorInfoView): string {
+  const disabled = [
+    creatorInfo.commentDisabled ? 'comment' : null,
+    creatorInfo.duetDisabled ? 'duet' : null,
+    creatorInfo.stitchDisabled ? 'stitch' : null,
+  ].filter(Boolean);
+  return disabled.length > 0 ? `Tắt ${disabled.join(', ')}` : 'Đều có thể bật';
+}
+
+function formatShortDate(value: string): string {
+  return new Intl.DateTimeFormat('vi-VN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    day: '2-digit',
+    month: '2-digit',
+  }).format(new Date(value));
+}
+
+function formatSeconds(value: number | null | undefined): string {
+  if (!value || !Number.isFinite(value)) return '-';
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+function formatBytes(value: number | null | undefined): string {
+  if (!value || !Number.isFinite(value)) return '-';
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function platformChecklist(platform: Platform, media: MediaAssetView[]): string[] {

@@ -30,7 +30,9 @@ RUN npm run build -w @socialhub/shared \
  && npm run build -w @socialhub/platform-adapters \
  && npx tsc -p packages/db/tsconfig.build.json \
  && npm run build -w @socialhub/api
-RUN npm prune --omit=dev --ignore-scripts
+RUN npm prune --omit=dev --include=optional --ignore-scripts \
+ && npm install --omit=dev --include=optional --ignore-scripts --os=linux --libc=musl --cpu=x64 sharp@0.35.3 \
+ && node -e "require('sharp')"
 
 # ---------------------------------------------------------------- runtime
 FROM base AS runtime

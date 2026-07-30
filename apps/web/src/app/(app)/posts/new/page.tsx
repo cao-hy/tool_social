@@ -214,6 +214,7 @@ export default function NewPostPage() {
           caption: draft.caption.trim() || undefined,
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssets: selectedMedia,
+          options: platformOptions(account.platform, draft),
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -406,6 +407,7 @@ export default function NewPostPage() {
           common={{ title, body, linkUrl }}
           drafts={platformOverrides}
           mediaAssets={mediaAssets}
+          workspaceId={workspace.id}
           onChange={updateOverride}
         />
       </section>
