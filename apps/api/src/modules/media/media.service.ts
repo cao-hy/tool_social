@@ -148,13 +148,10 @@ export class MediaService {
     });
     if (!media) throw AppError.notFound('media asset');
 
-    const object = await this.s3.send(
-      new GetObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.storageKey }),
-    );
-    const bytes = Buffer.from((await object.Body?.transformToByteArray()) ?? []);
-    if (bytes.length === 0) throw AppError.validation('File upload rỗng hoặc chưa tồn tại.');
+    const probeBytes = await this.readObjectBytes(media.storageKey, 'bytes=0-8191');
+    if (probeBytes.length === 0) throw AppError.validation('File upload rỗng hoặc chưa tồn tại.');
 
-    const detected = await fileTypeFromBuffer(bytes);
+    const detected = await fileTypeFromBuffer(probeBytes);
     const detectedMime = detected?.mime;
 
     if (!detectedMime) throw AppError.validation('Không xác định được MIME từ magic bytes.');
@@ -166,29 +163,41 @@ export class MediaService {
     }
 
     const mediaType = this.mediaTypeFromDetectedMime(detectedMime);
-    const image = mediaType === 'IMAGE' ? sharp(bytes, { failOn: 'none' }).rotate() : null;
-    const metadata = image ? await image.metadata().catch(() => undefined) : undefined;
+    if (mediaType === 'VIDEO') {
+      const updated = await this.prisma.mediaAsset.update({
+        where: { id: media.id },
+        data: {
+          type: mediaType,
+          status: 'READY',
+          mimeType: detectedMime,
+          sizeBytes: media.sizeBytes,
+        },
+      });
+
+      return this.toMediaView(updated);
+    }
+
+    const bytes = await this.readObjectBytes(media.storageKey);
+    const image = sharp(bytes, { failOn: 'none' }).rotate();
+    const metadata = await image.metadata().catch(() => undefined);
 
     let finalBytes: Buffer<ArrayBufferLike> = bytes;
-    if (mediaType === 'IMAGE') {
-      if (!image) throw AppError.validation('Không xử lý được ảnh upload.');
-      try {
-        finalBytes = await image
-          .toFormat(detected?.ext === 'png' ? 'png' : detected?.ext === 'webp' ? 'webp' : 'jpeg')
-          .toBuffer();
-      } catch {
-        throw AppError.validation('Ảnh upload bị lỗi hoặc không đọc được bằng bộ xử lý ảnh.');
-      }
-
-      await this.s3.send(
-        new PutObjectCommand({
-          Bucket: this.env.S3_BUCKET,
-          Key: media.storageKey,
-          Body: finalBytes,
-          ContentType: detectedMime,
-        }),
-      );
+    try {
+      finalBytes = await image
+        .toFormat(detected?.ext === 'png' ? 'png' : detected?.ext === 'webp' ? 'webp' : 'jpeg')
+        .toBuffer();
+    } catch {
+      throw AppError.validation('Ảnh upload bị lỗi hoặc không đọc được bằng bộ xử lý ảnh.');
     }
+
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.env.S3_BUCKET,
+        Key: media.storageKey,
+        Body: finalBytes,
+        ContentType: detectedMime,
+      }),
+    );
 
     const updated = await this.prisma.mediaAsset.update({
       where: { id: media.id },
@@ -203,6 +212,17 @@ export class MediaService {
     });
 
     return this.toMediaView(updated);
+  }
+
+  private async readObjectBytes(storageKey: string, range?: string): Promise<Buffer> {
+    const object = await this.s3.send(
+      new GetObjectCommand({
+        Bucket: this.env.S3_BUCKET,
+        Key: storageKey,
+        Range: range,
+      }),
+    );
+    return Buffer.from((await object.Body?.transformToByteArray()) ?? []);
   }
 
   async uploadObject(
