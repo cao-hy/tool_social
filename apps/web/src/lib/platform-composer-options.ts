@@ -49,7 +49,7 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   youtubeCategoryId: '22',
   youtubeMadeForKids: false,
   youtubeContainsSyntheticMedia: false,
-  tiktokPostMode: 'DIRECT_POST',
+  tiktokPostMode: 'MEDIA_UPLOAD',
   tiktokPrivacyLevel: 'PUBLIC_TO_EVERYONE',
   tiktokDisableComment: false,
   tiktokDisableDuet: false,
@@ -103,7 +103,7 @@ export function platformOverrideFromOptions(input: {
     youtubeCategoryId: readString(options.categoryId) || '22',
     youtubeMadeForKids: readBoolean(options.selfDeclaredMadeForKids, false),
     youtubeContainsSyntheticMedia: readBoolean(options.containsSyntheticMedia, false),
-    tiktokPostMode: readEnum(options.postMode, ['DIRECT_POST', 'MEDIA_UPLOAD'], 'DIRECT_POST'),
+    tiktokPostMode: readEnum(options.postMode, ['DIRECT_POST', 'MEDIA_UPLOAD'], 'MEDIA_UPLOAD'),
     tiktokPrivacyLevel: readEnum(
       options.privacyLevel,
       ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],

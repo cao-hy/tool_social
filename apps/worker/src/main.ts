@@ -1,7 +1,13 @@
 import { createServer, type Server } from 'node:http';
 import { S3Client } from '@aws-sdk/client-s3';
 import { loadEnvOrExit, loadWorkerEnv, type WorkerEnv } from '@socialhub/config';
-import { AdapterRegistry, createRuntimeAdapterRegistry } from '@socialhub/platform-adapters';
+import {
+  AdapterRegistry,
+  createRuntimeAdapterRegistry,
+  TIKTOK_DIRECT_POST_SCOPE,
+  TIKTOK_OAUTH_SCOPES,
+  TIKTOK_VIDEO_LIST_SCOPE,
+} from '@socialhub/platform-adapters';
 import { Keyring } from '@socialhub/security';
 import Redis from 'ioredis';
 import { logger } from './logger';
@@ -151,9 +157,11 @@ function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
     tiktok: {
       clientKey: env.TIKTOK_CLIENT_KEY,
       clientSecret: env.TIKTOK_CLIENT_SECRET,
-      scopes: env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE
-        ? ['user.info.basic', 'video.publish', 'video.upload', 'video.list']
-        : undefined,
+      scopes: [
+        ...TIKTOK_OAUTH_SCOPES,
+        ...(env.TIKTOK_ENABLE_DIRECT_POST_SCOPE ? [TIKTOK_DIRECT_POST_SCOPE] : []),
+        ...(env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE ? [TIKTOK_VIDEO_LIST_SCOPE] : []),
+      ],
     },
   });
 }

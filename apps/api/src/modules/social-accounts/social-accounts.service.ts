@@ -4,7 +4,9 @@ import {
   FACEBOOK_PAGES_OAUTH_SCOPES,
   INSTAGRAM_OAUTH_SCOPES,
   PINTEREST_OAUTH_SCOPES,
+  TIKTOK_DIRECT_POST_SCOPE,
   TIKTOK_OAUTH_SCOPES,
+  TIKTOK_VIDEO_LIST_SCOPE,
   YOUTUBE_OAUTH_SCOPES,
   isPlatformError,
   type AdapterRegistry,
@@ -552,9 +554,11 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (platform === 'PINTEREST') return [...PINTEREST_OAUTH_SCOPES];
     if (platform === 'YOUTUBE') return [...YOUTUBE_OAUTH_SCOPES];
     if (platform === 'TIKTOK') {
-      return this.env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE
-        ? [...TIKTOK_OAUTH_SCOPES, 'video.list']
-        : [...TIKTOK_OAUTH_SCOPES];
+      return [
+        ...TIKTOK_OAUTH_SCOPES,
+        ...(this.env.TIKTOK_ENABLE_DIRECT_POST_SCOPE ? [TIKTOK_DIRECT_POST_SCOPE] : []),
+        ...(this.env.TIKTOK_ENABLE_VIDEO_LIST_SCOPE ? [TIKTOK_VIDEO_LIST_SCOPE] : []),
+      ];
     }
     return ['development-fixture'];
   }

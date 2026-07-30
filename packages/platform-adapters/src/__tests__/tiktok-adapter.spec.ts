@@ -35,11 +35,7 @@ describe('TikTokAdapter', () => {
     expect(url.searchParams.get('redirect_uri')).toBe(
       'http://localhost:4000/api/v1/oauth/tiktok/callback',
     );
-    expect(url.searchParams.get('scope')?.split(',')).toEqual([
-      'user.info.basic',
-      'video.publish',
-      'video.upload',
-    ]);
+    expect(url.searchParams.get('scope')?.split(',')).toEqual(['user.info.basic', 'video.upload']);
   });
 
   it('đổi code thành token và lấy TikTok profile', async () => {
@@ -54,7 +50,7 @@ describe('TikTokAdapter', () => {
           open_id: 'open-1',
           refresh_expires_in: 31536000,
           refresh_token: 'tt-refresh',
-          scope: 'user.info.basic,video.publish,video.upload',
+          scope: 'user.info.basic,video.upload',
           token_type: 'Bearer',
         });
       }
@@ -161,6 +157,7 @@ describe('TikTokAdapter', () => {
               sizeBytes: 3,
             },
           ],
+          options: { postMode: 'DIRECT_POST' },
         },
       ),
     ).resolves.toMatchObject({
@@ -270,7 +267,7 @@ describe('TikTokAdapter', () => {
               sizeBytes: 3000,
             },
           ],
-          options: { privacyLevel: 'SELF_ONLY' },
+          options: { postMode: 'DIRECT_POST', privacyLevel: 'SELF_ONLY' },
         },
       ),
     ).resolves.toMatchObject({

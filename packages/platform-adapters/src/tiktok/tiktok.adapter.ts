@@ -25,7 +25,9 @@ export interface TikTokAdapterConfig extends TikTokClientConfig {
   scopes?: string[];
 }
 
-export const TIKTOK_OAUTH_SCOPES = ['user.info.basic', 'video.publish', 'video.upload'] as const;
+export const TIKTOK_OAUTH_SCOPES = ['user.info.basic', 'video.upload'] as const;
+export const TIKTOK_DIRECT_POST_SCOPE = 'video.publish';
+export const TIKTOK_VIDEO_LIST_SCOPE = 'video.list';
 
 export interface TikTokPublishPlatformState {
   publishId: string;
@@ -251,7 +253,7 @@ function tiktokPublishOptions(options: Record<string, unknown> | undefined): {
   const timestamp = Number(options?.videoCoverTimestampMs);
   const photoCoverIndex = Number(options?.photoCoverIndex);
   return {
-    postMode: options?.postMode === 'MEDIA_UPLOAD' ? 'MEDIA_UPLOAD' : 'DIRECT_POST',
+    postMode: options?.postMode === 'DIRECT_POST' ? 'DIRECT_POST' : 'MEDIA_UPLOAD',
     privacyLevel: typeof options?.privacyLevel === 'string' ? options.privacyLevel : undefined,
     disableComment: options?.disableComment === true,
     disableDuet: options?.disableDuet === true,

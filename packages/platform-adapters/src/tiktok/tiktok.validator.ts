@@ -95,7 +95,7 @@ export function validateTikTokPost(input: PublishPostInput): ValidationResult {
 function tiktokPostMode(
   options: Record<string, unknown> | undefined,
 ): 'DIRECT_POST' | 'MEDIA_UPLOAD' {
-  return options?.postMode === 'MEDIA_UPLOAD' ? 'MEDIA_UPLOAD' : 'DIRECT_POST';
+  return options?.postMode === 'DIRECT_POST' ? 'DIRECT_POST' : 'MEDIA_UPLOAD';
 }
 
 function isPublicHttpsUrl(value: string): boolean {
