@@ -2,7 +2,7 @@ import { PLATFORM_LABELS } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
 import { Field, SelectInput, TextInput } from '@/components/form-controls';
 import {
-  EMPTY_PLATFORM_OVERRIDE,
+  platformOverrideDefaults,
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
 import type { MediaAssetView, SocialAccountView } from '@/lib/types';
@@ -47,7 +47,8 @@ export function PlatformComposerPanels({
 
       <div className="grid gap-3">
         {accounts.map((account) => {
-          const draft = drafts[account.id] ?? EMPTY_PLATFORM_OVERRIDE;
+          const draft =
+            drafts[account.id] ?? platformOverrideDefaults(account.platform, account.scopes);
           const issues = platformChecklist(account.platform, resolveMedia(draft, mediaAssets));
           return (
             <article

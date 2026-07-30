@@ -18,6 +18,7 @@ import { getErrorMessage } from '@/lib/errors';
 import {
   EMPTY_PLATFORM_OVERRIDE,
   isPlatformOverrideActive,
+  platformOverrideDefaults,
   platformOptions,
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
@@ -84,8 +85,10 @@ export default function NewPostPage() {
     );
   }
 
-  function overrideFor(accountId: string): PlatformOverrideDraft {
-    return platformOverrides[accountId] ?? EMPTY_PLATFORM_OVERRIDE;
+  function overrideFor(account: SocialAccountView): PlatformOverrideDraft {
+    return (
+      platformOverrides[account.id] ?? platformOverrideDefaults(account.platform, account.scopes)
+    );
   }
 
   function updateOverride(accountId: string, patch: Partial<PlatformOverrideDraft>): void {
@@ -199,7 +202,7 @@ export default function NewPostPage() {
   function buildValidationOverrides() {
     return selectedAccounts
       .map((account) => {
-        const draft = overrideFor(account.id);
+        const draft = overrideFor(account);
         if (!isPlatformOverrideActive(account.platform, draft)) return null;
         const selectedMedia =
           draft.mediaAssetIds.length > 0
@@ -219,7 +222,7 @@ export default function NewPostPage() {
   function buildPlatformOverridePayload() {
     return selectedAccounts
       .map((account) => {
-        const draft = overrideFor(account.id);
+        const draft = overrideFor(account);
         if (!isPlatformOverrideActive(account.platform, draft)) return null;
         const options = platformOptions(account.platform, draft);
         return {

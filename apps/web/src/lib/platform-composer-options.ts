@@ -59,6 +59,15 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   tiktokPhotoCoverIndex: '',
 };
 
+export function platformOverrideDefaults(platform: Platform, scopes: string[] = []) {
+  const canDirectPostTikTok = platform === 'TIKTOK' && scopes.includes('video.publish');
+  return {
+    ...EMPTY_PLATFORM_OVERRIDE,
+    customized: canDirectPostTikTok,
+    tiktokPostMode: canDirectPostTikTok ? 'DIRECT_POST' : 'MEDIA_UPLOAD',
+  } satisfies PlatformOverrideDraft;
+}
+
 export function platformOverrideFromOptions(input: {
   title?: string | null;
   caption?: string | null;
