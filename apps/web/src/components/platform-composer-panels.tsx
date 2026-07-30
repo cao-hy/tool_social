@@ -12,6 +12,7 @@ interface PlatformComposerPanelsProps {
   mediaAssets: MediaAssetView[];
   drafts: Record<string, PlatformOverrideDraft>;
   disabled?: boolean;
+  mediaLocked?: boolean;
   common?: {
     title?: string;
     body?: string;
@@ -25,6 +26,7 @@ export function PlatformComposerPanels({
   mediaAssets,
   drafts,
   disabled = false,
+  mediaLocked = false,
   common,
   onChange,
 }: PlatformComposerPanelsProps) {
@@ -115,6 +117,7 @@ export function PlatformComposerPanels({
                     account={account}
                     disabled={disabled}
                     draft={draft}
+                    mediaLocked={mediaLocked}
                     mediaAssets={mediaAssets}
                     onChange={onChange}
                   />
@@ -141,12 +144,14 @@ function PlatformFields({
   account,
   disabled,
   draft,
+  mediaLocked,
   mediaAssets,
   onChange,
 }: {
   account: SocialAccountView;
   disabled: boolean;
   draft: PlatformOverrideDraft;
+  mediaLocked: boolean;
   mediaAssets: MediaAssetView[];
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
 }) {
@@ -203,7 +208,7 @@ function PlatformFields({
       <PlatformOptions account={account} disabled={disabled} draft={draft} onChange={onChange} />
       <MediaSelector
         account={account}
-        disabled={disabled}
+        disabled={disabled || mediaLocked}
         draft={draft}
         mediaAssets={mediaAssets}
         onChange={onChange}

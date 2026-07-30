@@ -10,11 +10,11 @@ import { countVerified, findStaleCapabilities, isSupported } from '../core/capab
 
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
   const verifiedCounts = {
-    FACEBOOK: 2,
+    FACEBOOK: 4,
     INSTAGRAM: 0,
     PINTEREST: 6,
     TIKTOK: 5,
-    YOUTUBE: 6,
+    YOUTUBE: 8,
   } as const;
 
   it('có bảng cho cả 5 nền tảng', () => {
@@ -42,7 +42,11 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       const table = CAPABILITY_MATRIX[platform];
       for (const key of Object.keys(table.capabilities) as Array<keyof typeof table.capabilities>) {
         expect(isSupported(table, key)).toBe(
-          (platform === 'FACEBOOK' && (key === 'readComments' || key === 'replyToComment')) ||
+          (platform === 'FACEBOOK' &&
+            (key === 'readComments' ||
+              key === 'replyToComment' ||
+              key === 'editPublishedPost' ||
+              key === 'deletePublishedPost')) ||
             (platform === 'PINTEREST' &&
               (key === 'publishImage' ||
                 key === 'publishVideo' ||
@@ -54,7 +58,9 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'refreshToken' ||
                 key === 'revokeToken' ||
                 key === 'readComments' ||
-                key === 'replyToComment')) ||
+                key === 'replyToComment' ||
+                key === 'editPublishedPost' ||
+                key === 'deletePublishedPost')) ||
             (platform === 'TIKTOK' &&
               (key === 'publishVideo' || key === 'refreshToken' || key === 'revokeToken')),
         );
@@ -77,11 +83,11 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       expect(progress[platform].verified).toBe(verifiedCounts[platform]);
       expect(progress[platform].percent).toBe(
         platform === 'FACEBOOK'
-          ? 6
+          ? 13
           : platform === 'PINTEREST'
             ? 19
             : platform === 'YOUTUBE'
-              ? 19
+              ? 25
               : platform === 'TIKTOK'
                 ? 16
                 : 0,

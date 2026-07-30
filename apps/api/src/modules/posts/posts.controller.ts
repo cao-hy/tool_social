@@ -22,11 +22,13 @@ import { zodPipe } from '../../common/pipes/zod-validation.pipe';
 import { getRequestId } from '../../common/request-context';
 import {
   createPostSchema,
+  deletePostQuerySchema,
   listPostsQuerySchema,
   publishPostSchema,
   schedulePostSchema,
   updatePostSchema,
   type CreatePostInput,
+  type DeletePostQuery,
   type ListPostsQuery,
   type PublishPostInputDto,
   type SchedulePostInput,
@@ -94,12 +96,17 @@ export class PostsController {
   delete(
     @Param('workspaceId') workspaceId: string,
     @Param('postId') postId: string,
+    @Query(zodPipe(deletePostQuerySchema)) query: DeletePostQuery,
     @Req() request: FastifyRequest & AuthenticatedRequest,
   ): Promise<unknown> {
     return this.posts.deletePost(
       workspaceId,
       postId,
       requireUser(request).id,
+      {
+        deleteFromPlatforms: query.deleteFromPlatforms,
+        platformPostIds: query.platformPostIds,
+      },
       this.auditContext(request),
     );
   }

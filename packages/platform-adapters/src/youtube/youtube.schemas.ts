@@ -60,6 +60,9 @@ export const youtubeVideoResponseSchema = z.object({
     .object({
       title: optionalNullableString,
       channelId: optionalNullableString,
+      description: optionalNullableString,
+      categoryId: optionalNullableString,
+      tags: z.array(z.string()).optional(),
     })
     .optional(),
   status: z

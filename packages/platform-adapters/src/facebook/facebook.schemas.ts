@@ -103,3 +103,10 @@ export const facebookCommentReplyResponseSchema = z.object({
 });
 
 export type FacebookCommentReplyResponse = z.infer<typeof facebookCommentReplyResponseSchema>;
+
+export const facebookMutationResponseSchema = z.object({
+  success: z.boolean().optional(),
+  id: z.string().min(1).optional(),
+});
+
+export type FacebookMutationResponse = z.infer<typeof facebookMutationResponseSchema>;

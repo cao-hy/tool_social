@@ -8,6 +8,7 @@ import type {
   PlatformComment,
   PlatformPostData,
   PostMetrics,
+  EditPostInput,
   PublishPostInput,
   PublishResult,
   SocialAccountProfile,
@@ -135,6 +136,28 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
 
   async getPosts(): Promise<Paginated<PlatformPostData>> {
     throw capabilityUnsupported('YOUTUBE', 'getPosts');
+  }
+
+  async editPost(ctx: AdapterContext, externalPostId: string, input: EditPostInput): Promise<void> {
+    const current = await this.client.getVideoStatus(ctx.accessToken, externalPostId);
+    const options = youtubePublishOptions(input.options);
+    const tags =
+      input.hashtags?.map((tag) => tag.replace(/^#/, '')).filter(Boolean) ?? current.snippet?.tags;
+
+    await this.client.updateVideoMetadata({
+      accessToken: ctx.accessToken,
+      videoId: externalPostId,
+      title: input.title?.trim() || current.snippet?.title || 'Untitled video',
+      description: input.description ?? input.caption ?? current.snippet?.description,
+      tags,
+      categoryId: options.categoryId || current.snippet?.categoryId || '22',
+      privacyStatus: current.status?.privacyStatus,
+      selfDeclaredMadeForKids: options.selfDeclaredMadeForKids,
+    });
+  }
+
+  async deletePost(ctx: AdapterContext, externalPostId: string): Promise<void> {
+    await this.client.deleteVideo(ctx.accessToken, externalPostId);
   }
 
   async getVideoPlatformState(

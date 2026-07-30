@@ -48,6 +48,23 @@ export const schedulePostSchema = publishPostSchema.extend({
   scheduledAt: z.coerce.date(),
 });
 
+export const deletePostQuerySchema = z.object({
+  deleteFromPlatforms: z
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true')
+    .default('true'),
+  platformPostIds: z
+    .string()
+    .trim()
+    .transform((value) =>
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
+    .optional(),
+});
+
 export const listPostsQuerySchema = z.object({
   status: z
     .enum([
@@ -77,3 +94,4 @@ export type UpdatePostInput = z.infer<typeof updatePostSchema>;
 export type PublishPostInputDto = z.infer<typeof publishPostSchema>;
 export type SchedulePostInput = z.infer<typeof schedulePostSchema>;
 export type ListPostsQuery = z.infer<typeof listPostsQuerySchema>;
+export type DeletePostQuery = z.infer<typeof deletePostQuerySchema>;

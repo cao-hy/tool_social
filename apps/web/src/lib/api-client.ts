@@ -324,10 +324,23 @@ export const postsApi = {
       method: 'PATCH',
       body: JSON.stringify(input),
     }),
-  delete: (workspaceId: string, postId: string) =>
-    apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/posts/${postId}`, {
+  delete: (
+    workspaceId: string,
+    postId: string,
+    options?: { deleteFromPlatforms?: boolean; platformPostIds?: string[] },
+  ) => {
+    const params = new URLSearchParams();
+    if (options?.deleteFromPlatforms !== undefined) {
+      params.set('deleteFromPlatforms', String(options.deleteFromPlatforms));
+    }
+    if (options?.platformPostIds) {
+      params.set('platformPostIds', options.platformPostIds.join(','));
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/posts/${postId}${suffix}`, {
       method: 'DELETE',
-    }),
+    });
+  },
   refreshPlatformState: (workspaceId: string, postId: string, platformPostId: string) =>
     apiFetch<{ post: ContentPostView; platformState: PlatformPostState }>(
       `/workspaces/${workspaceId}/posts/${postId}/platform-posts/${platformPostId}/refresh-state`,
