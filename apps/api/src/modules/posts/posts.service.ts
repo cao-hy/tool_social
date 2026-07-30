@@ -744,6 +744,7 @@ export class PostsService implements OnModuleDestroy {
 
     for (const account of accounts) {
       const override = overrideByAccountId.get(account.id);
+      const options = this.resolvePlatformPostOptions(account, override);
       const platformPost = await tx.platformPost.create({
         data: {
           workspaceId,
@@ -755,7 +756,7 @@ export class PostsService implements OnModuleDestroy {
           title: override?.title,
           description: override?.description,
           linkUrl: override?.linkUrl,
-          options: override?.options as Prisma.InputJsonValue | undefined,
+          options,
         },
       });
 
@@ -774,6 +775,33 @@ export class PostsService implements OnModuleDestroy {
         });
       }
     }
+  }
+
+  private resolvePlatformPostOptions(
+    account: { platform: Platform; scopes: string[] },
+    override:
+      | CreatePostInput['platformOverrides'][number]
+      | NonNullable<UpdatePostInput['platformOverrides']>[number]
+      | undefined,
+  ): Prisma.InputJsonValue | undefined {
+    const explicitOptions =
+      override?.options && Object.keys(override.options).length > 0
+        ? (override.options as Prisma.InputJsonValue)
+        : undefined;
+    if (explicitOptions) return explicitOptions;
+
+    if (
+      account.platform === 'TIKTOK' &&
+      this.env.TIKTOK_ENABLE_DIRECT_POST_SCOPE &&
+      account.scopes.includes('video.publish')
+    ) {
+      return {
+        postMode: 'DIRECT_POST',
+        privacyLevel: 'PUBLIC_TO_EVERYONE',
+      };
+    }
+
+    return undefined;
   }
 
   private async replaceMedia(
