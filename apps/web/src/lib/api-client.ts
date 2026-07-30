@@ -351,6 +351,11 @@ export const postsApi = {
       `/workspaces/${workspaceId}/posts/${postId}/platform-posts/${platformPostId}/youtube/make-public`,
       { method: 'POST' },
     ),
+  cancelTikTokPublish: (workspaceId: string, postId: string, platformPostId: string) =>
+    apiFetch<{ post: ContentPostView; platformState: PlatformPostState }>(
+      `/workspaces/${workspaceId}/posts/${postId}/platform-posts/${platformPostId}/tiktok/cancel`,
+      { method: 'POST' },
+    ),
 };
 
 export interface PlatformOverrideInput {

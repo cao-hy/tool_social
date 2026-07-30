@@ -220,11 +220,25 @@ jobs:
             export WEB_IMAGE="${{ steps.images.outputs.web }}"
             export MIGRATE_IMAGE="${{ steps.images.outputs.migrate }}"
 
+            cleanup_socialhub_images() {
+              echo "Pruning old SocialHub images:"
+              for repo in "${API_IMAGE%:*}" "${WORKER_IMAGE%:*}" "${WEB_IMAGE%:*}" "${MIGRATE_IMAGE%:*}"; do
+                docker image ls "$repo" --format '{{.Repository}}:{{.Tag}}' | while IFS= read -r image; do
+                  if [ "$image" = "$API_IMAGE" ] || [ "$image" = "$WORKER_IMAGE" ] || [ "$image" = "$WEB_IMAGE" ]; then
+                    continue
+                  fi
+
+                  docker image rm "$image" >/dev/null 2>&1 || true
+                done
+              done
+            }
+
             echo "Disk usage before Docker cleanup:"
             df -h /
             docker system df || true
             find /tmp -maxdepth 1 -type f -name 'socialhub-release-*.tar.gz' -mtime +1 -delete || true
             docker container prune -f || true
+            cleanup_socialhub_images || true
             docker image prune -f || true
             docker builder prune -af || true
             echo "Disk usage after Docker cleanup:"
@@ -251,6 +265,7 @@ jobs:
             fi
 
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env ps
+            cleanup_socialhub_images || true
             docker image prune -f
             docker builder prune -af
             docker logout ghcr.io || true

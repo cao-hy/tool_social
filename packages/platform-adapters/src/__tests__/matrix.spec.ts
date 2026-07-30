@@ -13,8 +13,8 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
     FACEBOOK: 4,
     INSTAGRAM: 0,
     PINTEREST: 6,
-    TIKTOK: 5,
-    YOUTUBE: 8,
+    TIKTOK: 10,
+    YOUTUBE: 6,
   } as const;
 
   it('có bảng cho cả 5 nền tảng', () => {
@@ -62,7 +62,14 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'editPublishedPost' ||
                 key === 'deletePublishedPost')) ||
             (platform === 'TIKTOK' &&
-              (key === 'publishVideo' || key === 'refreshToken' || key === 'revokeToken')),
+              (key === 'publishImage' ||
+                key === 'publishVideo' ||
+                key === 'postViews' ||
+                key === 'postLikes' ||
+                key === 'postCommentCount' ||
+                key === 'postShares' ||
+                key === 'refreshToken' ||
+                key === 'revokeToken')),
         );
       }
     }
@@ -89,7 +96,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
             : platform === 'YOUTUBE'
               ? 25
               : platform === 'TIKTOK'
-                ? 16
+                ? 31
                 : 0,
       );
     }

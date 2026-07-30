@@ -19,12 +19,15 @@ export interface PlatformOverrideDraft {
   youtubeCategoryId: string;
   youtubeMadeForKids: boolean;
   youtubeContainsSyntheticMedia: boolean;
+  tiktokPostMode: 'DIRECT_POST' | 'MEDIA_UPLOAD';
   tiktokPrivacyLevel:
     'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'FOLLOWER_OF_CREATOR' | 'SELF_ONLY';
   tiktokDisableComment: boolean;
   tiktokDisableDuet: boolean;
   tiktokDisableStitch: boolean;
   tiktokCoverTimestampMs: string;
+  tiktokAutoAddMusic: boolean;
+  tiktokPhotoCoverIndex: string;
 }
 
 export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
@@ -46,12 +49,24 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   youtubeCategoryId: '22',
   youtubeMadeForKids: false,
   youtubeContainsSyntheticMedia: false,
+  tiktokPostMode: 'MEDIA_UPLOAD',
   tiktokPrivacyLevel: 'PUBLIC_TO_EVERYONE',
   tiktokDisableComment: false,
   tiktokDisableDuet: false,
   tiktokDisableStitch: false,
   tiktokCoverTimestampMs: '',
+  tiktokAutoAddMusic: false,
+  tiktokPhotoCoverIndex: '',
 };
+
+export function platformOverrideDefaults(platform: Platform, scopes: string[] = []) {
+  const canDirectPostTikTok = platform === 'TIKTOK' && scopes.includes('video.publish');
+  return {
+    ...EMPTY_PLATFORM_OVERRIDE,
+    customized: canDirectPostTikTok,
+    tiktokPostMode: canDirectPostTikTok ? 'DIRECT_POST' : 'MEDIA_UPLOAD',
+  } satisfies PlatformOverrideDraft;
+}
 
 export function platformOverrideFromOptions(input: {
   title?: string | null;
@@ -97,6 +112,7 @@ export function platformOverrideFromOptions(input: {
     youtubeCategoryId: readString(options.categoryId) || '22',
     youtubeMadeForKids: readBoolean(options.selfDeclaredMadeForKids, false),
     youtubeContainsSyntheticMedia: readBoolean(options.containsSyntheticMedia, false),
+    tiktokPostMode: readEnum(options.postMode, ['DIRECT_POST', 'MEDIA_UPLOAD'], 'MEDIA_UPLOAD'),
     tiktokPrivacyLevel: readEnum(
       options.privacyLevel,
       ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],
@@ -109,6 +125,9 @@ export function platformOverrideFromOptions(input: {
       typeof options.videoCoverTimestampMs === 'number'
         ? String(options.videoCoverTimestampMs)
         : '',
+    tiktokAutoAddMusic: readBoolean(options.autoAddMusic, false),
+    tiktokPhotoCoverIndex:
+      typeof options.photoCoverIndex === 'number' ? String(options.photoCoverIndex) : '',
   };
 }
 
@@ -143,12 +162,17 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
       });
     case 'TIKTOK':
       return compactOptions({
+        postMode: draft.tiktokPostMode,
         privacyLevel: draft.tiktokPrivacyLevel,
         disableComment: draft.tiktokDisableComment,
         disableDuet: draft.tiktokDisableDuet,
         disableStitch: draft.tiktokDisableStitch,
         videoCoverTimestampMs: draft.tiktokCoverTimestampMs
           ? Number(draft.tiktokCoverTimestampMs)
+          : undefined,
+        autoAddMusic: draft.tiktokAutoAddMusic,
+        photoCoverIndex: draft.tiktokPhotoCoverIndex
+          ? Number(draft.tiktokPhotoCoverIndex)
           : undefined,
       });
     default:

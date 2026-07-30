@@ -6,16 +6,21 @@ import {
   tiktokUnexpectedPayloadError,
 } from './tiktok.errors';
 import {
+  tiktokCancelPublishResponseSchema,
   tiktokCreatorInfoResponseSchema,
   tiktokPublishInitResponseSchema,
   tiktokPublishStatusResponseSchema,
   tiktokTokenResponseSchema,
   tiktokUserInfoResponseSchema,
+  tiktokVideoListResponseSchema,
+  tiktokVideoQueryResponseSchema,
   type TikTokCreatorInfoResponse,
   type TikTokPublishInitResponse,
   type TikTokPublishStatusResponse,
   type TikTokTokenResponse,
   type TikTokUserInfoResponse,
+  type TikTokVideoListResponse,
+  type TikTokVideoQueryResponse,
 } from './tiktok.schemas';
 
 export interface TikTokClientConfig {
@@ -33,6 +38,26 @@ export interface TikTokDirectVideoPostInput {
   disableDuet?: boolean;
   disableStitch?: boolean;
   videoCoverTimestampMs?: number;
+}
+
+export interface TikTokInboxVideoUploadInput {
+  accessToken: string;
+  bytes: Uint8Array;
+  mimeType: string;
+}
+
+export interface TikTokPhotoPostInput {
+  accessToken: string;
+  postMode: 'DIRECT_POST' | 'MEDIA_UPLOAD';
+  title?: string;
+  description?: string;
+  photoUrls: string[];
+  photoCoverIndex?: number;
+  privacyLevel?: string;
+  disableComment?: boolean;
+  autoAddMusic?: boolean;
+  brandContentToggle?: boolean;
+  brandOrganicToggle?: boolean;
 }
 
 const API_BASE_URL = 'https://open.tiktokapis.com';
@@ -151,11 +176,107 @@ export class TikTokClient {
     return init;
   }
 
+  async uploadVideoToInbox(input: TikTokInboxVideoUploadInput): Promise<TikTokPublishInitResponse> {
+    const uploadPlan = createUploadPlan(input.bytes.byteLength);
+    const init = await this.postJson(
+      '/v2/post/publish/inbox/video/init/',
+      {
+        source_info: {
+          source: 'FILE_UPLOAD',
+          video_size: input.bytes.byteLength,
+          chunk_size: uploadPlan.chunkSize,
+          total_chunk_count: uploadPlan.totalChunkCount,
+        },
+      },
+      tiktokPublishInitResponseSchema,
+      input.accessToken,
+    );
+
+    if (!init.data.upload_url) {
+      throw tiktokUnexpectedPayloadError(new Error('TikTok không trả upload_url.'), init);
+    }
+
+    await this.uploadChunks({
+      uploadUrl: init.data.upload_url,
+      bytes: input.bytes,
+      mimeType: input.mimeType,
+      uploadPlan,
+    });
+
+    return init;
+  }
+
+  publishPhoto(input: TikTokPhotoPostInput): Promise<TikTokPublishInitResponse> {
+    return this.postJson(
+      '/v2/post/publish/content/init/',
+      {
+        media_type: 'PHOTO',
+        post_mode: input.postMode,
+        post_info: {
+          title: input.title,
+          description: input.description,
+          privacy_level: input.postMode === 'DIRECT_POST' ? input.privacyLevel : undefined,
+          disable_comment: input.postMode === 'DIRECT_POST' ? input.disableComment : undefined,
+          auto_add_music: input.postMode === 'DIRECT_POST' ? input.autoAddMusic : undefined,
+          brand_content_toggle:
+            input.postMode === 'DIRECT_POST' ? input.brandContentToggle : undefined,
+          brand_organic_toggle:
+            input.postMode === 'DIRECT_POST' ? input.brandOrganicToggle : undefined,
+        },
+        source_info: {
+          source: 'PULL_FROM_URL',
+          photo_cover_index: input.photoCoverIndex ?? 0,
+          photo_images: input.photoUrls,
+        },
+      },
+      tiktokPublishInitResponseSchema,
+      input.accessToken,
+    );
+  }
+
+  async cancelPublish(accessToken: string, publishId: string): Promise<void> {
+    await this.postJson(
+      '/v2/post/publish/cancel/',
+      { publish_id: publishId },
+      tiktokCancelPublishResponseSchema,
+      accessToken,
+    );
+  }
+
   fetchPublishStatus(accessToken: string, publishId: string): Promise<TikTokPublishStatusResponse> {
     return this.postJson(
       '/v2/post/publish/status/fetch/',
       { publish_id: publishId },
       tiktokPublishStatusResponseSchema,
+      accessToken,
+    );
+  }
+
+  listVideos(input: {
+    accessToken: string;
+    cursor?: number;
+    limit?: number;
+  }): Promise<TikTokVideoListResponse> {
+    return this.postJson(
+      '/v2/video/list/?fields=id,title,video_description,cover_image_url,share_url,create_time,duration,height,width,like_count,comment_count,share_count,view_count',
+      {
+        cursor: input.cursor,
+        max_count: input.limit,
+      },
+      tiktokVideoListResponseSchema,
+      input.accessToken,
+    );
+  }
+
+  queryVideos(accessToken: string, videoIds: string[]): Promise<TikTokVideoQueryResponse> {
+    return this.postJson(
+      '/v2/video/query/?fields=id,title,video_description,cover_image_url,share_url,create_time,duration,height,width,like_count,comment_count,share_count,view_count',
+      {
+        filters: {
+          video_ids: videoIds,
+        },
+      },
+      tiktokVideoQueryResponseSchema,
       accessToken,
     );
   }

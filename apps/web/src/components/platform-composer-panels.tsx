@@ -2,7 +2,7 @@ import { PLATFORM_LABELS } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
 import { Field, SelectInput, TextInput } from '@/components/form-controls';
 import {
-  EMPTY_PLATFORM_OVERRIDE,
+  platformOverrideDefaults,
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
 import type { MediaAssetView, SocialAccountView } from '@/lib/types';
@@ -49,7 +49,8 @@ export function PlatformComposerPanels({
 
       <div className="grid gap-3">
         {accounts.map((account) => {
-          const draft = drafts[account.id] ?? EMPTY_PLATFORM_OVERRIDE;
+          const draft =
+            drafts[account.id] ?? platformOverrideDefaults(account.platform, account.scopes);
           const issues = platformChecklist(account.platform, resolveMedia(draft, mediaAssets));
           return (
             <article
@@ -386,9 +387,23 @@ function PlatformOptions({
   if (account.platform === 'TIKTOK') {
     return (
       <div className="grid gap-3 md:grid-cols-2">
-        <Field label="Privacy TikTok">
+        <Field label="Publish mode">
           <SelectInput
             disabled={disabled}
+            value={draft.tiktokPostMode}
+            onChange={(event) =>
+              onChange(account.id, {
+                tiktokPostMode: event.target.value as PlatformOverrideDraft['tiktokPostMode'],
+              })
+            }
+          >
+            <option value="DIRECT_POST">Direct post</option>
+            <option value="MEDIA_UPLOAD">Upload to TikTok Inbox</option>
+          </SelectInput>
+        </Field>
+        <Field label="Privacy TikTok">
+          <SelectInput
+            disabled={disabled || draft.tiktokPostMode !== 'DIRECT_POST'}
             value={draft.tiktokPrivacyLevel}
             onChange={(event) =>
               onChange(account.id, {
@@ -416,9 +431,22 @@ function PlatformOptions({
             }
           />
         </Field>
+        <Field label="Photo cover index">
+          <TextInput
+            disabled={disabled}
+            inputMode="numeric"
+            placeholder="0"
+            value={draft.tiktokPhotoCoverIndex}
+            onChange={(event) =>
+              onChange(account.id, {
+                tiktokPhotoCoverIndex: event.target.value.replace(/\D/g, ''),
+              })
+            }
+          />
+        </Field>
         <SwitchRow
           checked={draft.tiktokDisableComment}
-          disabled={disabled}
+          disabled={disabled || draft.tiktokPostMode !== 'DIRECT_POST'}
           label="Tắt comment"
           onChange={(checked) => onChange(account.id, { tiktokDisableComment: checked })}
         />
@@ -433,6 +461,12 @@ function PlatformOptions({
           disabled={disabled}
           label="Tắt stitch"
           onChange={(checked) => onChange(account.id, { tiktokDisableStitch: checked })}
+        />
+        <SwitchRow
+          checked={draft.tiktokAutoAddMusic}
+          disabled={disabled || draft.tiktokPostMode !== 'DIRECT_POST'}
+          label="Auto add music cho ảnh"
+          onChange={(checked) => onChange(account.id, { tiktokAutoAddMusic: checked })}
         />
       </div>
     );
@@ -556,8 +590,20 @@ function platformChecklist(platform: Platform, media: MediaAssetView[]): string[
   }
 
   if (platform === 'TIKTOK') {
-    if (videoCount !== 1 || imageCount > 0 || media.length !== 1) {
-      return ['Cần đúng 1 video'];
+    if (videoCount > 0 && (videoCount !== 1 || imageCount > 0 || media.length !== 1)) {
+      return ['Video: cần đúng 1 video'];
+    }
+    if (imageCount > 0 && videoCount > 0) {
+      return ['Không trộn ảnh và video'];
+    }
+    if (imageCount > 35) {
+      return ['Ảnh: tối đa 35 ảnh'];
+    }
+    if (imageCount > 0 && media.some((asset) => !asset.readUrl?.startsWith('https://'))) {
+      return ['Ảnh TikTok cần URL HTTPS public đã verify'];
+    }
+    if (videoCount === 0 && imageCount === 0) {
+      return ['Cần 1 video hoặc 1-35 ảnh'];
     }
   }
 
@@ -596,7 +642,7 @@ function mediaSummary(mediaAssets: MediaAssetView[]): string {
 
 function platformModeHint(platform: Platform): string {
   if (platform === 'YOUTUBE') return 'Dùng title + 1 video chung';
-  if (platform === 'TIKTOK') return 'Dùng caption + 1 video chung';
+  if (platform === 'TIKTOK') return 'Mặc định gửi vào TikTok Inbox';
   if (platform === 'PINTEREST') return 'Dùng title/link/media chung';
   if (platform === 'INSTAGRAM') return 'Dùng caption/media chung';
   return 'Kế thừa nội dung chung';

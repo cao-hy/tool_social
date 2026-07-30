@@ -178,7 +178,17 @@ export interface YouTubePlatformState {
   madePublicAt?: string;
 }
 
-export type PlatformPostState = YouTubePlatformState | Record<string, unknown>;
+export interface TikTokPlatformState {
+  publishId: string;
+  status?: string;
+  failReason?: string;
+  publiclyAvailablePostIds?: string[];
+  uploadedBytes?: number;
+  refreshedAt: string;
+}
+
+export type PlatformPostState =
+  YouTubePlatformState | TikTokPlatformState | Record<string, unknown>;
 
 export interface ContentPostView {
   id: string;

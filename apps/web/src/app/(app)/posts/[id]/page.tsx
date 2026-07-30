@@ -10,7 +10,12 @@ import { MediaPreview } from '@/components/media-preview';
 import { postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
-import type { ContentPostView, PlatformPostView, YouTubePlatformState } from '@/lib/types';
+import type {
+  ContentPostView,
+  PlatformPostView,
+  TikTokPlatformState,
+  YouTubePlatformState,
+} from '@/lib/types';
 
 const DELETABLE_POST_STATUSES = [
   'DRAFT',
@@ -114,6 +119,21 @@ export default function PostDetailPage() {
       setPost(result.post);
     } catch (publishError) {
       setError(getErrorMessage(publishError));
+    } finally {
+      setPlatformAction(null);
+    }
+  }
+
+  async function cancelTikTokPublish(platformPost: PlatformPostView) {
+    if (!workspace || !post) return;
+    if (!window.confirm('Hủy publish TikTok đang chờ xử lý?')) return;
+    setPlatformAction(`cancel:${platformPost.id}`);
+    setError(null);
+    try {
+      const result = await postsApi.cancelTikTokPublish(workspace.id, post.id, platformPost.id);
+      setPost(result.post);
+    } catch (cancelError) {
+      setError(getErrorMessage(cancelError));
     } finally {
       setPlatformAction(null);
     }
@@ -337,6 +357,15 @@ export default function PostDetailPage() {
                       platformPost={platformPost}
                     />
                   ) : null}
+                  {platformPost.platform === 'TIKTOK' ? (
+                    <TikTokStatePanel
+                      canPublish={canPublish}
+                      onCancel={() => void cancelTikTokPublish(platformPost)}
+                      onRefresh={() => void refreshPlatformState(platformPost)}
+                      platformAction={platformAction}
+                      platformPost={platformPost}
+                    />
+                  ) : null}
                 </article>
               ))}
             </div>
@@ -392,6 +421,83 @@ export default function PostDetailPage() {
         onCancel={() => setDeleteTarget(null)}
         onConfirm={(input) => void deletePost(input)}
       />
+    </div>
+  );
+}
+
+function TikTokStatePanel({
+  platformPost,
+  platformAction,
+  canPublish,
+  onRefresh,
+  onCancel,
+}: {
+  platformPost: PlatformPostView;
+  platformAction: string | null;
+  canPublish: boolean;
+  onRefresh: () => void;
+  onCancel: () => void;
+}) {
+  const state = isTikTokPlatformState(platformPost.platformState)
+    ? platformPost.platformState
+    : null;
+  const finalIds = state?.publiclyAvailablePostIds?.join(', ') || '-';
+  const publishId = state?.publishId ?? platformPost.externalPostId ?? '';
+  const status = String(state?.status ?? '').toUpperCase();
+  const sentToInbox = status === 'SEND_TO_USER_INBOX' || publishId.startsWith('v_inbox_');
+  const directComplete = status === 'PUBLISH_COMPLETE' || finalIds !== '-';
+  const canCancel =
+    canPublish &&
+    Boolean(platformPost.externalPostId) &&
+    !['PUBLISH_COMPLETE', 'FAILED', 'CANCELLED'].includes(status);
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+      {sentToInbox ? (
+        <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+          TikTok đã nhận video vào Inbox/Draft. Bài này chưa public cho người khác xem cho tới khi
+          bạn mở TikTok và đăng thủ công.
+        </p>
+      ) : null}
+      {directComplete ? (
+        <p className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">
+          TikTok đã hoàn tất publish. Nếu privacy là Public, người khác có thể xem bài trên TikTok.
+        </p>
+      ) : null}
+      <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+        <StateRow label="Publish ID" value={publishId || '-'} />
+        <StateRow label="Status" value={state?.status ?? '-'} />
+        <StateRow
+          label="Uploaded"
+          value={state?.uploadedBytes ? `${state.uploadedBytes} bytes` : '-'}
+        />
+        <StateRow label="Final IDs" value={finalIds} />
+        <StateRow
+          label="Refreshed"
+          value={state?.refreshedAt ? formatDateTime(state.refreshedAt) : '-'}
+        />
+      </div>
+      {state?.failReason ? (
+        <p className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+          {state.failReason}
+        </p>
+      ) : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <SecondaryButton
+          disabled={!platformPost.externalPostId || platformAction !== null}
+          onClick={onRefresh}
+          type="button"
+        >
+          {platformAction === `refresh:${platformPost.id}` ? 'Đang refresh...' : 'Refresh status'}
+        </SecondaryButton>
+        <SecondaryButton
+          disabled={!canCancel || platformAction !== null}
+          onClick={onCancel}
+          type="button"
+        >
+          {platformAction === `cancel:${platformPost.id}` ? 'Đang hủy...' : 'Cancel publish'}
+        </SecondaryButton>
+      </div>
     </div>
   );
 }
@@ -477,6 +583,10 @@ function StateRow({ label, value }: { label: string; value: string }) {
 
 function isYouTubePlatformState(value: unknown): value is YouTubePlatformState {
   return Boolean(value && typeof value === 'object' && 'videoId' in value);
+}
+
+function isTikTokPlatformState(value: unknown): value is TikTokPlatformState {
+  return Boolean(value && typeof value === 'object' && 'publishId' in value);
 }
 
 function processingProgressText(state: YouTubePlatformState | null): string {

@@ -76,6 +76,12 @@ export const tiktokPublishInitResponseSchema = z.object({
 
 export type TikTokPublishInitResponse = z.infer<typeof tiktokPublishInitResponseSchema>;
 
+export const tiktokCancelPublishResponseSchema = z.object({
+  error: tiktokErrorSchema.optional(),
+});
+
+export type TikTokCancelPublishResponse = z.infer<typeof tiktokCancelPublishResponseSchema>;
+
 export const tiktokPublishStatusResponseSchema = z.object({
   data: z.object({
     status: z.string().min(1),
@@ -88,3 +94,41 @@ export const tiktokPublishStatusResponseSchema = z.object({
 });
 
 export type TikTokPublishStatusResponse = z.infer<typeof tiktokPublishStatusResponseSchema>;
+
+export const tiktokVideoObjectSchema = z.object({
+  id: z.string().min(1),
+  title: optionalNullableString,
+  video_description: optionalNullableString,
+  cover_image_url: optionalNullableString,
+  share_url: optionalNullableString,
+  create_time: optionalNullableNonNegativeInt,
+  duration: optionalNullableNonNegativeInt,
+  height: optionalNullableNonNegativeInt,
+  width: optionalNullableNonNegativeInt,
+  like_count: optionalNullableNonNegativeInt,
+  comment_count: optionalNullableNonNegativeInt,
+  share_count: optionalNullableNonNegativeInt,
+  view_count: optionalNullableNonNegativeInt,
+});
+
+export type TikTokVideoObject = z.infer<typeof tiktokVideoObjectSchema>;
+
+export const tiktokVideoListResponseSchema = z.object({
+  data: z.object({
+    videos: z.array(tiktokVideoObjectSchema).default([]),
+    cursor: optionalNullableNonNegativeInt,
+    has_more: z.boolean().optional().default(false),
+  }),
+  error: tiktokErrorSchema.optional(),
+});
+
+export type TikTokVideoListResponse = z.infer<typeof tiktokVideoListResponseSchema>;
+
+export const tiktokVideoQueryResponseSchema = z.object({
+  data: z.object({
+    videos: z.array(tiktokVideoObjectSchema).default([]),
+  }),
+  error: tiktokErrorSchema.optional(),
+});
+
+export type TikTokVideoQueryResponse = z.infer<typeof tiktokVideoQueryResponseSchema>;
