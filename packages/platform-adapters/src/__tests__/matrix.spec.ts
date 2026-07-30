@@ -14,7 +14,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
     INSTAGRAM: 0,
     PINTEREST: 6,
     TIKTOK: 10,
-    YOUTUBE: 6,
+    YOUTUBE: 8,
   } as const;
 
   it('có bảng cho cả 5 nền tảng', () => {
