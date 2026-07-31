@@ -107,4 +107,10 @@ export class MediaController {
   delete(@Param('workspaceId') workspaceId: string, @Param('mediaAssetId') mediaAssetId: string) {
     return this.media.delete(workspaceId, mediaAssetId);
   }
+
+  @Post(':mediaAssetId/archive')
+  @RequirePermissions('media:delete')
+  archive(@Param('workspaceId') workspaceId: string, @Param('mediaAssetId') mediaAssetId: string) {
+    return this.media.archive(workspaceId, mediaAssetId);
+  }
 }

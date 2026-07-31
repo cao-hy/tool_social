@@ -49,6 +49,9 @@ const DELETABLE_POST_STATUSES = [
   'SCHEDULED',
   'PUBLISHED',
   'PARTIALLY_PUBLISHED',
+  'QUEUED',
+  'PROCESSING',
+  'CANCELLED',
 ] as const;
 
 export default function PostsPage() {

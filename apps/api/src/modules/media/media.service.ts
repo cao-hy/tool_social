@@ -310,6 +310,52 @@ export class MediaService {
     return { deleted: true };
   }
 
+  async archive(workspaceId: string, mediaAssetId: string) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+      include: {
+        platformPosts: {
+          where: { platformPost: { contentPost: { deletedAt: null } } },
+          select: { platformPost: { select: { status: true } } },
+        },
+        posts: {
+          where: { contentPost: { deletedAt: null } },
+          select: { contentPost: { select: { status: true } } },
+        },
+      },
+    });
+    if (!media) throw AppError.notFound('media asset');
+
+    // Kiểm tra tất cả post đang sử dụng phải là PUBLISHED
+    const isAllPlatformPublished = media.platformPosts.every(
+      (p) => p.platformPost.status === 'PUBLISHED',
+    );
+    const isAllContentPublished = media.posts.every((p) => p.contentPost.status === 'PUBLISHED');
+
+    if (!isAllPlatformPublished || !isAllContentPublished) {
+      throw AppError.conflict('Chưa thể dọn dẹp vì có bài viết đang sử dụng chưa được Publish.');
+    }
+
+    if (media.status === 'ARCHIVED') {
+      return { archived: true };
+    }
+
+    // Chỉ xóa file gốc
+    await this.s3.send(
+      new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.storageKey }),
+    );
+
+    await this.prisma.mediaAsset.update({
+      where: { id: media.id },
+      data: {
+        status: 'ARCHIVED',
+        sizeBytes: 0, // Tiết kiệm dung lượng, xem như 0 hoặc size thumbnail
+      },
+    });
+
+    return { archived: true };
+  }
+
   private typeFromDeclaredMime(mimeType: string): MediaType {
     if (mimeType.startsWith('video/')) return 'VIDEO';
     return 'IMAGE';

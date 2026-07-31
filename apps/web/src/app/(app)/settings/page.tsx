@@ -22,6 +22,8 @@ export default function SettingsPage() {
   const [timezone, setTimezone] = useState('UTC');
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(null);
+  const [selectedMediaIds, setSelectedMediaIds] = useState<Set<string>>(new Set());
+  const [deletingMultiple, setDeletingMultiple] = useState(false);
   const [mediaItems, setMediaItems] = useState<MediaLibraryItem[]>([]);
   const [mediaCursor, setMediaCursor] = useState<string | null>(null);
   const [mediaQuery, setMediaQuery] = useState('');
@@ -62,24 +64,29 @@ export default function SettingsPage() {
   }, [workspace]);
 
   const loadStoragePage = useCallback(
-    async (cursor?: string, append = false) => {
+    async (initial = true) => {
       if (!workspace || !canViewMedia) return;
       setMediaLoading(true);
       setError(null);
       try {
-        const [usage, media] = await Promise.all([
+        const [usage, response] = await Promise.all([
           mediaApi.usage(workspace.id),
           mediaApi.list(workspace.id, {
-            q: mediaQuery.trim() || undefined,
+            limit: 20,
+            cursor: initial ? undefined : (mediaCursor ?? undefined),
+            q: mediaQuery || undefined,
             type: mediaType || undefined,
             status: mediaStatus || undefined,
-            cursor,
-            limit: 30,
           }),
         ]);
         setStorageUsage(usage);
-        setMediaItems((current) => (append ? [...current, ...media.items] : media.items));
-        setMediaCursor(media.nextCursor);
+        if (initial) {
+          setMediaItems(response.items);
+          setSelectedMediaIds(new Set());
+        } else {
+          setMediaItems((current) => [...current, ...response.items]);
+        }
+        setMediaCursor(response.nextCursor);
       } catch (loadError) {
         setError(getErrorMessage(loadError));
       } finally {
@@ -119,21 +126,77 @@ export default function SettingsPage() {
   }
 
   async function handleDeleteMedia(media: MediaLibraryItem) {
-    if (!workspace || media.usage.total > 0) return;
+    if (!workspace) return;
+    const isArchive = media.usage.total > 0;
     const confirmed = window.confirm(
-      `Xóa media "${media.originalFileName ?? media.id}" khỏi storage? Thao tác này không hoàn tác được.`,
+      isArchive
+        ? `Dọn dẹp file gốc của "${media.originalFileName ?? media.id}"? Thao tác này sẽ xoá file gốc để tiết kiệm dung lượng nhưng vẫn giữ lại thumbnail.`
+        : `Xóa media "${media.originalFileName ?? media.id}" khỏi storage? Thao tác này không hoàn tác được.`,
     );
     if (!confirmed) return;
 
     setDeletingMediaId(media.id);
     setError(null);
     try {
-      await mediaApi.delete(workspace.id, media.id);
+      if (isArchive) {
+        await mediaApi.archive(workspace.id, media.id);
+      } else {
+        await mediaApi.delete(workspace.id, media.id);
+      }
       await loadStoragePage();
     } catch (deleteError) {
-      setError(getErrorMessage(deleteError));
+      window.alert(`Lỗi: ${getErrorMessage(deleteError)}`);
     } finally {
       setDeletingMediaId(null);
+    }
+  }
+
+  const deletableMediaIds = mediaItems
+    .filter((m) => canDeleteMedia && m.status !== 'ARCHIVED')
+    .map((m) => m.id);
+
+  const isAllSelected =
+    deletableMediaIds.length > 0 && deletableMediaIds.every((id) => selectedMediaIds.has(id));
+
+  function handleSelectAll() {
+    if (isAllSelected) {
+      setSelectedMediaIds(new Set());
+    } else {
+      setSelectedMediaIds(new Set(deletableMediaIds));
+    }
+  }
+
+  function handleToggleMedia(id: string) {
+    const next = new Set(selectedMediaIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedMediaIds(next);
+  }
+
+  async function handleDeleteMultiple() {
+    if (!workspace || selectedMediaIds.size === 0) return;
+    const confirmed = window.confirm(
+      `Thực hiện hành động trên ${selectedMediaIds.size} media đã chọn? (Nếu media đang dùng sẽ được Dọn dẹp, ngược lại sẽ bị Xoá)`,
+    );
+    if (!confirmed) return;
+
+    setDeletingMultiple(true);
+    setError(null);
+    try {
+      for (const id of selectedMediaIds) {
+        const media = mediaItems.find((m) => m.id === id);
+        if (media && media.usage.total > 0) {
+          await mediaApi.archive(workspace.id, id);
+        } else {
+          await mediaApi.delete(workspace.id, id);
+        }
+      }
+      setSelectedMediaIds(new Set());
+      await loadStoragePage();
+    } catch (deleteError) {
+      window.alert(`Lỗi: ${getErrorMessage(deleteError)}`);
+    } finally {
+      setDeletingMultiple(false);
     }
   }
 
@@ -264,14 +327,46 @@ export default function SettingsPage() {
             </SecondaryButton>
           </div>
 
-          <div className="divide-y divide-slate-200">
+          <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-5 py-3">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                checked={isAllSelected}
+                disabled={deletableMediaIds.length === 0}
+                onChange={handleSelectAll}
+                className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+              <span className="text-sm font-medium text-slate-700">
+                Đã chọn {selectedMediaIds.size}
+              </span>
+            </div>
+            {selectedMediaIds.size > 0 && (
+              <SecondaryButton
+                disabled={deletingMultiple}
+                onClick={() => void handleDeleteMultiple()}
+              >
+                {deletingMultiple ? 'Đang xoá...' : `Xoá ${selectedMediaIds.size} mục`}
+              </SecondaryButton>
+            )}
+          </div>
+
+          <div className="divide-y divide-slate-200 border-t border-slate-200">
             {mediaItems.map((media) => {
               const source = media.displayUrl ?? media.readUrl;
+              const isDeletable = canDeleteMedia && media.status !== 'ARCHIVED';
+              const isArchive = media.usage.total > 0;
               return (
                 <div
                   key={media.id}
-                  className="grid gap-4 px-5 py-4 lg:grid-cols-[72px_1fr_140px_120px_120px]"
+                  className="grid items-center gap-4 px-5 py-4 lg:grid-cols-[24px_72px_1fr_140px_120px_120px]"
                 >
+                  <input
+                    type="checkbox"
+                    disabled={!isDeletable}
+                    checked={selectedMediaIds.has(media.id)}
+                    onChange={() => handleToggleMedia(media.id)}
+                    className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
                   <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
                     {media.type === 'IMAGE' && source ? (
                       <img
@@ -307,12 +402,14 @@ export default function SettingsPage() {
                   </div>
                   <div className="flex items-center lg:justify-end">
                     <SecondaryButton
-                      disabled={
-                        !canDeleteMedia || media.usage.total > 0 || deletingMediaId === media.id
-                      }
+                      disabled={!isDeletable || deletingMediaId === media.id || deletingMultiple}
                       onClick={() => void handleDeleteMedia(media)}
                     >
-                      {deletingMediaId === media.id ? 'Đang xoá' : 'Xoá'}
+                      {deletingMediaId === media.id
+                        ? 'Đang xử lý...'
+                        : isArchive
+                          ? 'Dọn dẹp'
+                          : 'Xoá'}
                     </SecondaryButton>
                   </div>
                 </div>
@@ -325,10 +422,7 @@ export default function SettingsPage() {
 
           {mediaCursor ? (
             <div className="border-t border-slate-200 px-5 py-4">
-              <SecondaryButton
-                disabled={mediaLoading}
-                onClick={() => void loadStoragePage(mediaCursor, true)}
-              >
+              <SecondaryButton disabled={mediaLoading} onClick={() => void loadStoragePage(false)}>
                 Tải thêm
               </SecondaryButton>
             </div>

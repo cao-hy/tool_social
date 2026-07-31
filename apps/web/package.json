@@ -12,8 +12,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@floating-ui/react-dom": "^2.1.9",
     "@socialhub/shared": "*",
     "@tanstack/react-query": "^5.64.1",
+    "date-fns": "^4.4.0",
     "lucide-react": "^1.28.0",
     "next": "15.5.22",
     "react": "^19.0.0",

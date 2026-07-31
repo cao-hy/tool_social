@@ -238,6 +238,10 @@ export const mediaApi = {
     apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}`, {
       method: 'DELETE',
     }),
+  archive: (workspaceId: string, mediaAssetId: string) =>
+    apiFetch<{ archived: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}/archive`, {
+      method: 'POST',
+    }),
 };
 
 export const postsApi = {

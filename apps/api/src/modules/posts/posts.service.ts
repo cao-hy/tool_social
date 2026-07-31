@@ -277,7 +277,16 @@ export class PostsService implements OnModuleDestroy {
     const post = await this.findPost(workspaceId, postId);
     const deletePublished = ['PUBLISHED', 'PARTIALLY_PUBLISHED'].includes(post.status);
     if (
-      !['DRAFT', 'FAILED', 'SCHEDULED', 'PUBLISHED', 'PARTIALLY_PUBLISHED'].includes(post.status)
+      ![
+        'DRAFT',
+        'FAILED',
+        'SCHEDULED',
+        'PUBLISHED',
+        'PARTIALLY_PUBLISHED',
+        'QUEUED',
+        'PROCESSING',
+        'CANCELLED',
+      ].includes(post.status)
     ) {
       throw AppError.conflict('Bài này không ở trạng thái có thể xóa.');
     }

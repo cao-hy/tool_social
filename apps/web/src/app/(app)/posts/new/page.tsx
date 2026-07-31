@@ -16,7 +16,6 @@ import { mediaApi, postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
-  EMPTY_PLATFORM_OVERRIDE,
   isPlatformOverrideActive,
   platformOverrideDefaults,
   platformOptions,
@@ -92,11 +91,13 @@ export default function NewPostPage() {
   }
 
   function updateOverride(accountId: string, patch: Partial<PlatformOverrideDraft>): void {
+    const account = accounts.find((a) => a.id === accountId);
+    if (!account) return;
+
     setPlatformOverrides((current) => ({
       ...current,
       [accountId]: {
-        ...EMPTY_PLATFORM_OVERRIDE,
-        ...current[accountId],
+        ...(current[accountId] ?? platformOverrideDefaults(account.platform, account.scopes)),
         customized: patch.customized ?? true,
         ...patch,
       },
