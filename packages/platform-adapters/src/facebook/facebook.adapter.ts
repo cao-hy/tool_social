@@ -280,6 +280,25 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     };
   }
 
+  async deleteComment(ctx: AdapterContext, externalCommentId: string): Promise<void> {
+    await this.client.deleteComment({
+      externalCommentId,
+      pageAccessToken: ctx.accessToken,
+    });
+  }
+
+  async hideComment(
+    ctx: AdapterContext,
+    externalCommentId: string,
+    hidden: boolean,
+  ): Promise<void> {
+    await this.client.hideComment({
+      externalCommentId,
+      pageAccessToken: ctx.accessToken,
+      hidden,
+    });
+  }
+
   async getPostMetrics(_ctx: AdapterContext, _externalPostId: string): Promise<PostMetrics> {
     throw capabilityUnsupported('FACEBOOK', 'getPostMetrics');
   }

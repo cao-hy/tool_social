@@ -53,6 +53,7 @@ export const CAPABILITY_KEYS = [
   'readComments',
   'readNestedComments',
   'replyToComment',
+  'editComment',
   'hideComment',
   'deleteComment',
   'commentWebhook',

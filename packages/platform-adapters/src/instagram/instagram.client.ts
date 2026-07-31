@@ -250,6 +250,31 @@ export class InstagramGraphClient {
     return response.id;
   }
 
+  async hideComment(input: {
+    commentId: string;
+    accessToken: string;
+    hidden: boolean;
+  }): Promise<void> {
+    await this.postForm(
+      `/${input.commentId}`,
+      {
+        access_token: input.accessToken,
+        hide: input.hidden ? 'true' : 'false',
+      },
+      instagramSuccessResponseSchema,
+    );
+  }
+
+  async deleteComment(input: { commentId: string; accessToken: string }): Promise<void> {
+    await this.delete(
+      `/${input.commentId}`,
+      {
+        access_token: input.accessToken,
+      },
+      instagramSuccessResponseSchema,
+    );
+  }
+
   private async get<T>(
     path: string,
     params: Record<string, string>,

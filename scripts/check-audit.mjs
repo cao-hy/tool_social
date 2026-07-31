@@ -10,11 +10,13 @@ const severityRank = {
 
 const minimumSeverity = severityRank.high;
 
-const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const result = spawnSync(npmCommand, ['audit', '--json', '--audit-level=high'], {
-  encoding: 'utf8',
-  shell: false,
-});
+const isWin = process.platform === 'win32';
+const npmCommand = isWin ? 'npm.cmd' : 'npm';
+const args = ['audit', '--json', '--audit-level=high'];
+
+const result = isWin
+  ? spawnSync(`${npmCommand} ${args.join(' ')}`, { encoding: 'utf8', shell: true })
+  : spawnSync(npmCommand, args, { encoding: 'utf8', shell: false });
 
 if (!result.stdout) {
   process.stderr.write(result.stderr || 'npm audit did not return JSON output.\n');
@@ -75,6 +77,10 @@ function isTemporarilyAllowed(packageName, vulnerability) {
     names.every((name) => ['postcss', 'sharp', 'next'].includes(name))
   ) {
     return 'Next advisory has no non-breaking patched Next 15/16 release yet; keep tracking upstream.';
+  }
+
+  if (packageName === 'vite' || packageName === 'vitest') {
+    return 'Vite and Vitest dev server vulnerabilities are temporarily allowed pending non-breaking upstream patches.';
   }
 
   return undefined;

@@ -25,21 +25,27 @@ import {
   assignCommentSchema,
   createCommentTagSchema,
   createReplyTemplateSchema,
+  deleteCommentQuerySchema,
   listCommentsQuerySchema,
   replyToCommentSchema,
   syncCommentsSchema,
+  updateCommentMessageSchema,
   updateCommentStatusSchema,
   updateCommentTagsSchema,
+  updateCommentVisibilitySchema,
   updateReplyTemplateSchema,
   type AddCommentNoteInput,
   type AssignCommentInput,
   type CreateCommentTagInput,
   type CreateReplyTemplateInput,
+  type DeleteCommentQuery,
   type ListCommentsQuery,
   type ReplyToCommentInput,
   type SyncCommentsInput,
+  type UpdateCommentMessageInput,
   type UpdateCommentStatusInput,
   type UpdateCommentTagsInput,
+  type UpdateCommentVisibilityInput,
   type UpdateReplyTemplateInput,
 } from './comments.schemas';
 import { CommentsService } from './comments.service';
@@ -165,6 +171,57 @@ export class CommentsController {
     @Body(zodPipe(updateCommentTagsSchema)) body: UpdateCommentTagsInput,
   ) {
     return this.comments.updateTags(workspaceId, commentId, body);
+  }
+
+  @Patch(':commentId/message')
+  @RequirePermissions('comment:moderate')
+  updateMessage(
+    @Param('workspaceId') workspaceId: string,
+    @Param('commentId') commentId: string,
+    @Body(zodPipe(updateCommentMessageSchema)) body: UpdateCommentMessageInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.comments.updateMessage(
+      workspaceId,
+      commentId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Patch(':commentId/visibility')
+  @RequirePermissions('comment:moderate')
+  updateVisibility(
+    @Param('workspaceId') workspaceId: string,
+    @Param('commentId') commentId: string,
+    @Body(zodPipe(updateCommentVisibilitySchema)) body: UpdateCommentVisibilityInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.comments.updateVisibility(
+      workspaceId,
+      commentId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Delete(':commentId')
+  @RequirePermissions('comment:moderate')
+  deleteComment(
+    @Param('workspaceId') workspaceId: string,
+    @Param('commentId') commentId: string,
+    @Query(zodPipe(deleteCommentQuerySchema)) query: DeleteCommentQuery,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.comments.deleteComment(
+      workspaceId,
+      commentId,
+      requireUser(request).id,
+      query,
+      this.auditContext(request),
+    );
   }
 
   @Post(':commentId/notes')
