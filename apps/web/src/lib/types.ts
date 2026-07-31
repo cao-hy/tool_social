@@ -125,6 +125,7 @@ export interface MediaAssetView {
   durationSec: number | null;
   createdAt?: string;
   position?: number;
+  displayUrl?: string | null;
   readUrl?: string | null;
 }
 

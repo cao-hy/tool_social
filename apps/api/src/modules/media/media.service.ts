@@ -105,6 +105,29 @@ export class MediaService {
     };
   }
 
+  async getObject(workspaceId: string, mediaAssetId: string, range?: string) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null, status: 'READY' },
+    });
+    if (!media) throw AppError.notFound('media asset');
+
+    const object = await this.s3.send(
+      new GetObjectCommand({
+        Bucket: this.env.S3_BUCKET,
+        Key: media.storageKey,
+        Range: sanitizeRange(range),
+      }),
+    );
+
+    return {
+      body: object.Body,
+      statusCode: object.ContentRange ? 206 : 200,
+      contentType: object.ContentType ?? media.mimeType ?? 'application/octet-stream',
+      contentLength: object.ContentLength,
+      contentRange: object.ContentRange,
+    };
+  }
+
   async createUpload(workspaceId: string, uploadedById: string, input: CreateMediaUploadInput) {
     if (
       input.declaredMimeType === 'image/svg+xml' ||
@@ -305,6 +328,10 @@ export class MediaService {
     return `workspaces/${workspaceId}/media/${randomUUID()}${extension}`;
   }
 
+  private displayUrl(workspaceId: string, mediaAssetId: string): string {
+    return `${this.env.API_BASE_URL.replace(/\/$/, '')}/api/v1/workspaces/${workspaceId}/media/${mediaAssetId}/object`;
+  }
+
   private async diskUsage() {
     const stats = await statfs(process.cwd(), { bigint: true });
     const totalBytes = stats.blocks * stats.bsize;
@@ -324,6 +351,7 @@ export class MediaService {
 
   private async toLibraryItem(media: {
     id: string;
+    workspaceId: string;
     type: MediaType;
     status: string;
     storageKey: string;
@@ -353,6 +381,7 @@ export class MediaService {
 
   private async toMediaView(media: {
     id: string;
+    workspaceId: string;
     type: MediaType;
     status: string;
     storageKey: string;
@@ -384,7 +413,13 @@ export class MediaService {
       height: media.height,
       durationSec: media.durationSec,
       createdAt: media.createdAt,
+      displayUrl: media.status === 'READY' ? this.displayUrl(media.workspaceId, media.id) : null,
       readUrl,
     };
   }
+}
+
+function sanitizeRange(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return /^bytes=\d*-\d*$/.test(value) ? value : undefined;
 }

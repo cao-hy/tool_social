@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import { isPlatformError } from '../core/platform-error';
 import {
   normalizePinterestError,
@@ -11,14 +11,24 @@ import {
   pinterestCreatePinResponseSchema,
   pinterestMediaDetailsResponseSchema,
   pinterestMediaUploadResponseSchema,
+  pinterestPinAnalyticsResponseSchema,
+  pinterestPinsResponseSchema,
+  pinterestPinSchema,
   pinterestTokenResponseSchema,
   pinterestUserAccountSchema,
   type PinterestBoard,
   type PinterestCreatePinResponse,
   type PinterestMediaDetailsResponse,
   type PinterestMediaUploadResponse,
+  type PinterestPin,
+  type PinterestPinAnalyticsResponse,
+  type PinterestPinsResponse,
   type PinterestTokenResponse,
   type PinterestUserAccount,
+  pinterestBoardSectionSchema,
+  pinterestBoardSectionsResponseSchema,
+  pinterestSavePinResponseSchema,
+  type PinterestBoardSection,
 } from './pinterest.schemas';
 
 export interface PinterestClientConfig {
@@ -128,6 +138,139 @@ export class PinterestClient {
     return boards;
   }
 
+  getBoard(accessToken: string, boardId: string): Promise<PinterestBoard> {
+    return this.get(`/boards/${boardId}`, {}, pinterestBoardSchema, accessToken);
+  }
+
+  updateBoard(
+    accessToken: string,
+    boardId: string,
+    input: { name?: string; description?: string; privacy?: string },
+  ): Promise<PinterestBoard> {
+    return this.patchJson(`/boards/${boardId}`, input, pinterestBoardSchema, accessToken);
+  }
+
+  deleteBoard(accessToken: string, boardId: string): Promise<void> {
+    return this.delete(`/boards/${boardId}`, accessToken);
+  }
+
+  listBoardSections(
+    accessToken: string,
+    boardId: string,
+    input?: { bookmark?: string; pageSize?: number },
+  ): Promise<{ items: PinterestBoardSection[]; bookmark?: string | null }> {
+    return this.get(
+      `/boards/${boardId}/sections`,
+      stripUndefined({
+        page_size: input?.pageSize ? String(input.pageSize) : '25',
+        bookmark: input?.bookmark,
+      }) as Record<string, string>,
+      pinterestBoardSectionsResponseSchema,
+      accessToken,
+    );
+  }
+
+  createBoardSection(
+    accessToken: string,
+    boardId: string,
+    name: string,
+  ): Promise<PinterestBoardSection> {
+    return this.postJson(
+      `/boards/${boardId}/sections`,
+      { name },
+      pinterestBoardSectionSchema,
+      accessToken,
+    );
+  }
+
+  updateBoardSection(
+    accessToken: string,
+    boardId: string,
+    sectionId: string,
+    name: string,
+  ): Promise<PinterestBoardSection> {
+    return this.patchJson(
+      `/boards/${boardId}/sections/${sectionId}`,
+      { name },
+      pinterestBoardSectionSchema,
+      accessToken,
+    );
+  }
+
+  deleteBoardSection(accessToken: string, boardId: string, sectionId: string): Promise<void> {
+    return this.delete(`/boards/${boardId}/sections/${sectionId}`, accessToken);
+  }
+
+  listPinsOnBoardSection(input: {
+    accessToken: string;
+    boardId: string;
+    sectionId: string;
+    bookmark?: string;
+    pageSize?: number;
+  }): Promise<PinterestPinsResponse> {
+    return this.get(
+      `/boards/${input.boardId}/sections/${input.sectionId}/pins`,
+      stripUndefined({
+        page_size: String(input.pageSize ?? 25),
+        bookmark: input.bookmark,
+      }) as Record<string, string>,
+      pinterestPinsResponseSchema,
+      input.accessToken,
+    );
+  }
+
+  listPins(input: {
+    accessToken: string;
+    bookmark?: string;
+    pageSize?: number;
+    pinMetrics?: boolean;
+  }): Promise<PinterestPinsResponse> {
+    return this.get(
+      '/pins',
+      stripUndefined({
+        page_size: String(input.pageSize ?? 25),
+        bookmark: input.bookmark,
+        pin_metrics: input.pinMetrics === true ? 'true' : undefined,
+      }) as Record<string, string>,
+      pinterestPinsResponseSchema,
+      input.accessToken,
+    );
+  }
+
+  listPinsOnBoard(input: {
+    accessToken: string;
+    boardId: string;
+    bookmark?: string;
+    pageSize?: number;
+    pinMetrics?: boolean;
+  }): Promise<PinterestPinsResponse> {
+    return this.get(
+      `/boards/${input.boardId}/pins`,
+      stripUndefined({
+        page_size: String(input.pageSize ?? 25),
+        bookmark: input.bookmark,
+        pin_metrics: input.pinMetrics === true ? 'true' : undefined,
+      }) as Record<string, string>,
+      pinterestPinsResponseSchema,
+      input.accessToken,
+    );
+  }
+
+  getPin(input: {
+    accessToken: string;
+    pinId: string;
+    pinMetrics?: boolean;
+  }): Promise<PinterestPin> {
+    return this.get(
+      `/pins/${input.pinId}`,
+      stripUndefined({
+        pin_metrics: input.pinMetrics === true ? 'true' : undefined,
+      }) as Record<string, string>,
+      pinterestPinSchema,
+      input.accessToken,
+    );
+  }
+
   createImagePin(input: {
     accessToken: string;
     boardId: string;
@@ -164,6 +307,75 @@ export class PinterestClient {
     };
 
     return this.postJson('/pins', body, pinterestCreatePinResponseSchema, input.accessToken);
+  }
+
+  updatePin(input: {
+    accessToken: string;
+    pinId: string;
+    boardId?: string;
+    boardSectionId?: string;
+    title?: string;
+    description?: string;
+    link?: string;
+    altText?: string;
+    aiDisclosures?: string[];
+  }): Promise<PinterestPin> {
+    return this.patchJson(
+      `/pins/${input.pinId}`,
+      {
+        board_id: input.boardId,
+        board_section_id: input.boardSectionId,
+        title: input.title,
+        description: input.description,
+        link: input.link,
+        alt_text: input.altText,
+        ai_disclosures: input.aiDisclosures?.length ? { values: input.aiDisclosures } : undefined,
+      },
+      pinterestPinSchema,
+      input.accessToken,
+    );
+  }
+
+  deletePin(accessToken: string, pinId: string): Promise<void> {
+    return this.delete(`/pins/${pinId}`, accessToken);
+  }
+
+  savePin(input: {
+    accessToken: string;
+    pinId: string;
+    boardId: string;
+    boardSectionId?: string;
+  }): Promise<PinterestPin> {
+    return this.postJson(
+      `/pins/${input.pinId}/save`,
+      {
+        board_id: input.boardId,
+        board_section_id: input.boardSectionId,
+      },
+      pinterestSavePinResponseSchema,
+      input.accessToken,
+    );
+  }
+
+  getPinAnalytics(input: {
+    accessToken: string;
+    pinId: string;
+    startDate: string;
+    endDate: string;
+    metricTypes: string[];
+  }): Promise<PinterestPinAnalyticsResponse> {
+    return this.get(
+      `/pins/${input.pinId}/analytics`,
+      {
+        start_date: input.startDate,
+        end_date: input.endDate,
+        app_types: 'ALL',
+        metric_types: input.metricTypes.join(','),
+        split_field: 'NO_SPLIT',
+      },
+      pinterestPinAnalyticsResponseSchema,
+      input.accessToken,
+    );
   }
 
   registerVideoUpload(accessToken: string): Promise<PinterestMediaUploadResponse> {
@@ -320,6 +532,45 @@ export class PinterestClient {
     }
 
     return parseResponse(response, schema);
+  }
+
+  private async patchJson<T>(
+    path: string,
+    body: Record<string, unknown>,
+    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    accessToken: string,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiBaseUrl}${path}`, {
+        method: 'PATCH',
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(stripUndefined(body)),
+        signal: AbortSignal.timeout(30000),
+      });
+    } catch (error) {
+      throw pinterestNetworkError(error);
+    }
+
+    return parseResponse(response, schema);
+  }
+
+  private async delete(path: string, accessToken: string): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiBaseUrl}${path}`, {
+        method: 'DELETE',
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (error) {
+      throw pinterestNetworkError(error);
+    }
+
+    await parseResponse(response, z.object({}).passthrough());
   }
 
   private createBoard(accessToken: string, name: string): Promise<PinterestBoard> {

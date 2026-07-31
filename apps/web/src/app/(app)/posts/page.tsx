@@ -625,7 +625,7 @@ function IconLink({
 
 function PostThumbnail({ post, onPreview }: { post: ContentPostView; onPreview: () => void }) {
   const asset = post.media[0];
-  const source = asset?.readUrl;
+  const source = asset?.displayUrl ?? asset?.readUrl;
 
   if (!asset || !source) {
     return (
@@ -675,7 +675,7 @@ function MediaPreviewDialog({
   onClose: () => void;
 }) {
   const asset = post?.media[0];
-  const source = asset?.readUrl;
+  const source = asset?.displayUrl ?? asset?.readUrl;
   if (!post || !asset || !source) return null;
 
   return (

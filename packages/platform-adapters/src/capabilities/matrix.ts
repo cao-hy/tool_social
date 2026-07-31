@@ -230,11 +230,83 @@ CAPABILITY_MATRIX.PINTEREST.capabilities.publishVideo = {
   verifiedBy: 'Codex + Pinterest API v5 docs',
 };
 
+CAPABILITY_MATRIX.PINTEREST.capabilities.editPublishedPost = {
+  state: 'CONDITIONAL',
+  condition:
+    'Cập nhật metadata Pin bằng PATCH /v5/pins/{pin_id}; endpoint đang beta và không khả dụng cho mọi app, chỉ cập nhật các trường như title, description, link, board/section, alt text.',
+  source: 'https://developer.pinterest.com/docs/api/v5/pins-update/',
+  verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.deletePublishedPost = {
+  state: 'CONDITIONAL',
+  condition:
+    'Xóa Pin thuộc operation user_account hoặc group board được chia sẻ bằng DELETE /v5/pins/{pin_id}; token cần pins:write và quyền phù hợp trên board.',
+  source: 'https://developer.pinterest.com/docs/api/v5/pins-delete/',
+  verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
 CAPABILITY_MATRIX.PINTEREST.capabilities.refreshToken = {
   state: 'SUPPORTED',
   source:
     'https://developers.pinterest.com/docs/getting-started/set-up-authentication-and-authorization/',
   verifiedAt: '2026-07-28',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.postViews = {
+  state: 'CONDITIONAL',
+  condition:
+    'Video views đọc qua organic Pin analytics metric VIDEO_MRC_VIEW/VIDEO_10S_VIEW; image Pin không có view metric riêng nên adapter giữ null thay vì dùng impression làm view.',
+  source: 'https://developers.pinterest.com/docs/analytics-and-reports/metrics-glossary/',
+  verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.postLikes = {
+  state: 'CONDITIONAL',
+  condition:
+    'Pinterest không dùng like chuẩn; adapter map total reactions/lifetime reaction của Pin sang metric likes/reactions.',
+  source: 'https://developer.pinterest.com/docs/api/v5/pins-get/',
+  verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.postCommentCount = {
+  state: 'CONDITIONAL',
+  condition:
+    'Get/List Pin với pin_metrics=true có lifetime comment count, nhưng Pinterest không expose endpoint đọc nội dung comment cho adapter này.',
+  source: 'https://developer.pinterest.com/docs/api/v5/pins-list/',
+  verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.postShares = {
+  state: 'UNSUPPORTED',
+  condition:
+    'Pinterest organic Pin analytics cung cấp saves, Pin clicks và outbound clicks; không có metric share tương đương trong API v5 cho adapter này.',
+  source: 'https://developers.pinterest.com/docs/analytics-and-reports/metrics-glossary/',
+  verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.postImpressions = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc impression bằng Get Pin analytics hoặc pin_metrics=true trên Get/List Pin; organic reporting hỗ trợ lookback 90 ngày và lifetime cho phần lớn Pin.',
+  source: 'https://developers.pinterest.com/docs/analytics-and-reports/organic-reporting/',
+  verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.postSaves = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc saves qua organic Pin analytics metric SAVE cho Pin thuộc operation user_account hoặc group board được chia sẻ.',
+  source: 'https://developers.pinterest.com/docs/analytics-and-reports/organic-reporting/',
+  verifiedAt: '2026-07-31',
   verifiedBy: 'Codex + Pinterest API v5 docs',
 };
 

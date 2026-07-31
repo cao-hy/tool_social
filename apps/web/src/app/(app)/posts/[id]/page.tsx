@@ -693,37 +693,35 @@ function MediaStrip({
   if (media.length === 0) return null;
   return (
     <div className="mt-4 flex flex-wrap gap-2">
-      {media.map((asset) => (
-        <button
-          key={asset.id}
-          className="relative h-16 w-24 overflow-hidden rounded-md bg-slate-950 text-xs font-semibold text-white transition hover:-translate-y-px hover:shadow-md"
-          onClick={() => onPreview(asset)}
-          title={asset.originalFileName ?? 'Xem media'}
-          type="button"
-        >
-          {asset.type === 'IMAGE' && asset.readUrl ? (
-            <img
-              alt={asset.originalFileName ?? 'media'}
-              className="h-full w-full object-cover"
-              src={asset.readUrl}
-            />
-          ) : asset.type === 'VIDEO' && asset.readUrl ? (
-            <video
-              className="h-full w-full object-cover"
-              muted
-              preload="metadata"
-              src={asset.readUrl}
-            />
-          ) : (
-            <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
-              {asset.type}
+      {media.map((asset) => {
+        const source = asset.displayUrl ?? asset.readUrl;
+        return (
+          <button
+            key={asset.id}
+            className="relative h-16 w-24 overflow-hidden rounded-md bg-slate-950 text-xs font-semibold text-white transition hover:-translate-y-px hover:shadow-md"
+            onClick={() => onPreview(asset)}
+            title={asset.originalFileName ?? 'Xem media'}
+            type="button"
+          >
+            {asset.type === 'IMAGE' && source ? (
+              <img
+                alt={asset.originalFileName ?? 'media'}
+                className="h-full w-full object-cover"
+                src={source}
+              />
+            ) : asset.type === 'VIDEO' && source ? (
+              <video className="h-full w-full object-cover" muted preload="metadata" src={source} />
+            ) : (
+              <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
+                {asset.type}
+              </span>
+            )}
+            <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
+              <Eye className="h-5 w-5" />
             </span>
-          )}
-          <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
-            <Eye className="h-5 w-5" />
-          </span>
-        </button>
-      ))}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -735,7 +733,8 @@ function MediaPreviewDialog({
   asset: MediaAssetView | null;
   onClose: () => void;
 }) {
-  if (!asset?.readUrl) return null;
+  const source = asset?.displayUrl ?? asset?.readUrl;
+  if (!asset || !source) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
       <div className="w-full max-w-4xl overflow-hidden rounded-md bg-white shadow-xl">
@@ -749,12 +748,12 @@ function MediaPreviewDialog({
         </div>
         <div className="bg-slate-950 p-3">
           {asset.type === 'VIDEO' ? (
-            <video className="max-h-[72vh] w-full rounded bg-black" controls src={asset.readUrl} />
+            <video className="max-h-[72vh] w-full rounded bg-black" controls src={source} />
           ) : (
             <img
               alt={asset.originalFileName ?? 'media'}
               className="max-h-[72vh] w-full rounded object-contain"
-              src={asset.readUrl}
+              src={source}
             />
           )}
         </div>

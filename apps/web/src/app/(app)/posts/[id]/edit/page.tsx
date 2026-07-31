@@ -303,67 +303,70 @@ export default function EditPostPage() {
               <div>
                 <p className="mb-2 text-sm font-medium text-slate-800">Media đã gắn</p>
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {post.media.map((asset) => (
-                    <label
-                      key={asset.id}
-                      className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-2 text-sm"
-                    >
-                      <button
-                        className="relative h-16 w-24 shrink-0 overflow-hidden rounded bg-slate-950 text-xs font-semibold text-white transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          setPreviewAsset(asset);
-                        }}
-                        title="Xem media"
-                        type="button"
+                  {post.media.map((asset) => {
+                    const source = asset.displayUrl ?? asset.readUrl;
+                    return (
+                      <label
+                        key={asset.id}
+                        className="flex items-center gap-3 rounded-md border border-slate-200 bg-white p-2 text-sm"
                       >
-                        {asset.type === 'IMAGE' && asset.readUrl ? (
-                          <img
-                            alt={asset.originalFileName ?? 'media'}
-                            className="h-full w-full object-cover"
-                            src={asset.readUrl}
+                        <button
+                          className="relative h-16 w-24 shrink-0 overflow-hidden rounded bg-slate-950 text-xs font-semibold text-white transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            setPreviewAsset(asset);
+                          }}
+                          title="Xem media"
+                          type="button"
+                        >
+                          {asset.type === 'IMAGE' && source ? (
+                            <img
+                              alt={asset.originalFileName ?? 'media'}
+                              className="h-full w-full object-cover"
+                              src={source}
+                            />
+                          ) : asset.type === 'VIDEO' && source ? (
+                            <video
+                              className="h-full w-full object-cover"
+                              muted
+                              preload="metadata"
+                              src={source}
+                            />
+                          ) : (
+                            <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
+                              {asset.type}
+                            </span>
+                          )}
+                          <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
+                            <Eye className="h-5 w-5" />
+                          </span>
+                        </button>
+                        <span className="flex min-w-0 flex-1 items-start gap-2">
+                          <input
+                            checked={mediaAssetIds.includes(asset.id)}
+                            className="mt-1"
+                            disabled={!canEditTargets}
+                            type="checkbox"
+                            onChange={() =>
+                              setMediaAssetIds((current) =>
+                                current.includes(asset.id)
+                                  ? current.filter((id) => id !== asset.id)
+                                  : [...current, asset.id],
+                              )
+                            }
                           />
-                        ) : asset.type === 'VIDEO' && asset.readUrl ? (
-                          <video
-                            className="h-full w-full object-cover"
-                            muted
-                            preload="metadata"
-                            src={asset.readUrl}
-                          />
-                        ) : (
-                          <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
-                            {asset.type}
-                          </span>
-                        )}
-                        <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
-                          <Eye className="h-5 w-5" />
-                        </span>
-                      </button>
-                      <span className="flex min-w-0 flex-1 items-start gap-2">
-                        <input
-                          checked={mediaAssetIds.includes(asset.id)}
-                          className="mt-1"
-                          disabled={!canEditTargets}
-                          type="checkbox"
-                          onChange={() =>
-                            setMediaAssetIds((current) =>
-                              current.includes(asset.id)
-                                ? current.filter((id) => id !== asset.id)
-                                : [...current, asset.id],
-                            )
-                          }
-                        />
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium text-slate-900">
-                            {asset.originalFileName ?? asset.id}
-                          </span>
-                          <span className="block text-xs text-slate-500">
-                            {asset.mimeType ?? asset.type}
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium text-slate-900">
+                              {asset.originalFileName ?? asset.id}
+                            </span>
+                            <span className="block text-xs text-slate-500">
+                              {asset.mimeType ?? asset.type}
+                            </span>
                           </span>
                         </span>
-                      </span>
-                    </label>
-                  ))}
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
@@ -465,7 +468,8 @@ function MediaPreviewDialog({
   asset: MediaAssetView | null;
   onClose: () => void;
 }) {
-  if (!asset?.readUrl) return null;
+  const source = asset?.displayUrl ?? asset?.readUrl;
+  if (!asset || !source) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
@@ -485,12 +489,12 @@ function MediaPreviewDialog({
         </div>
         <div className="bg-slate-950 p-3">
           {asset.type === 'VIDEO' ? (
-            <video className="max-h-[72vh] w-full rounded bg-black" controls src={asset.readUrl} />
+            <video className="max-h-[72vh] w-full rounded bg-black" controls src={source} />
           ) : (
             <img
               alt={asset.originalFileName ?? 'media'}
               className="max-h-[72vh] w-full rounded object-contain"
-              src={asset.readUrl}
+              src={source}
             />
           )}
         </div>

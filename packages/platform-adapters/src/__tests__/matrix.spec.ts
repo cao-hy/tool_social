@@ -12,7 +12,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
   const verifiedCounts = {
     FACEBOOK: 4,
     INSTAGRAM: 14,
-    PINTEREST: 6,
+    PINTEREST: 14,
     TIKTOK: 10,
     YOUTUBE: 8,
   } as const;
@@ -51,6 +51,13 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
               (key === 'publishImage' ||
                 key === 'publishVideo' ||
                 key === 'publishWithLink' ||
+                key === 'editPublishedPost' ||
+                key === 'deletePublishedPost' ||
+                key === 'postViews' ||
+                key === 'postLikes' ||
+                key === 'postCommentCount' ||
+                key === 'postImpressions' ||
+                key === 'postSaves' ||
                 key === 'refreshToken')) ||
             (platform === 'INSTAGRAM' &&
               (key === 'publishImage' ||
@@ -108,7 +115,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
           : platform === 'INSTAGRAM'
             ? 44
             : platform === 'PINTEREST'
-              ? 19
+              ? 44
               : platform === 'YOUTUBE'
                 ? 25
                 : platform === 'TIKTOK'

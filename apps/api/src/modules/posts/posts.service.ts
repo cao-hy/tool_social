@@ -1032,6 +1032,7 @@ export class PostsService implements OnModuleDestroy {
   private async toMediaAssetView(
     mediaAsset: {
       id: string;
+      workspaceId: string;
       type: unknown;
       status: string;
       originalFileName: string | null;
@@ -1065,6 +1066,10 @@ export class PostsService implements OnModuleDestroy {
               }),
               { expiresIn: 10 * 60 },
             )
+          : null,
+      displayUrl:
+        mediaAsset.status === 'READY'
+          ? `${this.env.API_BASE_URL.replace(/\/$/, '')}/api/v1/workspaces/${mediaAsset.workspaceId}/media/${mediaAsset.id}/object`
           : null,
     };
   }

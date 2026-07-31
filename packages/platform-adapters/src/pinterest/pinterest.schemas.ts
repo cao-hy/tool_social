@@ -76,6 +76,70 @@ export const pinterestCreatePinResponseSchema = z.object({
 
 export type PinterestCreatePinResponse = z.infer<typeof pinterestCreatePinResponseSchema>;
 
+const pinterestImageVariantSchema = z.object({
+  width: z.coerce.number().int().positive().optional(),
+  height: z.coerce.number().int().positive().optional(),
+  url: z.string().url(),
+});
+
+const pinterestPinMetricsSchema = z
+  .object({
+    '90d': z.record(z.coerce.number()).optional(),
+    lifetime_metrics: z.record(z.coerce.number()).optional(),
+  })
+  .passthrough();
+
+export const pinterestPinSchema = z
+  .object({
+    id: z.string().min(1),
+    title: optionalNullableString,
+    description: optionalNullableString,
+    link: optionalNullableUrl,
+    board_id: optionalNullableString,
+    board_section_id: optionalNullableString,
+    created_at: optionalNullableString,
+    creative_type: optionalNullableString,
+    media: z
+      .object({
+        media_type: optionalNullableString,
+        images: z.record(pinterestImageVariantSchema).optional(),
+        video_url: optionalNullableUrl,
+      })
+      .passthrough()
+      .optional(),
+    pin_metrics: pinterestPinMetricsSchema.optional(),
+  })
+  .passthrough();
+
+export type PinterestPin = z.infer<typeof pinterestPinSchema>;
+
+export const pinterestPinsResponseSchema = z.object({
+  items: z.array(pinterestPinSchema),
+  bookmark: z.string().nullable().optional(),
+});
+
+export type PinterestPinsResponse = z.infer<typeof pinterestPinsResponseSchema>;
+
+const pinterestDailyMetricSchema = z
+  .object({
+    data_status: optionalNullableString,
+    date: optionalNullableString,
+    metrics: z.record(z.coerce.number()).optional(),
+  })
+  .passthrough();
+
+export const pinterestPinAnalyticsResponseSchema = z.record(
+  z
+    .object({
+      daily_metrics: z.array(pinterestDailyMetricSchema).optional(),
+      summary_metrics: z.record(z.coerce.number()).optional(),
+      lifetime_metrics: z.record(z.coerce.number()).optional(),
+    })
+    .passthrough(),
+);
+
+export type PinterestPinAnalyticsResponse = z.infer<typeof pinterestPinAnalyticsResponseSchema>;
+
 export const pinterestMediaUploadResponseSchema = z.object({
   media_id: z.string().min(1),
   upload_url: z.string().url(),
@@ -90,3 +154,17 @@ export const pinterestMediaDetailsResponseSchema = z.object({
 });
 
 export type PinterestMediaDetailsResponse = z.infer<typeof pinterestMediaDetailsResponseSchema>;
+
+export const pinterestBoardSectionSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+});
+
+export type PinterestBoardSection = z.infer<typeof pinterestBoardSectionSchema>;
+
+export const pinterestBoardSectionsResponseSchema = z.object({
+  items: z.array(pinterestBoardSectionSchema),
+  bookmark: z.string().nullable().optional(),
+});
+
+export const pinterestSavePinResponseSchema = pinterestPinSchema;

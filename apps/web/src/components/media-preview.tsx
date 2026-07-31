@@ -7,7 +7,7 @@ export function MediaPreview({
   asset: MediaAssetView & { previewUrl?: string };
   className?: string;
 }) {
-  const source = asset.previewUrl ?? asset.readUrl;
+  const source = asset.previewUrl ?? asset.displayUrl ?? asset.readUrl;
 
   if (asset.type === 'IMAGE' && source) {
     return (

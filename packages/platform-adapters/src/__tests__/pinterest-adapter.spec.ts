@@ -213,6 +213,195 @@ describe('PinterestAdapter', () => {
     });
   });
 
+  it('đọc Pins trên board và map sang bài đăng chung', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/v5/boards/board-1/pins');
+      expect(url.searchParams.get('bookmark')).toBe('cursor-1');
+      expect(url.searchParams.get('page_size')).toBe('50');
+      expect(url.searchParams.get('pin_metrics')).toBe('true');
+      return jsonResponse({
+        bookmark: 'cursor-2',
+        items: [
+          {
+            id: 'pin-1',
+            title: 'Summer board',
+            description: 'Fresh Pin',
+            created_at: '2026-07-30T08:00:00Z',
+            creative_type: 'REGULAR',
+            media: {
+              media_type: 'image',
+              images: {
+                '600x': {
+                  width: 600,
+                  height: 900,
+                  url: 'https://i.pinimg.com/600x/pin-1.jpg',
+                },
+              },
+            },
+          },
+        ],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new PinterestAdapter({
+      appId: 'pin-app',
+      appSecret: 'pin-secret',
+    });
+
+    await expect(
+      adapter.getPosts(
+        {
+          accessToken: 'pin-access',
+          externalAccountId: 'user-1',
+          externalPageId: 'board-1',
+          correlationId: 'test',
+        },
+        { cursor: 'cursor-1', limit: 50 },
+      ),
+    ).resolves.toMatchObject({
+      items: [
+        {
+          externalPostId: 'pin-1',
+          externalUrl: 'https://www.pinterest.com/pin/pin-1/',
+          caption: 'Fresh Pin',
+          title: 'Summer board',
+          mediaType: 'IMAGE',
+          thumbnailUrl: 'https://i.pinimg.com/600x/pin-1.jpg',
+        },
+      ],
+      nextCursor: 'cursor-2',
+      hasMore: true,
+    });
+  });
+
+  it('sửa metadata Pin qua PATCH /pins/{pin_id}', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/v5/pins/pin-1');
+      expect(init?.method).toBe('PATCH');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer pin-access' });
+      expect(String(init?.body)).toContain('"title":"Updated Pin"');
+      expect(String(init?.body)).toContain('"description":"Updated description\\n\\n#launch"');
+      expect(String(init?.body)).toContain('"board_section_id":"section-1"');
+      return jsonResponse({ id: 'pin-1', title: 'Updated Pin' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new PinterestAdapter({
+      appId: 'pin-app',
+      appSecret: 'pin-secret',
+    });
+
+    await expect(
+      adapter.editPost(
+        {
+          accessToken: 'pin-access',
+          externalAccountId: 'user-1',
+          externalPageId: 'board-1',
+          correlationId: 'test',
+        },
+        'pin-1',
+        {
+          title: 'Updated Pin',
+          description: 'Updated description',
+          linkUrl: 'https://example.com/pin',
+          hashtags: ['launch'],
+          options: { boardSectionId: 'section-1', altText: 'Updated alt' },
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('xóa Pin qua DELETE /pins/{pin_id}', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/v5/pins/pin-1');
+      expect(init?.method).toBe('DELETE');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer pin-access' });
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new PinterestAdapter({
+      appId: 'pin-app',
+      appSecret: 'pin-secret',
+    });
+
+    await expect(
+      adapter.deletePost(
+        {
+          accessToken: 'pin-access',
+          externalAccountId: 'user-1',
+          correlationId: 'test',
+        },
+        'pin-1',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('đọc metric Pin từ analytics và pin_metrics lifetime', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v5/pins/pin-1') {
+        expect(url.searchParams.get('pin_metrics')).toBe('true');
+        return jsonResponse({
+          id: 'pin-1',
+          pin_metrics: {
+            lifetime_metrics: {
+              impression: 90,
+              reaction: 4,
+              comment: 3,
+            },
+          },
+        });
+      }
+      if (url.pathname === '/v5/pins/pin-1/analytics') {
+        expect(url.searchParams.get('metric_types')).toContain('IMPRESSION');
+        expect(url.searchParams.get('split_field')).toBe('NO_SPLIT');
+        return jsonResponse({
+          pin_1: {
+            summary_metrics: {
+              IMPRESSION: 100,
+              SAVE: 8,
+              PIN_CLICK: 12,
+              OUTBOUND_CLICK: 5,
+              ENGAGEMENT: 25,
+              TOTAL_REACTIONS: 6,
+              VIDEO_MRC_VIEW: 11,
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new PinterestAdapter({
+      appId: 'pin-app',
+      appSecret: 'pin-secret',
+    });
+
+    await expect(
+      adapter.getPostMetrics(
+        {
+          accessToken: 'pin-access',
+          externalAccountId: 'user-1',
+          correlationId: 'test',
+        },
+        'pin-1',
+      ),
+    ).resolves.toMatchObject({
+      views: { value: 11, source: 'PLATFORM_API' },
+      likes: { value: 6, source: 'PLATFORM_API' },
+      comments: { value: 3, source: 'PLATFORM_API' },
+      impressions: { value: 100, source: 'PLATFORM_API' },
+      saves: { value: 8, source: 'PLATFORM_API' },
+      engagement: { value: 25, source: 'PLATFORM_API' },
+    });
+  });
+
   it('publish video lên Pinterest qua media upload flow', async () => {
     const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
       const url = new URL(String(input));

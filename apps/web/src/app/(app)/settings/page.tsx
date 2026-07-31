@@ -265,56 +265,59 @@ export default function SettingsPage() {
           </div>
 
           <div className="divide-y divide-slate-200">
-            {mediaItems.map((media) => (
-              <div
-                key={media.id}
-                className="grid gap-4 px-5 py-4 lg:grid-cols-[72px_1fr_140px_120px_120px]"
-              >
-                <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                  {media.type === 'IMAGE' && media.readUrl ? (
-                    <img
-                      alt={media.originalFileName ?? 'media'}
-                      className="h-full w-full object-cover"
-                      src={media.readUrl}
-                    />
-                  ) : (
-                    <span className="text-xs font-semibold text-slate-500">{media.type}</span>
-                  )}
+            {mediaItems.map((media) => {
+              const source = media.displayUrl ?? media.readUrl;
+              return (
+                <div
+                  key={media.id}
+                  className="grid gap-4 px-5 py-4 lg:grid-cols-[72px_1fr_140px_120px_120px]"
+                >
+                  <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                    {media.type === 'IMAGE' && source ? (
+                      <img
+                        alt={media.originalFileName ?? 'media'}
+                        className="h-full w-full object-cover"
+                        src={source}
+                      />
+                    ) : (
+                      <span className="text-xs font-semibold text-slate-500">{media.type}</span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-950">
+                      {media.originalFileName ?? media.id}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">{media.mimeType ?? media.status}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Upload bởi {media.uploadedByName ?? media.uploadedByEmail ?? 'không rõ'} ·{' '}
+                      {media.createdAt ? new Date(media.createdAt).toLocaleString('vi-VN') : '-'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase text-slate-500">Dung lượng</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {formatBytes(media.sizeBytes ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase text-slate-500">Đang dùng</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                      {media.usage.total} nơi
+                    </p>
+                  </div>
+                  <div className="flex items-center lg:justify-end">
+                    <SecondaryButton
+                      disabled={
+                        !canDeleteMedia || media.usage.total > 0 || deletingMediaId === media.id
+                      }
+                      onClick={() => void handleDeleteMedia(media)}
+                    >
+                      {deletingMediaId === media.id ? 'Đang xoá' : 'Xoá'}
+                    </SecondaryButton>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-950">
-                    {media.originalFileName ?? media.id}
-                  </p>
-                  <p className="mt-1 text-xs text-slate-500">{media.mimeType ?? media.status}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    Upload bởi {media.uploadedByName ?? media.uploadedByEmail ?? 'không rõ'} ·{' '}
-                    {media.createdAt ? new Date(media.createdAt).toLocaleString('vi-VN') : '-'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">Dung lượng</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    {formatBytes(media.sizeBytes ?? 0)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs font-medium uppercase text-slate-500">Đang dùng</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">
-                    {media.usage.total} nơi
-                  </p>
-                </div>
-                <div className="flex items-center lg:justify-end">
-                  <SecondaryButton
-                    disabled={
-                      !canDeleteMedia || media.usage.total > 0 || deletingMediaId === media.id
-                    }
-                    onClick={() => void handleDeleteMedia(media)}
-                  >
-                    {deletingMediaId === media.id ? 'Đang xoá' : 'Xoá'}
-                  </SecondaryButton>
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {mediaItems.length === 0 ? (
               <p className="px-5 py-6 text-sm text-slate-600">Chưa có media nào khớp filter.</p>
             ) : null}

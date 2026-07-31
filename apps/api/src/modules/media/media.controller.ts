@@ -10,9 +10,10 @@ import {
   Put,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthenticatedRequest } from '../../common/auth/auth.types';
 import { requireUser } from '../../common/auth/request-auth';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
@@ -46,6 +47,29 @@ export class MediaController {
     @Query(zodPipe(listMediaSchema)) query: ListMediaInput,
   ) {
     return this.media.list(workspaceId, query);
+  }
+
+  @Get(':mediaAssetId/object')
+  @RequirePermissions('media:view')
+  async object(
+    @Param('workspaceId') workspaceId: string,
+    @Param('mediaAssetId') mediaAssetId: string,
+    @Headers('range') range: string | undefined,
+    @Res() reply: FastifyReply,
+  ) {
+    const object = await this.media.getObject(workspaceId, mediaAssetId, range);
+    reply
+      .code(object.statusCode)
+      .header('Content-Type', object.contentType)
+      .header('Cache-Control', 'private, max-age=300')
+      .header('Accept-Ranges', 'bytes');
+    if (object.contentLength !== undefined) {
+      reply.header('Content-Length', String(object.contentLength));
+    }
+    if (object.contentRange) {
+      reply.header('Content-Range', object.contentRange);
+    }
+    return reply.send(object.body);
   }
 
   @Post('uploads')
