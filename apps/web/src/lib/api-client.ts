@@ -1,5 +1,4 @@
-import type { ApiResponse } from '@socialhub/shared';
-import type { WorkspaceRole } from '@socialhub/shared';
+import type { ApiResponse, NetworkProxyPolicyItem, WorkspaceRole } from '@socialhub/shared';
 import type {
   AuditLogItem,
   AuthPayload,
@@ -100,6 +99,41 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+};
+
+export const systemApi = {
+  getNetworkStatus: (workspaceId: string) =>
+    apiFetch<{
+      ip: string;
+      countryCode: string | null;
+      country: string;
+      city: string;
+      isp: string;
+      provider: string | null;
+      checkOk: boolean;
+      checkError: string | null;
+      checkErrors: string[];
+      proxyConfig: { enabled: boolean; countryLock: string | null };
+      proxyAvailable: boolean;
+      proxyActive: boolean;
+      countryLockSatisfied: boolean;
+    }>(`/workspaces/${workspaceId}/system/network`),
+  getProxyPolicy: (workspaceId: string) =>
+    apiFetch<{
+      generatedAt: string;
+      proxyConfig: { enabled: boolean; countryLock: string | null };
+      proxyAvailable: boolean;
+      summary: { total: number; proxied: number; direct: number };
+      items: NetworkProxyPolicyItem[];
+    }>(`/workspaces/${workspaceId}/system/proxy-policy`),
+  toggleProxy: (workspaceId: string, input: { enabled?: boolean; countryLock?: string | null }) =>
+    apiFetch<{ enabled: boolean; countryLock: string | null }>(
+      `/workspaces/${workspaceId}/system/proxy`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      },
+    ),
 };
 
 export const workspaceApi = {

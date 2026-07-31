@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AdapterFetch } from '../core/types';
 import { isPlatformError } from '../core/platform-error';
 import {
   normalizePinterestError,
@@ -36,6 +37,7 @@ export interface PinterestClientConfig {
   appSecret: string;
   defaultBoardName?: string;
   environment?: PinterestApiEnvironment;
+  fetch?: AdapterFetch;
 }
 
 export type PinterestApiEnvironment = 'production' | 'sandbox';
@@ -43,12 +45,14 @@ export type PinterestApiEnvironment = 'production' | 'sandbox';
 export class PinterestClient {
   private readonly apiBaseUrl: string;
   private readonly oauthUrl = 'https://www.pinterest.com/oauth/';
+  private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: PinterestClientConfig) {
     this.apiBaseUrl =
       config.environment === 'sandbox'
         ? 'https://api-sandbox.pinterest.com/v5'
         : 'https://api.pinterest.com/v5';
+    this.fetch = config.fetch ?? fetch;
   }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
@@ -402,7 +406,7 @@ export class PinterestClient {
 
     let response: Response;
     try {
-      response = await fetch(input.uploadUrl, {
+      response = await this.fetch(input.uploadUrl, {
         method: 'POST',
         body: form,
         signal: AbortSignal.timeout(180000),
@@ -468,7 +472,7 @@ export class PinterestClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         headers: { authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(15000),
       });
@@ -497,7 +501,7 @@ export class PinterestClient {
 
     let response: Response;
     try {
-      response = await fetch(`${this.apiBaseUrl}${path}`, {
+      response = await this.fetch(`${this.apiBaseUrl}${path}`, {
         method: 'POST',
         headers,
         body: new URLSearchParams(body),
@@ -518,7 +522,7 @@ export class PinterestClient {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${this.apiBaseUrl}${path}`, {
+      response = await this.fetch(`${this.apiBaseUrl}${path}`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${accessToken}`,
@@ -542,7 +546,7 @@ export class PinterestClient {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${this.apiBaseUrl}${path}`, {
+      response = await this.fetch(`${this.apiBaseUrl}${path}`, {
         method: 'PATCH',
         headers: {
           authorization: `Bearer ${accessToken}`,
@@ -561,7 +565,7 @@ export class PinterestClient {
   private async delete(path: string, accessToken: string): Promise<void> {
     let response: Response;
     try {
-      response = await fetch(`${this.apiBaseUrl}${path}`, {
+      response = await this.fetch(`${this.apiBaseUrl}${path}`, {
         method: 'DELETE',
         headers: { authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(15000),

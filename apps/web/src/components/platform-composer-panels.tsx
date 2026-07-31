@@ -654,11 +654,26 @@ function TikTokOptionsPanel({
           <SelectInput
             disabled={disabled}
             value={draft.tiktokPostMode}
-            onChange={(event) =>
-              onChange(account.id, {
-                tiktokPostMode: event.target.value as PlatformOverrideDraft['tiktokPostMode'],
-              })
-            }
+            onChange={(event) => {
+              const tiktokPostMode = event.target.value as PlatformOverrideDraft['tiktokPostMode'];
+              onChange(
+                account.id,
+                tiktokPostMode === 'DIRECT_POST'
+                  ? { tiktokPostMode }
+                  : {
+                      tiktokPostMode,
+                      tiktokPrivacyLevel: '',
+                      tiktokCoverTimestampMs: '',
+                      tiktokPhotoCoverIndex: '',
+                      tiktokAutoAddMusic: false,
+                      tiktokConsentConfirmed: false,
+                      tiktokCommercialContent: false,
+                      tiktokBrandContent: false,
+                      tiktokBrandOrganic: false,
+                      tiktokIsAiGenerated: false,
+                    },
+              );
+            }}
           >
             <option value="DIRECT_POST">Direct post</option>
             <option value="MEDIA_UPLOAD">Send to user inbox</option>

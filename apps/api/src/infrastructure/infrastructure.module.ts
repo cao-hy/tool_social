@@ -1,5 +1,5 @@
 import { Global, Module } from '@nestjs/common';
-import { loadApiEnv } from '@socialhub/config';
+import { createProxyAwareFetch, loadApiEnv } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -39,6 +39,7 @@ export const ADAPTER_REGISTRY = Symbol('ADAPTER_REGISTRY');
       useFactory: (env: ApiEnv): AdapterRegistry =>
         createRuntimeAdapterRegistry({
           nodeEnv: env.NODE_ENV,
+          fetch: createProxyAwareFetch(),
           facebook: {
             appId: env.FACEBOOK_APP_ID,
             appSecret: env.FACEBOOK_APP_SECRET,

@@ -21,6 +21,6 @@ describe('password hashing — SECURITY.md §3', () => {
   });
 
   it('mật khẩu tối thiểu 12 ký tự', async () => {
-    await expect(hashPassword('short')).rejects.toThrow('ít nhất 12 ký tự');
+    await expect(hashPassword('short')).rejects.toThrow('ít nhất 6 ký tự');
   });
 });

@@ -3,7 +3,13 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import { AuthLink, AuthPanel } from '@/components/auth-panel';
-import { Field, InlineError, PrimaryButton, TextInput } from '@/components/form-controls';
+import {
+  Field,
+  InlineError,
+  PasswordInput,
+  PrimaryButton,
+  TextInput,
+} from '@/components/form-controls';
 import { ApiClientError, authApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -33,10 +39,19 @@ export default function RegisterPage() {
 
     const form = new FormData(event.currentTarget);
     const email = String(form.get('email') ?? '');
+    const password = String(form.get('password') ?? '');
+    const confirmPassword = String(form.get('confirmPassword') ?? '');
+
+    if (password !== confirmPassword) {
+      setError('Mật khẩu xác nhận không khớp.');
+      setSubmitting(false);
+      return;
+    }
+
     try {
       const payload = await authApi.register({
         email,
-        password: String(form.get('password') ?? ''),
+        password,
         name: optionalFormText(form, 'name'),
         workspaceName: optionalFormText(form, 'workspaceName'),
       });
@@ -77,12 +92,14 @@ export default function RegisterPage() {
           <TextInput name="workspaceName" placeholder="Marketing team" />
         </Field>
         <Field label="Mật khẩu">
-          <TextInput
+          <PasswordInput autoComplete="new-password" minLength={6} name="password" required />
+        </Field>
+        <Field label="Xác nhận mật khẩu">
+          <PasswordInput
             autoComplete="new-password"
-            minLength={12}
-            name="password"
+            minLength={6}
+            name="confirmPassword"
             required
-            type="password"
           />
         </Field>
         <PrimaryButton busy={submitting} className="w-full" type="submit">

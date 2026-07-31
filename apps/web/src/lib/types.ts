@@ -189,6 +189,7 @@ export interface YouTubePlatformState {
   };
   refreshedAt: string;
   madePublicAt?: string;
+  publishNetwork?: PublishNetworkProof;
 }
 
 export interface TikTokPlatformState {
@@ -198,6 +199,25 @@ export interface TikTokPlatformState {
   publiclyAvailablePostIds?: string[];
   uploadedBytes?: number;
   refreshedAt: string;
+  publishNetwork?: PublishNetworkProof;
+}
+
+export interface PublishNetworkProof {
+  checkedAt: string;
+  ip: string | null;
+  countryCode: string | null;
+  country: string | null;
+  city: string | null;
+  isp: string | null;
+  provider?: string | null;
+  checkOk?: boolean;
+  checkError?: string | null;
+  checkErrors?: string[];
+  proxyEnabled: boolean;
+  proxyAvailable: boolean;
+  proxyActive: boolean;
+  countryLock: string | null;
+  countryLockSatisfied: boolean;
 }
 
 export type PlatformPostState =

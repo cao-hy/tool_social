@@ -7,3 +7,5 @@ export * from './rbac';
 export * from './pagination';
 export * from './queues';
 export * from './audit';
+export * from './proxy';
+export * from './network-policy';

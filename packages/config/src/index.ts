@@ -1,4 +1,5 @@
 export * from './load-env';
+export * from './proxy';
 export * from './schemas';
 
 import { EnvValidationError, loadDotEnv, parseEnv } from './load-env';

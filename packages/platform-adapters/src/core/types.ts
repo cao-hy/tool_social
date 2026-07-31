@@ -6,6 +6,8 @@ import type {
   AccountMetrics,
 } from '@socialhub/shared';
 
+export type AdapterFetch = typeof fetch;
+
 /**
  * Kiểu dữ liệu thống nhất mà mọi adapter phải nói.
  *

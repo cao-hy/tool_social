@@ -107,6 +107,8 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    environment:
+      PROXY_CONFIG_PATH: /app/runtime/.proxy-config.json
     depends_on:
       postgres:
         condition: service_healthy
@@ -116,6 +118,8 @@ services:
         condition: service_completed_successfully
     ports:
       - '${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-4000}:4000'
+    volumes:
+      - proxy-runtime:/app/runtime
     healthcheck:
       test:
         [
@@ -137,6 +141,8 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    environment:
+      PROXY_CONFIG_PATH: /app/runtime/.proxy-config.json
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,6 +152,8 @@ services:
         condition: service_completed_successfully
     ports:
       - '${WORKER_BIND_ADDRESS:-127.0.0.1}:${WORKER_HOST_PORT:-4001}:${WORKER_HEALTH_PORT:-4001}'
+    volumes:
+      - proxy-runtime:/app/runtime
     stop_grace_period: 45s
     healthcheck:
       test:
@@ -183,3 +191,4 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+  proxy-runtime:

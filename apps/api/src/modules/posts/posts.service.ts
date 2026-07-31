@@ -813,7 +813,7 @@ export class PostsService implements OnModuleDestroy {
 
     for (const account of accounts) {
       const override = overrideByAccountId.get(account.id);
-      const options = this.resolvePlatformPostOptions(account, override);
+      const options = this.resolvePlatformPostOptions(override);
       const platformPost = await tx.platformPost.create({
         data: {
           workspaceId,
@@ -847,7 +847,6 @@ export class PostsService implements OnModuleDestroy {
   }
 
   private resolvePlatformPostOptions(
-    account: { platform: Platform; scopes: string[] },
     override:
       | CreatePostInput['platformOverrides'][number]
       | NonNullable<UpdatePostInput['platformOverrides']>[number]
@@ -856,13 +855,6 @@ export class PostsService implements OnModuleDestroy {
     const explicitOptions =
       override?.options && Object.keys(override.options).length > 0 ? override.options : undefined;
     if (explicitOptions) return explicitOptions as Prisma.InputJsonValue;
-
-    if (account.platform === 'TIKTOK' && account.scopes.includes('video.publish')) {
-      return {
-        postMode: 'DIRECT_POST',
-        privacyLevel: 'SELF_ONLY',
-      };
-    }
 
     return undefined;
   }

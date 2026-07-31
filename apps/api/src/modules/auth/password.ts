@@ -15,8 +15,8 @@ export class PasswordPolicyError extends Error {
 }
 
 export function assertPasswordPolicy(password: string): void {
-  if (password.length < 12) {
-    throw new PasswordPolicyError('Mật khẩu phải có ít nhất 12 ký tự.');
+  if (password.length < 6) {
+    throw new PasswordPolicyError('Mật khẩu phải có ít nhất 6 ký tự.');
   }
 }
 

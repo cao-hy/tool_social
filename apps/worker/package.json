@@ -20,7 +20,8 @@
     "@socialhub/shared": "*",
     "bullmq": "^5.34.10",
     "ioredis": "^5.4.2",
-    "pino": "^9.6.0"
+    "pino": "^9.6.0",
+    "undici": "^8.9.0"
   },
   "devDependencies": {
     "postcss": "^8.5.25",

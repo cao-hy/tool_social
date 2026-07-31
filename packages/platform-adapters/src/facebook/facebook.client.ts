@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { AdapterFetch } from '../core/types';
 import {
   facebookNetworkError,
   facebookUnexpectedPayloadError,
@@ -28,15 +29,18 @@ export interface FacebookGraphClientConfig {
   appSecret: string;
   apiVersion: string;
   loginConfigId?: string;
+  fetch?: AdapterFetch;
 }
 
 export class FacebookGraphClient {
   private readonly graphBaseUrl: string;
   private readonly dialogBaseUrl: string;
+  private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: FacebookGraphClientConfig) {
     this.graphBaseUrl = `https://graph.facebook.com/${config.apiVersion}`;
     this.dialogBaseUrl = `https://www.facebook.com/${config.apiVersion}`;
+    this.fetch = config.fetch ?? fetch;
   }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
@@ -282,7 +286,7 @@ export class FacebookGraphClient {
 
     let response: Response;
     try {
-      response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      response = await this.fetch(url, { signal: AbortSignal.timeout(15000) });
     } catch (error) {
       throw facebookNetworkError(error);
     }
@@ -308,7 +312,7 @@ export class FacebookGraphClient {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${this.graphBaseUrl}${path}`, {
+      response = await this.fetch(`${this.graphBaseUrl}${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(body),
@@ -335,7 +339,7 @@ export class FacebookGraphClient {
   private async postMultipart<T>(path: string, body: FormData, schema: z.ZodType<T>): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${this.graphBaseUrl}${path}`, {
+      response = await this.fetch(`${this.graphBaseUrl}${path}`, {
         method: 'POST',
         body,
         signal: AbortSignal.timeout(120000),
@@ -370,7 +374,7 @@ export class FacebookGraphClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'DELETE',
         signal: AbortSignal.timeout(15000),
       });

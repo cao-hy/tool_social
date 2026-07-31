@@ -1,6 +1,12 @@
 import { createServer, type Server } from 'node:http';
 import { S3Client } from '@aws-sdk/client-s3';
-import { loadEnvOrExit, loadWorkerEnv, type WorkerEnv } from '@socialhub/config';
+import {
+  createProxyAwareFetch,
+  initProxyWatcher,
+  loadEnvOrExit,
+  loadWorkerEnv,
+  type WorkerEnv,
+} from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -32,6 +38,12 @@ let shuttingDown = false;
 
 async function main(): Promise<void> {
   const env: WorkerEnv = loadEnvOrExit(loadWorkerEnv);
+
+  initProxyWatcher((config) => {
+    logger.info(
+      `Proxy config changed. Enabled: ${config.enabled}, Country Lock: ${config.countryLock}`,
+    );
+  });
   logger.level = env.LOG_LEVEL;
 
   const connection = new Redis(env.REDIS_URL, {
@@ -98,6 +110,12 @@ async function main(): Promise<void> {
     process.exit(0);
   };
 
+  fetch('https://api.ipify.org?format=json')
+    .then((r) => r.json())
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .then((data: any) => logger.info(`🌐 Direct outbound IP của Worker: ${data.ip}`))
+    .catch((err) => logger.warn(`Không lấy được Outbound IP: ${err.message}`));
+
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
@@ -131,6 +149,7 @@ function createStorageClient(env: WorkerEnv): {
 function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
   return createRuntimeAdapterRegistry({
     nodeEnv: env.NODE_ENV,
+    fetch: createProxyAwareFetch(),
     facebook: {
       appId: env.FACEBOOK_APP_ID,
       appSecret: env.FACEBOOK_APP_SECRET,

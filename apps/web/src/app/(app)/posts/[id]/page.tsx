@@ -5,6 +5,7 @@ import { Edit3, ExternalLink, Eye, RefreshCw, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { Fragment } from 'react';
 import { useEffect, useState } from 'react';
 import { DeletePostDialog } from '@/components/delete-post-dialog';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
@@ -15,6 +16,7 @@ import type {
   ContentPostView,
   MediaAssetView,
   PlatformPostView,
+  PublishNetworkProof,
   TikTokPlatformState,
   YouTubePlatformState,
 } from '@/lib/types';
@@ -42,6 +44,7 @@ export default function PostDetailPage() {
   const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
   const [previewAsset, setPreviewAsset] = useState<MediaAssetView | null>(null);
   const [platformAction, setPlatformAction] = useState<string | null>(null);
+  const [expandedPlatformPostId, setExpandedPlatformPostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function loadPost() {
@@ -274,54 +277,69 @@ export default function PostDetailPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {post.platformPosts.map((platformPost) => (
-                    <tr key={platformPost.id} className="align-middle hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <p className="truncate font-semibold text-slate-950">
-                          {PLATFORM_LABELS[platformPost.platform]}
-                        </p>
-                        <p className="truncate text-xs text-slate-500">
-                          {platformPost.socialAccountName}
-                        </p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={platformPost.status} />
-                      </td>
-                      <td className="px-4 py-3 text-slate-700">{platformPost.attemptCount}</td>
-                      <td className="px-4 py-3 text-xs text-slate-600">
-                        <PlatformPostNote platformPost={platformPost} />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-1.5">
-                          {platformPost.externalUrl ? (
-                            <IconLink
-                              href={platformPost.externalUrl}
-                              label="Mở bài trên nền tảng"
-                              external
-                            >
-                              <ExternalLink className="h-4 w-4" />
-                            </IconLink>
-                          ) : null}
-                          <details className="relative">
-                            <summary className="inline-flex h-9 cursor-pointer list-none items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50">
-                              Chi tiết
-                            </summary>
-                            <div className="absolute right-0 z-20 mt-2 w-[420px] rounded-md border border-slate-200 bg-white p-3 shadow-xl">
-                              <PlatformPostDetails
-                                canPublish={canPublish}
-                                onCancel={() => void cancelTikTokPublish(platformPost)}
-                                onMakePublic={() => void makeYouTubePublic(platformPost)}
-                                onPreview={setPreviewAsset}
-                                onRefresh={() => void refreshPlatformState(platformPost)}
-                                platformAction={platformAction}
-                                platformPost={platformPost}
-                              />
+                  {post.platformPosts.map((platformPost) => {
+                    const expanded = expandedPlatformPostId === platformPost.id;
+                    return (
+                      <Fragment key={platformPost.id}>
+                        <tr className="align-middle hover:bg-slate-50">
+                          <td className="px-4 py-3">
+                            <p className="truncate font-semibold text-slate-950">
+                              {PLATFORM_LABELS[platformPost.platform]}
+                            </p>
+                            <p className="truncate text-xs text-slate-500">
+                              {platformPost.socialAccountName}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3">
+                            <StatusBadge status={platformPost.status} />
+                          </td>
+                          <td className="px-4 py-3 text-slate-700">{platformPost.attemptCount}</td>
+                          <td className="px-4 py-3 text-xs text-slate-600">
+                            <PlatformPostNote platformPost={platformPost} />
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex justify-end gap-1.5">
+                              {platformPost.externalUrl ? (
+                                <IconLink
+                                  href={platformPost.externalUrl}
+                                  label="Mở bài trên nền tảng"
+                                  external
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                </IconLink>
+                              ) : null}
+                              <button
+                                className="inline-flex h-9 items-center rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+                                onClick={() =>
+                                  setExpandedPlatformPostId(expanded ? null : platformPost.id)
+                                }
+                                type="button"
+                              >
+                                {expanded ? 'Ẩn' : 'Chi tiết'}
+                              </button>
                             </div>
-                          </details>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                          </td>
+                        </tr>
+                        {expanded ? (
+                          <tr className="bg-slate-50/70">
+                            <td colSpan={5} className="px-4 pb-4 pt-0">
+                              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                                <PlatformPostDetails
+                                  canPublish={canPublish}
+                                  onCancel={() => void cancelTikTokPublish(platformPost)}
+                                  onMakePublic={() => void makeYouTubePublic(platformPost)}
+                                  onPreview={setPreviewAsset}
+                                  onRefresh={() => void refreshPlatformState(platformPost)}
+                                  platformAction={platformAction}
+                                  platformPost={platformPost}
+                                />
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -542,6 +560,35 @@ function StateRow({ label, value }: { label: string; value: string }) {
       <span className="text-right font-medium text-slate-900">{value}</span>
     </div>
   );
+}
+
+function getPublishNetworkProof(
+  state: PlatformPostView['platformState'],
+): PublishNetworkProof | null {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
+  const network = (state as Record<string, unknown>).publishNetwork;
+  if (!network || typeof network !== 'object' || Array.isArray(network)) return null;
+  const record = network as Record<string, unknown>;
+  if (typeof record.checkedAt !== 'string') return null;
+  return {
+    checkedAt: record.checkedAt,
+    ip: typeof record.ip === 'string' ? record.ip : null,
+    countryCode: typeof record.countryCode === 'string' ? record.countryCode : null,
+    country: typeof record.country === 'string' ? record.country : null,
+    city: typeof record.city === 'string' ? record.city : null,
+    isp: typeof record.isp === 'string' ? record.isp : null,
+    provider: typeof record.provider === 'string' ? record.provider : null,
+    checkOk: record.checkOk === true,
+    checkError: typeof record.checkError === 'string' ? record.checkError : null,
+    checkErrors: Array.isArray(record.checkErrors)
+      ? record.checkErrors.filter((item): item is string => typeof item === 'string')
+      : [],
+    proxyEnabled: record.proxyEnabled === true,
+    proxyAvailable: record.proxyAvailable === true,
+    proxyActive: record.proxyActive === true,
+    countryLock: typeof record.countryLock === 'string' ? record.countryLock : null,
+    countryLockSatisfied: record.countryLockSatisfied === true,
+  };
 }
 
 function isYouTubePlatformState(value: unknown): value is YouTubePlatformState {
@@ -796,56 +843,148 @@ function PlatformPostDetails({
   onPreview: (asset: MediaAssetView) => void;
 }) {
   return (
-    <div className="space-y-3">
-      {hasPlatformOverride(platformPost) ? (
-        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-semibold uppercase text-slate-500">Override</p>
-          <div className="mt-2 space-y-1 text-sm text-slate-700">
-            {platformPost.title ? <p>Title: {platformPost.title}</p> : null}
-            {platformPost.caption ? (
-              <p className="whitespace-pre-wrap">Caption: {platformPost.caption}</p>
-            ) : null}
-            {platformPost.description ? (
-              <p className="whitespace-pre-wrap">Description: {platformPost.description}</p>
-            ) : null}
-            {platformPost.linkUrl ? (
-              <p className="break-all">Link: {platformPost.linkUrl}</p>
-            ) : null}
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        <DetailInfo label="Target" value={PLATFORM_LABELS[platformPost.platform]} />
+        <DetailInfo label="Account" value={platformPost.socialAccountName} />
+        <DetailInfo label="External ID" value={platformPost.externalPostId ?? '-'} />
+        <DetailInfo
+          label="Published"
+          value={platformPost.publishedAt ? formatDateTime(platformPost.publishedAt) : '-'}
+        />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+        <section className="min-w-0 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-950">Nội dung target</h3>
+            <span className="text-xs font-medium text-slate-500">
+              {hasPlatformOverride(platformPost) ? 'Có tùy chỉnh riêng' : 'Dùng nội dung chung'}
+            </span>
           </div>
-          <MediaStrip media={platformPost.media} onPreview={onPreview} />
-          {platformPost.options ? (
-            <details className="mt-3">
-              <summary className="cursor-pointer text-xs font-semibold text-slate-600">
-                Options kỹ thuật
-              </summary>
-              <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
-                {JSON.stringify(platformPost.options, null, 2)}
-              </pre>
-            </details>
+          {hasPlatformOverride(platformPost) ? (
+            <div className="mt-3 space-y-3 text-sm text-slate-700">
+              {platformPost.title ? <DetailText label="Title" value={platformPost.title} /> : null}
+              {platformPost.caption ? (
+                <DetailText label="Caption" value={platformPost.caption} multiline />
+              ) : null}
+              {platformPost.description ? (
+                <DetailText label="Description" value={platformPost.description} multiline />
+              ) : null}
+              {platformPost.linkUrl ? (
+                <DetailText label="Link" value={platformPost.linkUrl} />
+              ) : null}
+              <MediaStrip media={platformPost.media} onPreview={onPreview} />
+              {platformPost.options ? (
+                <details className="rounded-md border border-slate-200 bg-white px-3 py-2">
+                  <summary className="cursor-pointer text-xs font-semibold text-slate-600">
+                    Options kỹ thuật
+                  </summary>
+                  <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-slate-100">
+                    {JSON.stringify(platformPost.options, null, 2)}
+                  </pre>
+                </details>
+              ) : null}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+              Target này đang dùng title, caption, link và media từ nội dung chung của bài.
+            </p>
+          )}
+        </section>
+
+        <aside className="space-y-3">
+          {platformPost.platform === 'YOUTUBE' ? (
+            <YouTubeStatePanel
+              canPublish={canPublish}
+              onMakePublic={onMakePublic}
+              onRefresh={onRefresh}
+              platformAction={platformAction}
+              platformPost={platformPost}
+            />
           ) : null}
+          {platformPost.platform === 'TIKTOK' ? (
+            <TikTokStatePanel
+              canPublish={canPublish}
+              onCancel={onCancel}
+              onRefresh={onRefresh}
+              platformAction={platformAction}
+              platformPost={platformPost}
+            />
+          ) : null}
+          <PublishNetworkPanel state={platformPost.platformState} />
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function DetailInfo({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md bg-slate-50 px-3 py-2">
+      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-medium text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function DetailText({
+  label,
+  value,
+  multiline = false,
+}: {
+  label: string;
+  value: string;
+  multiline?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
+      <p
+        className={`mt-1 text-sm text-slate-800 ${multiline ? 'whitespace-pre-wrap' : 'break-all'}`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function PublishNetworkPanel({ state }: { state: PlatformPostView['platformState'] }) {
+  const network = getPublishNetworkProof(state);
+  if (!network) return null;
+  const location = [network.city, network.country].filter(Boolean).join(', ') || '-';
+  const tone =
+    network.proxyActive && network.countryLockSatisfied && network.checkOk !== false
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : network.proxyEnabled
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : 'border-slate-200 bg-slate-50 text-slate-700';
+
+  return (
+    <div className={`rounded-md border p-3 text-xs ${tone}`}>
+      <p className="font-semibold uppercase">Publish network proof</p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <StateRow label="IP publish" value={network.ip ?? '-'} />
+        <StateRow label="Quốc gia" value={network.countryCode ?? '-'} />
+        <StateRow label="Vị trí" value={location} />
+        <StateRow label="ISP" value={network.isp ?? '-'} />
+        <StateRow label="Provider" value={network.provider ?? '-'} />
+        <StateRow label="Check OK" value={network.checkOk === false ? 'NO' : 'YES'} />
+        <StateRow label="Proxy" value={network.proxyActive ? 'ACTIVE' : 'NOT ACTIVE'} />
+        <StateRow label="Country lock" value={network.countryLock ?? '-'} />
+        <StateRow label="Lock OK" value={network.countryLockSatisfied ? 'YES' : 'NO'} />
+        <StateRow label="Checked" value={formatDateTime(network.checkedAt)} />
+      </div>
+      {network.checkErrors?.length ? (
+        <div className="mt-2 space-y-1">
+          {network.checkErrors.map((error) => (
+            <p key={error} className="break-words">
+              {error}
+            </p>
+          ))}
         </div>
-      ) : (
-        <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          Target này đang dùng nội dung chung.
-        </p>
-      )}
-      {platformPost.platform === 'YOUTUBE' ? (
-        <YouTubeStatePanel
-          canPublish={canPublish}
-          onMakePublic={onMakePublic}
-          onRefresh={onRefresh}
-          platformAction={platformAction}
-          platformPost={platformPost}
-        />
-      ) : null}
-      {platformPost.platform === 'TIKTOK' ? (
-        <TikTokStatePanel
-          canPublish={canPublish}
-          onCancel={onCancel}
-          onRefresh={onRefresh}
-          platformAction={platformAction}
-          platformPost={platformPost}
-        />
+      ) : network.checkError ? (
+        <p className="mt-2 break-words">{network.checkError}</p>
       ) : null}
     </div>
   );

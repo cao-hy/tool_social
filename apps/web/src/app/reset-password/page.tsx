@@ -3,7 +3,13 @@
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState, type FormEvent } from 'react';
 import { AuthLink, AuthPanel } from '@/components/auth-panel';
-import { Field, InlineError, PrimaryButton, TextInput } from '@/components/form-controls';
+import {
+  Field,
+  InlineError,
+  PasswordInput,
+  PrimaryButton,
+  TextInput,
+} from '@/components/form-controls';
 import { authApi } from '@/lib/api-client';
 import { getErrorMessage } from '@/lib/errors';
 
@@ -73,13 +79,7 @@ function ResetPasswordForm() {
           />
         </Field>
         <Field label="Mật khẩu mới">
-          <TextInput
-            autoComplete="new-password"
-            minLength={12}
-            name="password"
-            required
-            type="password"
-          />
+          <PasswordInput autoComplete="new-password" minLength={6} name="password" required />
         </Field>
         <PrimaryButton busy={submitting} className="w-full" type="submit">
           Cập nhật mật khẩu

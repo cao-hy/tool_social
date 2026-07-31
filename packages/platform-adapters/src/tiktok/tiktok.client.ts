@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AdapterFetch } from '../core/types';
 import {
   normalizeTikTokError,
   tiktokApiEnvelopeError,
@@ -26,6 +27,7 @@ import {
 export interface TikTokClientConfig {
   clientKey: string;
   clientSecret: string;
+  fetch?: AdapterFetch;
 }
 
 export interface TikTokDirectVideoPostInput {
@@ -71,7 +73,11 @@ const MIN_CHUNK_SIZE = 5 * 1024 * 1024;
 const MAX_CHUNKS = 1000;
 
 export class TikTokClient {
-  constructor(private readonly config: TikTokClientConfig) {}
+  private readonly fetch: AdapterFetch;
+
+  constructor(private readonly config: TikTokClientConfig) {
+    this.fetch = config.fetch ?? fetch;
+  }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
     const url = new URL(AUTH_URL);
@@ -306,7 +312,7 @@ export class TikTokClient {
 
       let response: Response;
       try {
-        response = await fetch(input.uploadUrl, {
+        response = await this.fetch(input.uploadUrl, {
           method: 'PUT',
           headers: {
             'content-type': input.mimeType,
@@ -343,7 +349,7 @@ export class TikTokClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         headers: { authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(15000),
       });
@@ -361,7 +367,7 @@ export class TikTokClient {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${API_BASE_URL}${path}`, {
+      response = await this.fetch(`${API_BASE_URL}${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(body),
@@ -382,7 +388,7 @@ export class TikTokClient {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${API_BASE_URL}${path}`, {
+      response = await this.fetch(`${API_BASE_URL}${path}`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${accessToken}`,

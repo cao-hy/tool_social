@@ -8,6 +8,7 @@ import {
   type YouTubeVideoPlatformState,
 } from '@socialhub/platform-adapters';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { checkProxyAwareNetwork, createProxyAwareFetch, readProxyConfig } from '@socialhub/config';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import {
@@ -26,6 +27,26 @@ const publishPostPayloadSchema = z.object({
   workspaceId: z.string().min(1),
   correlationId: z.string().min(1),
 });
+
+interface PublishNetworkProof {
+  checkedAt: string;
+  ip: string | null;
+  countryCode: string | null;
+  country: string | null;
+  city: string | null;
+  isp: string | null;
+  provider?: string | null;
+  checkOk?: boolean;
+  checkError?: string | null;
+  checkErrors?: string[];
+  proxyEnabled: boolean;
+  proxyAvailable: boolean;
+  proxyActive: boolean;
+  countryLock: string | null;
+  countryLockSatisfied: boolean;
+}
+
+const proxyAwareFetch = createProxyAwareFetch();
 
 export function createPublishPostProcessor(input: {
   prisma: PrismaClientInstance;
@@ -161,6 +182,8 @@ async function publishPlatformPost(
     return { published: false, reason: 'fixture_account_with_real_adapter' };
   }
 
+  let publishNetworkProof: PublishNetworkProof | null = null;
+
   try {
     const accessToken = await getFreshAccessToken({
       prisma: input.prisma,
@@ -210,11 +233,18 @@ async function publishPlatformPost(
       correlationId: payload.correlationId,
     } satisfies AdapterContext;
 
+    publishNetworkProof = await capturePublishNetworkProof(readProxyConfig());
+    assertCountryLock(publishNetworkProof);
+
     const result = await adapter.publishPost(adapterContext, publishInput);
     const platformState = await platformStateAfterPublish(
       adapter,
       adapterContext,
       result.externalPostId,
+    );
+    const platformStateWithNetwork = mergePlatformStateWithNetworkProof(
+      platformState,
+      publishNetworkProof,
     );
 
     await input.prisma.$transaction([
@@ -227,9 +257,7 @@ async function publishPlatformPost(
           publishedAt: result.publishedAt,
           errorCode: null,
           errorMessage: null,
-          platformState: platformState
-            ? (platformState as unknown as Prisma.InputJsonValue)
-            : undefined,
+          platformState: platformStateWithNetwork as Prisma.InputJsonValue,
         },
       }),
       input.prisma.auditLog.create({
@@ -243,7 +271,8 @@ async function publishPlatformPost(
             platform: platformPost.platform,
             externalPostId: result.externalPostId,
             jobId: job.id,
-          },
+            publishNetwork: publishNetworkProof,
+          } as unknown as Prisma.InputJsonValue,
         },
       }),
       input.prisma.notification.create({
@@ -274,6 +303,12 @@ async function publishPlatformPost(
         status: decision.action === 'RETRY' ? 'QUEUED' : 'FAILED',
         errorCode: code,
         errorMessage: message,
+        platformState: publishNetworkProof
+          ? (mergePlatformStateWithNetworkProof(
+              jsonObject(platformPost.platformState),
+              publishNetworkProof,
+            ) as Prisma.InputJsonValue)
+          : undefined,
       },
     });
 
@@ -305,9 +340,56 @@ async function publishPlatformPost(
   }
 }
 
-function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
+function jsonObject(
+  value: Prisma.JsonValue | null | undefined,
+): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
+}
+
+async function capturePublishNetworkProof(
+  proxyConfig = readProxyConfig(),
+): Promise<PublishNetworkProof> {
+  const status = await checkProxyAwareNetwork(proxyConfig, proxyAwareFetch);
+  return {
+    checkedAt: status.checkedAt,
+    ip: status.ip,
+    countryCode: status.countryCode,
+    country: status.country,
+    city: status.city,
+    isp: status.isp,
+    provider: status.provider,
+    checkOk: status.checkOk,
+    checkError: status.checkError,
+    checkErrors: status.checkErrors,
+    proxyEnabled: proxyConfig.enabled,
+    proxyAvailable: status.proxyAvailable,
+    proxyActive: status.proxyActive,
+    countryLock: proxyConfig.countryLock,
+    countryLockSatisfied: status.countryLockSatisfied,
+  };
+}
+
+function assertCountryLock(networkProof: PublishNetworkProof): void {
+  if (!networkProof.proxyEnabled || !networkProof.countryLock) return;
+  if (networkProof.countryLockSatisfied) return;
+  if (!networkProof.countryCode) {
+    throw new Error('Country Lock thất bại: Không thể xác minh IP trước khi publish.');
+  }
+  throw new Error(
+    `Country Lock bị vi phạm: IP publish là ${networkProof.countryCode} (dự kiến: ${networkProof.countryLock}).`,
+  );
+}
+
+function mergePlatformStateWithNetworkProof(
+  platformState:
+    TikTokPublishPlatformState | YouTubeVideoPlatformState | Record<string, unknown> | undefined,
+  publishNetwork: PublishNetworkProof,
+): Record<string, unknown> {
+  return {
+    ...(platformState ?? {}),
+    publishNetwork,
+  };
 }
 
 async function platformStateAfterPublish(

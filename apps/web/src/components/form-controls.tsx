@@ -1,4 +1,10 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
+import {
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+} from 'react';
 
 export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -15,6 +21,26 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
       {...props}
       className={`h-11 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 ${props.className ?? ''}`}
     />
+  );
+}
+
+export function PasswordInput(props: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <input
+        {...props}
+        type={show ? 'text' : 'password'}
+        className={`h-11 w-full rounded-md border border-slate-300 bg-white px-3 pr-10 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100 ${props.className ?? ''}`}
+      />
+      <button
+        type="button"
+        onClick={() => setShow(!show)}
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none"
+      >
+        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
   );
 }
 

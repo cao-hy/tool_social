@@ -23,6 +23,7 @@
   "dependencies": {
     "@socialhub/shared": "*",
     "dotenv": "^16.4.7",
+    "undici": "^8.9.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

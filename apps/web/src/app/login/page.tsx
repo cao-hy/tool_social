@@ -4,7 +4,13 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import { AuthLink, AuthPanel } from '@/components/auth-panel';
-import { Field, InlineError, PrimaryButton, TextInput } from '@/components/form-controls';
+import {
+  Field,
+  InlineError,
+  PasswordInput,
+  PrimaryButton,
+  TextInput,
+} from '@/components/form-controls';
 import { authApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -57,7 +63,7 @@ export default function LoginPage() {
           <TextInput autoComplete="email" name="email" required type="email" />
         </Field>
         <Field label="Mật khẩu">
-          <TextInput autoComplete="current-password" name="password" required type="password" />
+          <PasswordInput autoComplete="current-password" name="password" required />
         </Field>
         <div className="flex items-center justify-between gap-3">
           <Link

@@ -14,9 +14,12 @@ import { ResponseInterceptor } from '../common/interceptors/response.interceptor
 import { attachRequestId } from '../common/request-context';
 import { HealthController } from '../modules/health/health.controller';
 import { HealthService } from '../modules/health/health.service';
+import { SystemController } from '../modules/health/system.controller';
 import { PlatformsController } from '../modules/platforms/platforms.controller';
 import { PrismaService } from '../infrastructure/prisma/prisma.service';
 import { RedisService } from '../infrastructure/redis/redis.service';
+import { ENV } from '../infrastructure/env.provider';
+import { AuditService } from '../modules/audit/audit.service';
 
 /**
  * Test HTTP thật (Supertest) nhưng thay Postgres/Redis bằng mock.
@@ -32,11 +35,13 @@ describe('Health & Platforms (e2e)', () => {
 
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
-      controllers: [HealthController, PlatformsController],
+      controllers: [HealthController, PlatformsController, SystemController],
       providers: [
         HealthService,
         { provide: PrismaService, useValue: { ping: prismaPing } },
         { provide: RedisService, useValue: { ping: redisPing } },
+        { provide: ENV, useValue: { SESSION_COOKIE_NAME: 'socialhub.sid' } },
+        { provide: AuditService, useValue: { record: vi.fn() } },
         { provide: APP_FILTER, useClass: AllExceptionsFilter },
         { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },
       ],
@@ -205,6 +210,25 @@ describe('Health & Platforms (e2e)', () => {
       expect(excluded.actions).toContain('likePost');
       expect(excluded.actions).toContain('sharePost');
       expect(excluded.reason).toContain('§3');
+    });
+  });
+
+  describe('System proxy config', () => {
+    it('không cho client chưa đăng nhập đọc network/proxy status', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/workspaces/ws_1/system/network')
+        .expect(401);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error.code).toBe('UNAUTHENTICATED');
+    });
+
+    it('không cho client chưa đăng nhập sửa proxy config', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/workspaces/ws_1/system/proxy')
+        .send({ enabled: true })
+        .expect(401);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error.code).toBe('UNAUTHENTICATED');
     });
   });
 

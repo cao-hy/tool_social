@@ -52,3 +52,4 @@ desktop.ini
 docker/data/
 tmp/
 .cache/
+.proxy-config.json

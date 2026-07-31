@@ -6,9 +6,11 @@ import { InstagramAdapter, type InstagramAdapterConfig } from './instagram/insta
 import { PinterestAdapter, type PinterestAdapterConfig } from './pinterest/pinterest.adapter';
 import { YouTubeAdapter, type YouTubeAdapterConfig } from './youtube/youtube.adapter';
 import { TikTokAdapter, type TikTokAdapterConfig } from './tiktok/tiktok.adapter';
+import type { AdapterFetch } from './core/types';
 
 export interface AdapterRegistryRuntimeConfig {
   nodeEnv: string;
+  fetch?: AdapterFetch;
   facebook?: Partial<FacebookPagesAdapterConfig>;
   instagram?: Partial<InstagramAdapterConfig>;
   pinterest?: Partial<PinterestAdapterConfig>;
@@ -20,11 +22,11 @@ export function createRuntimeAdapterRegistry(
   config: AdapterRegistryRuntimeConfig,
 ): AdapterRegistry {
   const registry = new AdapterRegistry();
-  const facebookConfig = completeFacebookConfig(config.facebook);
-  const instagramConfig = completeInstagramConfig(config.instagram);
-  const pinterestConfig = completePinterestConfig(config.nodeEnv, config.pinterest);
-  const youtubeConfig = completeYouTubeConfig(config.youtube);
-  const tiktokConfig = completeTikTokConfig(config.tiktok);
+  const facebookConfig = completeFacebookConfig(config.facebook, config.fetch);
+  const instagramConfig = completeInstagramConfig(config.instagram, config.fetch);
+  const pinterestConfig = completePinterestConfig(config.nodeEnv, config.pinterest, config.fetch);
+  const youtubeConfig = completeYouTubeConfig(config.youtube, config.fetch);
+  const tiktokConfig = completeTikTokConfig(config.tiktok, config.fetch);
 
   if (facebookConfig) {
     registry.register(new FacebookPagesAdapter(facebookConfig));
@@ -57,6 +59,7 @@ export function createRuntimeAdapterRegistry(
 
 function completeTikTokConfig(
   config: Partial<TikTokAdapterConfig> | undefined,
+  fetch: AdapterFetch | undefined,
 ): TikTokAdapterConfig | null {
   const values = [config?.clientKey, config?.clientSecret];
   const hasAny = values.some((value) => Boolean(value));
@@ -72,12 +75,14 @@ function completeTikTokConfig(
   return {
     clientKey: config?.clientKey ?? '',
     clientSecret: config?.clientSecret ?? '',
+    fetch,
     scopes: config?.scopes,
   };
 }
 
 function completeYouTubeConfig(
   config: Partial<YouTubeAdapterConfig> | undefined,
+  fetch: AdapterFetch | undefined,
 ): YouTubeAdapterConfig | null {
   const values = [config?.clientId, config?.clientSecret];
   const hasAny = values.some((value) => Boolean(value));
@@ -93,12 +98,14 @@ function completeYouTubeConfig(
   return {
     clientId: config?.clientId ?? '',
     clientSecret: config?.clientSecret ?? '',
+    fetch,
     scopes: config?.scopes,
   };
 }
 
 function completeFacebookConfig(
   config: Partial<FacebookPagesAdapterConfig> | undefined,
+  fetch: AdapterFetch | undefined,
 ): FacebookPagesAdapterConfig | null {
   const values = [config?.appId, config?.appSecret, config?.apiVersion];
   const hasAny = values.some((value) => Boolean(value));
@@ -116,12 +123,14 @@ function completeFacebookConfig(
     appSecret: config?.appSecret ?? '',
     apiVersion: normalizeApiVersion(config?.apiVersion ?? ''),
     loginConfigId: config?.loginConfigId,
+    fetch,
     scopes: config?.scopes,
   };
 }
 
 function completeInstagramConfig(
   config: Partial<InstagramAdapterConfig> | undefined,
+  fetch: AdapterFetch | undefined,
 ): InstagramAdapterConfig | null {
   const values = [config?.appId, config?.appSecret, config?.apiVersion];
   const hasAny = values.some((value) => Boolean(value));
@@ -138,6 +147,7 @@ function completeInstagramConfig(
     appId: config?.appId ?? '',
     appSecret: config?.appSecret ?? '',
     apiVersion: normalizeApiVersion(config?.apiVersion ?? ''),
+    fetch,
     scopes: config?.scopes,
   };
 }
@@ -145,6 +155,7 @@ function completeInstagramConfig(
 function completePinterestConfig(
   nodeEnv: string,
   config: Partial<PinterestAdapterConfig> | undefined,
+  fetch: AdapterFetch | undefined,
 ): PinterestAdapterConfig | null {
   const values = [config?.appId, config?.appSecret];
   const hasAny = values.some((value) => Boolean(value));
@@ -162,6 +173,7 @@ function completePinterestConfig(
     appSecret: config?.appSecret ?? '',
     defaultBoardName: config?.defaultBoardName,
     environment: config?.environment ?? (nodeEnv === 'production' ? 'production' : 'sandbox'),
+    fetch,
     scopes: config?.scopes,
   };
 }

@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth-store';
 import { SecondaryButton, SelectInput } from './form-controls';
 import { NotificationToasts } from './notification-toasts';
 import { RoleBadge } from './role-badge';
+import { ProxyWidget } from './proxy-widget';
 
 export function AppShell({ children }: { children: ReactNode }) {
   const auth = useAuth();
@@ -32,6 +33,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   if (!auth.user) return null;
+
+  const canManageProxy =
+    auth.activeWorkspace?.role === 'OWNER' || auth.activeWorkspace?.role === 'ADMIN';
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[280px_1fr]">
@@ -64,6 +68,12 @@ export function AppShell({ children }: { children: ReactNode }) {
             </SelectInput>
           ) : null}
         </div>
+
+        {canManageProxy && auth.activeWorkspaceId ? (
+          <div className="mb-5">
+            <ProxyWidget workspaceId={auth.activeWorkspaceId} />
+          </div>
+        ) : null}
 
         <nav className="space-y-1">
           {NAV_ITEMS.map((item) => {

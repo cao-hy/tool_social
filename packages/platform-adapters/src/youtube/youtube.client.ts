@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { AdapterFetch } from '../core/types';
 import {
   normalizeYouTubeError,
   youtubeNetworkError,
@@ -21,6 +22,7 @@ import {
 export interface YouTubeClientConfig {
   clientId: string;
   clientSecret: string;
+  fetch?: AdapterFetch;
 }
 
 export interface YouTubeUploadVideoInput {
@@ -43,7 +45,11 @@ export class YouTubeClient {
   private readonly apiBaseUrl = 'https://www.googleapis.com/youtube/v3';
   private readonly uploadBaseUrl = 'https://www.googleapis.com/upload/youtube/v3';
 
-  constructor(private readonly config: YouTubeClientConfig) {}
+  private readonly fetch: AdapterFetch;
+
+  constructor(private readonly config: YouTubeClientConfig) {
+    this.fetch = config.fetch ?? fetch;
+  }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
     const url = new URL(this.authBaseUrl);
@@ -91,7 +97,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000) });
+      response = await this.fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000) });
     } catch (error) {
       throw youtubeNetworkError(error);
     }
@@ -250,7 +256,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'DELETE',
         headers: { authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(30000),
@@ -333,7 +339,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'DELETE',
         headers: { authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(30000),
@@ -362,7 +368,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'POST',
         headers: { authorization: `Bearer ${input.accessToken}` },
         signal: AbortSignal.timeout(30000),
@@ -393,7 +399,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${input.accessToken}`,
@@ -434,7 +440,7 @@ export class YouTubeClient {
   }): Promise<YouTubeVideoResponse> {
     let response: Response;
     try {
-      response = await fetch(input.sessionUrl, {
+      response = await this.fetch(input.sessionUrl, {
         method: 'PUT',
         headers: {
           authorization: `Bearer ${input.accessToken}`,
@@ -464,7 +470,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         headers: { authorization: `Bearer ${accessToken}` },
         signal: AbortSignal.timeout(15000),
       });
@@ -482,7 +488,7 @@ export class YouTubeClient {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(body),
@@ -509,7 +515,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'PUT',
         headers: {
           authorization: `Bearer ${accessToken}`,
@@ -539,7 +545,7 @@ export class YouTubeClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${accessToken}`,

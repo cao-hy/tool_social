@@ -69,12 +69,9 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   tiktokIsAiGenerated: false,
 };
 
-export function platformOverrideDefaults(platform: Platform, scopes: string[] = []) {
-  const canDirectPostTikTok = platform === 'TIKTOK' && scopes.includes('video.publish');
+export function platformOverrideDefaults(_platform: Platform, _scopes: string[] = []) {
   return {
     ...EMPTY_PLATFORM_OVERRIDE,
-    customized: canDirectPostTikTok,
-    tiktokPostMode: canDirectPostTikTok ? 'DIRECT_POST' : 'MEDIA_UPLOAD',
   } satisfies PlatformOverrideDraft;
 }
 
@@ -175,26 +172,32 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
         selfDeclaredMadeForKids: draft.youtubeMadeForKids,
         containsSyntheticMedia: draft.youtubeContainsSyntheticMedia,
       });
-    case 'TIKTOK':
+    case 'TIKTOK': {
+      const directPost = draft.tiktokPostMode === 'DIRECT_POST';
       return compactOptions({
         postMode: draft.tiktokPostMode,
-        privacyLevel: draft.tiktokPrivacyLevel,
-        disableComment: draft.tiktokDisableComment,
-        disableDuet: draft.tiktokDisableDuet,
-        disableStitch: draft.tiktokDisableStitch,
-        videoCoverTimestampMs: draft.tiktokCoverTimestampMs
-          ? Number(draft.tiktokCoverTimestampMs)
-          : undefined,
-        autoAddMusic: draft.tiktokAutoAddMusic,
-        photoCoverIndex: draft.tiktokPhotoCoverIndex
-          ? Number(draft.tiktokPhotoCoverIndex)
-          : undefined,
-        consentConfirmed: draft.tiktokConsentConfirmed,
-        commercialContentEnabled: draft.tiktokCommercialContent,
-        brandContentToggle: draft.tiktokCommercialContent ? draft.tiktokBrandContent : undefined,
-        brandOrganicToggle: draft.tiktokCommercialContent ? draft.tiktokBrandOrganic : undefined,
-        isAiGenerated: draft.tiktokIsAiGenerated,
+        privacyLevel: directPost ? draft.tiktokPrivacyLevel : undefined,
+        disableComment: directPost ? draft.tiktokDisableComment : undefined,
+        disableDuet: directPost ? draft.tiktokDisableDuet : undefined,
+        disableStitch: directPost ? draft.tiktokDisableStitch : undefined,
+        videoCoverTimestampMs:
+          directPost && draft.tiktokCoverTimestampMs
+            ? Number(draft.tiktokCoverTimestampMs)
+            : undefined,
+        autoAddMusic: directPost ? draft.tiktokAutoAddMusic : undefined,
+        photoCoverIndex:
+          directPost && draft.tiktokPhotoCoverIndex
+            ? Number(draft.tiktokPhotoCoverIndex)
+            : undefined,
+        consentConfirmed: directPost ? draft.tiktokConsentConfirmed : undefined,
+        commercialContentEnabled: directPost ? draft.tiktokCommercialContent : undefined,
+        brandContentToggle:
+          directPost && draft.tiktokCommercialContent ? draft.tiktokBrandContent : undefined,
+        brandOrganicToggle:
+          directPost && draft.tiktokCommercialContent ? draft.tiktokBrandOrganic : undefined,
+        isAiGenerated: directPost ? draft.tiktokIsAiGenerated : undefined,
       });
+    }
     default:
       return undefined;
   }

@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { AdapterFetch } from '../core/types';
 import {
   instagramNetworkError,
   instagramUnexpectedPayloadError,
@@ -28,15 +29,18 @@ export interface InstagramGraphClientConfig {
   appId: string;
   appSecret: string;
   apiVersion: string;
+  fetch?: AdapterFetch;
 }
 
 export class InstagramGraphClient {
   private readonly graphBaseUrl: string;
   private readonly dialogBaseUrl: string;
+  private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: InstagramGraphClientConfig) {
     this.graphBaseUrl = `https://graph.facebook.com/${config.apiVersion}`;
     this.dialogBaseUrl = `https://www.facebook.com/${config.apiVersion}`;
+    this.fetch = config.fetch ?? fetch;
   }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
@@ -287,7 +291,7 @@ export class InstagramGraphClient {
 
     let response: Response;
     try {
-      response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      response = await this.fetch(url, { signal: AbortSignal.timeout(15000) });
     } catch (error) {
       throw instagramNetworkError(error);
     }
@@ -313,7 +317,7 @@ export class InstagramGraphClient {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${this.graphBaseUrl}${path}`, {
+      response = await this.fetch(`${this.graphBaseUrl}${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(body),
@@ -349,7 +353,7 @@ export class InstagramGraphClient {
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await this.fetch(url, {
         method: 'DELETE',
         signal: AbortSignal.timeout(15000),
       });
