@@ -227,7 +227,6 @@ export class CommentsService implements OnModuleDestroy {
         );
       }
 
-      // @ts-expect-error bypass any type for now
       const adapter = this.adapters.requireCapability(comment.platform, 'editComment');
       if (!adapter.editComment) {
         throw AppError.capabilityUnsupported(comment.platform, 'editComment');
