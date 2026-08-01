@@ -1,3 +1,4 @@
+import { countGraphemes } from '@socialhub/shared';
 import type { PublishPostInput, ValidationIssue, ValidationResult } from '../core/types';
 
 const PINTEREST_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png']);
@@ -59,7 +60,7 @@ export function validatePinterestPost(input: PublishPostInput): ValidationResult
     }
   }
 
-  if ((input.title?.length ?? 0) > 100) {
+  if (countGraphemes(input.title ?? '') > 100) {
     issues.push({
       field: 'title',
       message: 'Pinterest title tối đa 100 ký tự.',
@@ -68,7 +69,7 @@ export function validatePinterestPost(input: PublishPostInput): ValidationResult
   }
 
   const description = pinterestDescription(input);
-  if (description.length > 800) {
+  if (countGraphemes(description) > 800) {
     issues.push({
       field: 'description',
       message: 'Pinterest description tối đa 800 ký tự.',

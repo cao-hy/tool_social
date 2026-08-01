@@ -1,3 +1,4 @@
+import { countGraphemes } from '@socialhub/shared';
 import type { PlatformLimits } from './capability-table';
 import type { PublishPostInput, ValidationIssue, ValidationResult } from './types';
 
@@ -21,22 +22,24 @@ export function validateAgainstLimits(
   const issues: ValidationIssue[] = [];
 
   const caption = input.caption ?? '';
-  if (limits.captionMaxLength !== null && caption.length > limits.captionMaxLength) {
+  const captionLength = countGraphemes(caption);
+  if (limits.captionMaxLength !== null && captionLength > limits.captionMaxLength) {
     issues.push({
       field: 'caption',
-      message: `Caption dài ${caption.length} ký tự, vượt giới hạn ${limits.captionMaxLength}.`,
+      message: `Caption dài ${captionLength} ký tự, vượt giới hạn ${limits.captionMaxLength}.`,
       limit: limits.captionMaxLength,
     });
   }
 
+  const titleLength = input.title === undefined ? 0 : countGraphemes(input.title);
   if (
     limits.titleMaxLength !== null &&
     input.title !== undefined &&
-    input.title.length > limits.titleMaxLength
+    titleLength > limits.titleMaxLength
   ) {
     issues.push({
       field: 'title',
-      message: `Title dài ${input.title.length} ký tự, vượt giới hạn ${limits.titleMaxLength}.`,
+      message: `Title dài ${titleLength} ký tự, vượt giới hạn ${limits.titleMaxLength}.`,
       limit: limits.titleMaxLength,
     });
   }

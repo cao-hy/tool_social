@@ -8,6 +8,7 @@ import {
   PlatformError,
   type PlatformErrorKind,
 } from '../core/platform-error';
+import { normalizeFacebookError } from '../facebook/facebook.errors';
 
 describe('phân loại retryable — quyết định quan trọng nhất của worker', () => {
   const nonRetryable: PlatformErrorKind[] = [
@@ -114,5 +115,37 @@ describe('PlatformError', () => {
   it('là instance của Error nên bắt được bằng catch thông thường', () => {
     expect(createPlatformError('NETWORK', 'YOUTUBE', 'timeout')).toBeInstanceOf(Error);
     expect(createPlatformError('NETWORK', 'YOUTUBE', 'timeout')).toBeInstanceOf(PlatformError);
+  });
+});
+
+describe('normalizeFacebookError', () => {
+  it('map Unsupported delete request thành NOT_FOUND để delete idempotent', () => {
+    const error = normalizeFacebookError({
+      status: 400,
+      payload: {
+        error: {
+          message:
+            'Unsupported delete request. Object with ID does not exist, cannot be loaded due to missing permissions, or does not support this operation.',
+          code: 100,
+        },
+      },
+    });
+
+    expect(error.kind).toBe('NOT_FOUND');
+    expect(error.retryable).toBe(false);
+  });
+
+  it('không map mọi Facebook code 100 thành NOT_FOUND', () => {
+    const error = normalizeFacebookError({
+      status: 400,
+      payload: {
+        error: {
+          message: 'Invalid parameter',
+          code: 100,
+        },
+      },
+    });
+
+    expect(error.kind).toBe('VALIDATION');
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { hasPermission, PLATFORM_LABELS } from '@socialhub/shared';
+import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
 import { Edit3, ExternalLink, Eye, RefreshCw, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -15,7 +15,7 @@ import {
 } from '@/components/media-preview';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
 import { useToast } from '@/components/toast-provider';
-import { postsApi } from '@/lib/api-client';
+import { platformsApi, postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
@@ -29,6 +29,7 @@ import type {
   ContentPostView,
   DeletePostResult,
   MediaAssetView,
+  PlatformCapabilitiesView,
   PlatformPostView,
   PublishNetworkProof,
   TikTokPlatformState,
@@ -53,6 +54,9 @@ export default function PostDetailPage() {
   const params = useParams<{ id: string }>();
   const workspace = auth.activeWorkspace;
   const [post, setPost] = useState<ContentPostView | null>(null);
+  const [capabilityByPlatform, setCapabilityByPlatform] = useState<
+    Partial<Record<Platform, PlatformCapabilitiesView>>
+  >({});
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -78,6 +82,20 @@ export default function PostDetailPage() {
   useEffect(() => {
     void loadPost();
   }, [workspace, params.id]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    platformsApi
+      .capabilities()
+      .then((result) =>
+        setCapabilityByPlatform(
+          Object.fromEntries(result.platforms.map((item) => [item.platform, item])) as Partial<
+            Record<Platform, PlatformCapabilitiesView>
+          >,
+        ),
+      )
+      .catch((loadError) => setError(getErrorMessage(loadError)));
+  }, [workspace]);
 
   async function retry() {
     if (!workspace || !post) return;
@@ -424,6 +442,7 @@ export default function PostDetailPage() {
       ) : null}
       <DeletePostDialog
         busy={deleting}
+        capabilityByPlatform={capabilityByPlatform}
         post={deleteTarget}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={(input) => void deletePost(input)}
@@ -718,24 +737,39 @@ function deleteResultFailures(result: DeletePostResult) {
 
 function deleteResultMessage(result: DeletePostResult) {
   const failures = deleteResultFailures(result);
-  const deletedTargets = result.remoteDeleteResults?.filter((item) => item.deleted).length ?? 0;
+  const deletedTargetItems = result.remoteDeleteResults?.filter((item) => item.deleted) ?? [];
+  const deletedTargetsText = summarizeDeleteTargets(deletedTargetItems);
   if (result.deleted) {
-    return deletedTargets > 0
-      ? `Đã xóa bài viết và ${deletedTargets} bản đăng trên nền tảng.`
+    return deletedTargetsText
+      ? `Đã xóa bài viết khỏi workspace và xóa trên ${deletedTargetsText}.`
       : 'Đã xóa bài viết khỏi workspace.';
   }
   if (failures.length > 0) {
-    const failedNames = failures
-      .map((item) => `${item.platform} / ${item.socialAccountName}`)
-      .slice(0, 2)
-      .join(', ');
+    const failedReasons = failures.map(formatDeleteFailure).slice(0, 2).join('; ');
     const suffix = failures.length > 2 ? ` và ${failures.length - 2} target khác` : '';
-    const partial = deletedTargets > 0 ? `Đã xóa ${deletedTargets} target, nhưng ` : '';
-    return `${partial}chưa xóa bài khỏi workspace vì lỗi ở ${failedNames}${suffix}.`;
+    const partial = deletedTargetsText ? `Đã xóa trên ${deletedTargetsText}, nhưng ` : '';
+    return `${partial}chưa xóa bài khỏi workspace. Lỗi: ${failedReasons}${suffix}.`;
   }
-  return deletedTargets > 0
-    ? `Đã xóa ${deletedTargets} bản đăng đã chọn trên nền tảng. Bài trong workspace vẫn còn.`
+  return deletedTargetsText
+    ? `Đã xóa bản đăng đã chọn trên ${deletedTargetsText}. Bài trong workspace vẫn còn.`
     : 'Không có bản đăng trên nền tảng nào được xóa.';
+}
+
+function summarizeDeleteTargets(items: NonNullable<DeletePostResult['remoteDeleteResults']>) {
+  if (items.length === 0) return '';
+  const visible = items.slice(0, 2).map(formatDeleteTarget).join(', ');
+  const hiddenCount = items.length - 2;
+  return hiddenCount > 0 ? `${visible} và ${hiddenCount} target khác` : visible;
+}
+
+function formatDeleteTarget(item: NonNullable<DeletePostResult['remoteDeleteResults']>[number]) {
+  return `${item.platform} / ${item.socialAccountName}`;
+}
+
+function formatDeleteFailure(item: NonNullable<DeletePostResult['remoteDeleteResults']>[number]) {
+  const code = item.errorCode ? `${item.errorCode}: ` : '';
+  const reason = item.errorMessage || 'Không rõ nguyên nhân.';
+  return `${item.platform} / ${item.socialAccountName}: ${code}${reason}`;
 }
 
 function IconButton({

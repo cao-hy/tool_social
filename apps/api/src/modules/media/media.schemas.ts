@@ -37,7 +37,16 @@ export const abortMultipartUploadSchema = z.object({
   uploadId: z.string().trim().min(1).max(1024),
 });
 
+export const renameMediaSchema = z.object({
+  fileName: z
+    .string()
+    .trim()
+    .min(1, 'Tên media không được để trống.')
+    .max(255, 'Tên media tối đa 255 ký tự.'),
+});
+
 export type ListMediaInput = z.infer<typeof listMediaSchema>;
 export type CreateMediaUploadInput = z.infer<typeof createMediaUploadSchema>;
 export type CompleteMultipartUploadInput = z.infer<typeof completeMultipartUploadSchema>;
 export type AbortMultipartUploadInput = z.infer<typeof abortMultipartUploadSchema>;
+export type RenameMediaInput = z.infer<typeof renameMediaSchema>;

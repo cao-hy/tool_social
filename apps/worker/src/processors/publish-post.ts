@@ -22,6 +22,7 @@ import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@soc
 import { decryptToken, type Keyring } from '@socialhub/security';
 import {
   deriveContentPostStatus,
+  PLATFORM_LABELS,
   type MediaType,
   type PlatformPostStatus,
   type ProxyConfig,
@@ -329,9 +330,16 @@ async function publishPlatformPost(
           userId: platformPost.contentPost.createdById,
           type: 'POST_PUBLISHED',
           title: 'Bài đăng đã publish',
-          body: `${platformPost.socialAccount.name} đã publish thành công.`,
+          body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name} đã publish thành công.`,
           linkUrl: `/posts/${platformPost.contentPostId}`,
-          data: { platformPostId: platformPost.id, platform: platformPost.platform },
+          data: {
+            platformPostId: platformPost.id,
+            platform: platformPost.platform,
+            accountName: platformPost.socialAccount.name,
+            socialAccountId: platformPost.socialAccountId,
+            externalPostId: result.externalPostId,
+            postTitle: platformPost.contentPost.title,
+          },
         },
       }),
     ]);
@@ -374,9 +382,16 @@ async function publishPlatformPost(
           userId: platformPost.contentPost.createdById,
           type: 'POST_FAILED',
           title: 'Publish thất bại',
-          body: message,
+          body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name}: ${message}`,
           linkUrl: `/posts/${platformPost.contentPostId}`,
-          data: { platformPostId: platformPost.id, platform: platformPost.platform, code },
+          data: {
+            platformPostId: platformPost.id,
+            platform: platformPost.platform,
+            accountName: platformPost.socialAccount.name,
+            socialAccountId: platformPost.socialAccountId,
+            code,
+            postTitle: platformPost.contentPost.title,
+          },
         },
       });
     }

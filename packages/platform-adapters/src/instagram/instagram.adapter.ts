@@ -252,13 +252,6 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     };
   }
 
-  async deletePost(ctx: AdapterContext, externalPostId: string): Promise<void> {
-    await this.client.deleteMedia({
-      mediaId: externalPostId,
-      accessToken: ctx.accessToken,
-    });
-  }
-
   async getPostMetrics(ctx: AdapterContext, externalPostId: string): Promise<PostMetrics> {
     const media = await this.client.getMedia({
       mediaId: externalPostId,

@@ -167,6 +167,19 @@ export interface TikTokCreatorInfoView {
   fetchedAt: string;
 }
 
+export interface PinterestBoardView {
+  id: string;
+  name: string;
+  description?: string | null;
+  privacy?: string | null;
+  ownerUsername?: string | null;
+}
+
+export interface PinterestBoardSectionView {
+  id: string;
+  name: string;
+}
+
 export interface DeletePlatformResult {
   platformPostId: string;
   platform: Platform;

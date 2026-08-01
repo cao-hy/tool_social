@@ -1,6 +1,12 @@
 'use client';
 
-import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
+import {
+  hasPermission,
+  normalizeOptionalSocialText,
+  splitAndNormalizeHashtags,
+  PLATFORM_LABELS,
+  type Platform,
+} from '@socialhub/shared';
 import { Eye, X } from 'lucide-react';
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -22,8 +28,10 @@ import { postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
+  fillMissingPlatformOverrideFromCommon,
   isPlatformOverrideActive,
   platformOverrideDefaults,
+  platformOverrideFromCommon,
   platformOptions,
   platformOverrideFromOptions,
   type PlatformOverrideDraft,
@@ -77,17 +85,28 @@ export default function EditPostPage() {
         setMediaAssetIds(loadedPost.media.map((item) => item.id));
         setPlatformOverrides(
           Object.fromEntries(
-            loadedPost.platformPosts.map((item) => [
-              item.socialAccountId,
-              platformOverrideFromOptions({
+            loadedPost.platformPosts.map((item) => {
+              const account = loadedAccounts.items.find(
+                (loadedAccount) => loadedAccount.id === item.socialAccountId,
+              );
+              const draft = platformOverrideFromOptions({
                 title: item.title ?? '',
                 caption: item.caption ?? '',
                 description: item.description ?? '',
                 linkUrl: item.linkUrl ?? '',
                 mediaAssetIds: item.media.map((asset) => asset.id),
                 options: item.options,
-              }),
-            ]),
+              });
+              return [
+                item.socialAccountId,
+                fillMissingPlatformOverrideFromCommon(item.platform, account?.scopes ?? [], draft, {
+                  title: loadedPost.title ?? '',
+                  body: loadedPost.body ?? '',
+                  linkUrl: loadedPost.linkUrl ?? '',
+                  mediaAssetIds: loadedPost.media.map((asset) => asset.id),
+                }),
+              ];
+            }),
           ),
         );
         setAccounts(loadedAccounts.items.filter((item) => item.status === 'CONNECTED'));
@@ -138,14 +157,27 @@ export default function EditPostPage() {
     const account = accounts.find((a) => a.id === accountId);
     if (!account) return;
 
-    setPlatformOverrides((current) => ({
-      ...current,
-      [accountId]: {
-        ...(current[accountId] ?? platformOverrideDefaults(account.platform, account.scopes)),
-        customized: patch.customized ?? true,
-        ...patch,
-      },
-    }));
+    setPlatformOverrides((current) => {
+      const existing = current[accountId];
+      const shouldSeedFromCommon = patch.customized === true && !existing?.customized;
+      const base = shouldSeedFromCommon
+        ? platformOverrideFromCommon(account.platform, account.scopes, {
+            title,
+            body,
+            linkUrl,
+            mediaAssetIds,
+          })
+        : (existing ?? platformOverrideDefaults(account.platform, account.scopes));
+
+      return {
+        ...current,
+        [accountId]: {
+          ...base,
+          customized: patch.customized ?? true,
+          ...patch,
+        },
+      };
+    });
   }
 
   async function save() {
@@ -170,13 +202,10 @@ export default function EditPostPage() {
     setError(null);
     try {
       const payload = {
-        title: title.trim() || undefined,
-        body: body.trim() || undefined,
+        title: normalizeOptionalSocialText(title),
+        body: normalizeOptionalSocialText(body),
         linkUrl: linkUrl.trim() || undefined,
-        hashtags: hashtags
-          .split(/[,\s]+/)
-          .map((item) => item.replace(/^#/, '').trim())
-          .filter(Boolean),
+        hashtags: splitAndNormalizeHashtags(hashtags),
         platformOverrides: platformOverridePayload,
       };
       await postsApi.update(
@@ -204,8 +233,8 @@ export default function EditPostPage() {
             : undefined;
         return {
           socialAccountId: account.id,
-          title: draft.title.trim() || undefined,
-          caption: draft.caption.trim() || undefined,
+          title: normalizeOptionalSocialText(draft.title),
+          caption: normalizeOptionalSocialText(draft.caption),
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssets: selectedMedia,
           options: platformOptions(account.platform, draft),
@@ -222,9 +251,9 @@ export default function EditPostPage() {
         const options = platformOptions(account.platform, draft);
         return {
           socialAccountId: account.id,
-          title: draft.title.trim() || undefined,
-          caption: draft.caption.trim() || undefined,
-          description: draft.description.trim() || undefined,
+          title: normalizeOptionalSocialText(draft.title),
+          caption: normalizeOptionalSocialText(draft.caption),
+          description: normalizeOptionalSocialText(draft.description),
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssetIds:
             canEditTargets && draft.mediaAssetIds.length > 0 ? draft.mediaAssetIds : undefined,
@@ -260,7 +289,7 @@ export default function EditPostPage() {
             Đang tải bài viết...
           </p>
         ) : (
-          <div className="space-y-5 rounded-lg border border-slate-200 bg-white p-5">
+          <div className="space-y-5 rounded-lg border border-sky-200 bg-sky-50/40 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
               <div>
                 <h2 className="text-base font-semibold text-slate-950">Nội dung chung</h2>
@@ -291,13 +320,16 @@ export default function EditPostPage() {
             </Field>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Link">
+              <Field label="Link đích">
                 <TextInput
                   disabled={!canEditContent}
                   placeholder="https://..."
                   value={linkUrl}
                   onChange={(event) => setLinkUrl(event.target.value)}
                 />
+                <p className="mt-1 text-xs text-slate-500">
+                  URL đính kèm khi nền tảng hỗ trợ link/CTA. Đây không phải URL media.
+                </p>
               </Field>
               <Field label="Hashtags">
                 <TextInput
@@ -305,6 +337,9 @@ export default function EditPostPage() {
                   value={hashtags}
                   onChange={(event) => setHashtags(event.target.value)}
                 />
+                <p className="mt-1 text-xs text-slate-500">
+                  Nền tảng dùng hashtag trong mô tả sẽ được hệ thống tự gắn khi publish.
+                </p>
               </Field>
             </div>
 
@@ -397,7 +432,7 @@ export default function EditPostPage() {
             <div className="border-t border-slate-200 pt-4">
               <PlatformComposerPanels
                 accounts={selectedAccounts}
-                common={{ title, body, linkUrl }}
+                common={{ title, body, linkUrl, hashtags }}
                 disabled={!canEditContent}
                 drafts={platformOverrides}
                 mediaLocked={!canEditTargets}

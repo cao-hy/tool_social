@@ -1,13 +1,19 @@
 'use client';
 
-import { PLATFORM_LABELS } from '@socialhub/shared';
+import {
+  capabilityBlockReason,
+  isCapabilityUsable,
+  PLATFORM_LABELS,
+  type Platform,
+} from '@socialhub/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { PrimaryButton, SecondaryButton } from '@/components/form-controls';
-import type { ContentPostView } from '@/lib/types';
+import type { ContentPostView, PlatformCapabilitiesView } from '@/lib/types';
 
 interface DeletePostDialogProps {
   post: ContentPostView | null;
   busy?: boolean;
+  capabilityByPlatform?: Partial<Record<Platform, PlatformCapabilitiesView>>;
   onCancel: () => void;
   onConfirm: (input: { platformPostIds: string[] }) => void;
 }
@@ -15,6 +21,7 @@ interface DeletePostDialogProps {
 export function DeletePostDialog({
   post,
   busy = false,
+  capabilityByPlatform,
   onCancel,
   onConfirm,
 }: DeletePostDialogProps) {
@@ -24,19 +31,53 @@ export function DeletePostDialog({
       [],
     [post],
   );
+  const targetStates = useMemo(
+    () =>
+      Object.fromEntries(
+        remoteTargets.map((target) => {
+          const capability =
+            capabilityByPlatform?.[target.platform]?.capabilities.deletePublishedPost;
+          const supported = capabilityByPlatform ? isCapabilityUsable(capability) : true;
+          return [
+            target.id,
+            {
+              supported,
+              reason: supported
+                ? null
+                : (capability?.condition ??
+                  capabilityBlockReason(capability) ??
+                  'Nền tảng này chưa hỗ trợ xóa bài đã publish.'),
+            },
+          ];
+        }),
+      ) as Record<string, { supported: boolean; reason: string | null }>,
+    [capabilityByPlatform, remoteTargets],
+  );
+  const selectableRemoteTargets = useMemo(
+    () => remoteTargets.filter((target) => targetStates[target.id]?.supported ?? true),
+    [remoteTargets, targetStates],
+  );
+  const unsupportedRemoteTargets = useMemo(
+    () => remoteTargets.filter((target) => !(targetStates[target.id]?.supported ?? true)),
+    [remoteTargets, targetStates],
+  );
   const [selectedPlatformPostIds, setSelectedPlatformPostIds] = useState<string[]>([]);
   const selectedAllRemoteTargets =
-    remoteTargets.length > 0 && selectedPlatformPostIds.length === remoteTargets.length;
+    selectableRemoteTargets.length > 0 &&
+    selectedPlatformPostIds.length === selectableRemoteTargets.length;
   const selectedSomeRemoteTargets =
-    selectedPlatformPostIds.length > 0 && selectedPlatformPostIds.length < remoteTargets.length;
+    selectedPlatformPostIds.length > 0 &&
+    selectedPlatformPostIds.length < selectableRemoteTargets.length;
+  const remoteDeleteBlocked = remoteTargets.length > 0 && selectedPlatformPostIds.length === 0;
 
   useEffect(() => {
-    setSelectedPlatformPostIds(remoteTargets.map((item) => item.id));
-  }, [remoteTargets]);
+    setSelectedPlatformPostIds(selectableRemoteTargets.map((item) => item.id));
+  }, [selectableRemoteTargets]);
 
   if (!post) return null;
 
   function togglePlatformPost(platformPostId: string) {
+    if (!(targetStates[platformPostId]?.supported ?? true)) return;
     setSelectedPlatformPostIds((current) =>
       current.includes(platformPostId)
         ? current.filter((item) => item !== platformPostId)
@@ -66,32 +107,57 @@ export function DeletePostDialog({
                 {selectedSomeRemoteTargets
                   ? 'Bạn đang chọn một phần target, nên chỉ xóa target đó và giữ bài cha cho các social còn lại.'
                   : selectedAllRemoteTargets
-                    ? 'Nếu tất cả target trên nền tảng xóa thành công, bài sẽ bị xóa khỏi workspace và media không còn dùng sẽ được dọn.'
+                    ? 'Nếu các target đã chọn xóa thành công và không còn social published nào khác, bài sẽ bị xóa khỏi workspace và media không còn dùng sẽ được dọn.'
                     : 'Xóa khỏi workspace, hủy lịch/job và dọn media không còn được bài nào dùng.'}
               </span>
             </span>
           </label>
 
+          {unsupportedRemoteTargets.length > 0 ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {unsupportedRemoteTargets.length} target không thể xóa qua API nên đã được bỏ chọn.
+            </p>
+          ) : null}
+          {remoteDeleteBlocked ? (
+            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              Không thể xóa bài khỏi workspace vì bài còn bản đã publish nhưng không có target nào
+              có thể xóa qua API.
+            </p>
+          ) : null}
+
           {remoteTargets.length > 0 ? (
-            remoteTargets.map((target) => (
-              <label
-                key={target.id}
-                className="flex items-start gap-3 rounded-md border border-slate-200 px-3 py-3 text-sm"
-              >
-                <input
-                  checked={selectedPlatformPostIds.includes(target.id)}
-                  className="mt-1"
-                  type="checkbox"
-                  onChange={() => togglePlatformPost(target.id)}
-                />
-                <span className="min-w-0">
-                  <span className="block font-semibold text-slate-950">
-                    {PLATFORM_LABELS[target.platform]} - {target.socialAccountName}
+            remoteTargets.map((target) => {
+              const targetState = targetStates[target.id] ?? { supported: true, reason: null };
+              return (
+                <label
+                  key={target.id}
+                  className={`flex items-start gap-3 rounded-md border px-3 py-3 text-sm ${
+                    targetState.supported
+                      ? 'border-slate-200'
+                      : 'border-amber-200 bg-amber-50/70 text-slate-500'
+                  }`}
+                >
+                  <input
+                    checked={targetState.supported && selectedPlatformPostIds.includes(target.id)}
+                    className="mt-1"
+                    disabled={!targetState.supported || busy}
+                    type="checkbox"
+                    onChange={() => togglePlatformPost(target.id)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block font-semibold text-slate-950">
+                      {PLATFORM_LABELS[target.platform]} - {target.socialAccountName}
+                    </span>
+                    <span className="block truncate text-slate-500">{target.externalPostId}</span>
+                    {!targetState.supported ? (
+                      <span className="mt-1 block text-xs font-medium text-amber-800">
+                        Không thể xóa qua API: {targetState.reason}
+                      </span>
+                    ) : null}
                   </span>
-                  <span className="block truncate text-slate-500">{target.externalPostId}</span>
-                </span>
-              </label>
-            ))
+                </label>
+              );
+            })
           ) : (
             <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
               Bài này chưa có bản publish trên nền tảng để xóa từ xa.
@@ -105,6 +171,7 @@ export function DeletePostDialog({
           </SecondaryButton>
           <PrimaryButton
             busy={busy}
+            disabled={remoteDeleteBlocked}
             onClick={() => onConfirm({ platformPostIds: selectedPlatformPostIds })}
             type="button"
           >

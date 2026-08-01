@@ -169,12 +169,12 @@ CAPABILITY_MATRIX.INSTAGRAM.capabilities.editPublishedPost = {
 };
 
 CAPABILITY_MATRIX.INSTAGRAM.capabilities.deletePublishedPost = {
-  state: 'CONDITIONAL',
+  state: 'UNSUPPORTED',
   condition:
-    'Xóa media thuộc Instagram professional account bằng DELETE /{ig_media_id}; xóa item trong carousel phải xóa cả carousel.',
+    'Meta Instagram Media reference ghi rõ deleting IG Media không được hỗ trợ qua API chính thức.',
   source:
     'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media',
-  verifiedAt: '2026-07-30',
+  verifiedAt: '2026-08-02',
   verifiedBy: 'Codex + Meta Instagram Media docs',
 };
 

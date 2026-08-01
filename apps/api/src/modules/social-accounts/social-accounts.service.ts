@@ -42,6 +42,19 @@ interface OAuthStatePayload {
   createdAt: string;
 }
 
+interface PinterestBoardSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+  privacy?: string | null;
+  ownerUsername?: string | null;
+}
+
+interface PinterestBoardSectionSummary {
+  id: string;
+  name: string;
+}
+
 @Injectable()
 export class SocialAccountsService implements OnModuleDestroy {
   private readonly refreshQueue: Queue;
@@ -411,6 +424,88 @@ export class SocialAccountsService implements OnModuleDestroy {
     return { ...creatorInfo, fetchedAt: new Date().toISOString() };
   }
 
+  async getPinterestBoards(
+    workspaceId: string,
+    socialAccountId: string,
+    auditContext: AuditContext,
+  ): Promise<{ items: PinterestBoardSummary[]; fetchedAt: string }> {
+    const account = await this.prisma.socialAccount.findFirst({
+      where: { id: socialAccountId, workspaceId, deletedAt: null },
+      include: { token: true },
+    });
+    if (!account) throw AppError.notFound('social account');
+    if (account.platform !== 'PINTEREST') {
+      throw AppError.validation('Danh sách board chỉ áp dụng cho Pinterest account.');
+    }
+    if (!account.token) throw AppError.conflict('Pinterest account chưa có token để kiểm tra.');
+    if (!account.scopes.includes('boards:read')) {
+      throw AppError.conflict(
+        'Pinterest account thiếu scope boards:read. Hãy ngắt kết nối rồi kết nối lại sau khi app được cấp quyền boards:read.',
+      );
+    }
+
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    if (!hasPinterestBoardBrowser(adapter)) {
+      throw AppError.conflict(
+        'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
+      );
+    }
+
+    const accessToken = await this.getFreshAccessToken(account, adapter);
+    return {
+      items: await adapter.listBoards({
+        accessToken,
+        externalAccountId: account.externalAccountId,
+        externalPageId: account.externalPageId ?? undefined,
+        correlationId: auditContext.requestId ?? 'pinterest-list-boards',
+      }),
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  async getPinterestBoardSections(
+    workspaceId: string,
+    socialAccountId: string,
+    boardId: string,
+    auditContext: AuditContext,
+  ): Promise<{ items: PinterestBoardSectionSummary[]; fetchedAt: string }> {
+    const account = await this.prisma.socialAccount.findFirst({
+      where: { id: socialAccountId, workspaceId, deletedAt: null },
+      include: { token: true },
+    });
+    if (!account) throw AppError.notFound('social account');
+    if (account.platform !== 'PINTEREST') {
+      throw AppError.validation('Board section chỉ áp dụng cho Pinterest account.');
+    }
+    if (!account.token) throw AppError.conflict('Pinterest account chưa có token để kiểm tra.');
+    if (!account.scopes.includes('boards:read')) {
+      throw AppError.conflict(
+        'Pinterest account thiếu scope boards:read. Hãy ngắt kết nối rồi kết nối lại sau khi app được cấp quyền boards:read.',
+      );
+    }
+
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    if (!hasPinterestBoardBrowser(adapter)) {
+      throw AppError.conflict(
+        'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
+      );
+    }
+
+    const accessToken = await this.getFreshAccessToken(account, adapter);
+    return {
+      items: await adapter.listBoardSections(
+        {
+          accessToken,
+          externalAccountId: account.externalAccountId,
+          externalPageId: account.externalPageId ?? undefined,
+          correlationId: auditContext.requestId ?? 'pinterest-list-board-sections',
+        },
+        boardId,
+      ),
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
   private tokenCreateData(
     socialAccountId: string,
     tokenSet: TokenSet,
@@ -626,4 +721,32 @@ function hasTikTokCreatorInfo(adapter: SocialPlatformAdapter): adapter is Social
   }): Promise<TikTokCreatorInfo>;
 } {
   return typeof (adapter as { queryCreatorInfo?: unknown }).queryCreatorInfo === 'function';
+}
+
+function hasPinterestBoardBrowser(
+  adapter: SocialPlatformAdapter,
+): adapter is SocialPlatformAdapter & {
+  listBoards(ctx: {
+    accessToken: string;
+    externalAccountId: string;
+    externalPageId?: string;
+    correlationId: string;
+  }): Promise<PinterestBoardSummary[]>;
+  listBoardSections(
+    ctx: {
+      accessToken: string;
+      externalAccountId: string;
+      externalPageId?: string;
+      correlationId: string;
+    },
+    boardId: string,
+  ): Promise<PinterestBoardSectionSummary[]>;
+} {
+  const candidate = adapter as {
+    listBoards?: unknown;
+    listBoardSections?: unknown;
+  };
+  return (
+    typeof candidate.listBoards === 'function' && typeof candidate.listBoardSections === 'function'
+  );
 }

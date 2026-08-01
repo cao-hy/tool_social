@@ -28,6 +28,11 @@ import { CURRENT_PHASE, isAvailable, NAV_ITEMS } from '@/lib/navigation';
 import { notificationsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
+import {
+  notificationBodyText,
+  notificationDisplayMeta,
+  platformBadgeClass,
+} from '@/lib/notification-format';
 import type { NotificationView } from '@/lib/types';
 import { useToast } from './toast-provider';
 
@@ -552,59 +557,78 @@ function NotificationPopover({
         ) : null}
 
         <div className="max-h-[420px] overflow-y-auto">
-          {items.map((item) => (
-            <article key={item.id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
-              <div className="flex items-start gap-3">
-                <span
-                  className={`mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
-                    item.readAt ? 'bg-slate-100 text-slate-400' : 'bg-brand-50 text-brand-700'
-                  }`}
-                >
-                  {item.readAt ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : (
-                    <Circle className="h-3 w-3 fill-current" />
-                  )}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                      {item.type}
-                    </span>
-                    <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
-                      <Clock className="h-3 w-3" />
-                      {new Date(item.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate text-sm font-semibold text-slate-950">{item.title}</p>
-                  {item.body ? (
-                    <p className="mt-1 line-clamp-2 text-sm text-slate-600">{item.body}</p>
-                  ) : null}
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {item.linkUrl ? (
-                      <Link
-                        className="text-xs font-semibold text-brand-700 hover:text-brand-800"
-                        href={item.linkUrl}
-                        onClick={onClose}
-                      >
-                        Mở liên quan
-                      </Link>
+          {items.map((item) => {
+            const meta = notificationDisplayMeta(item);
+            const body = notificationBodyText(item);
+            return (
+              <article
+                key={item.id}
+                className="border-b border-slate-100 px-4 py-3 last:border-b-0"
+              >
+                <div className="flex items-start gap-3">
+                  <span
+                    className={`mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+                      item.readAt ? 'bg-slate-100 text-slate-400' : 'bg-brand-50 text-brand-700'
+                    }`}
+                  >
+                    {item.readAt ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Circle className="h-3 w-3 fill-current" />
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                        {item.type}
+                      </span>
+                      {meta.platformLabel ? (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${platformBadgeClass(meta.platform)}`}
+                        >
+                          {meta.platformLabel}
+                        </span>
+                      ) : null}
+                      <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
+                        <Clock className="h-3 w-3" />
+                        {new Date(item.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+                    <p className="mt-1 truncate text-sm font-semibold text-slate-950">
+                      {item.title}
+                    </p>
+                    {body ? (
+                      <p className="mt-1 line-clamp-2 text-sm text-slate-600">{body}</p>
                     ) : null}
-                    {!item.readAt ? (
-                      <button
-                        className="text-xs font-semibold text-slate-600 hover:text-slate-900 disabled:text-slate-400"
-                        disabled={updating !== null}
-                        type="button"
-                        onClick={() => onMarkRead(item.id)}
-                      >
-                        {updating === item.id ? 'Đang cập nhật...' : 'Đánh dấu đã đọc'}
-                      </button>
+                    {meta.postTitle ? (
+                      <p className="mt-1 truncate text-xs text-slate-500">Bài: {meta.postTitle}</p>
                     ) : null}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {item.linkUrl ? (
+                        <Link
+                          className="text-xs font-semibold text-brand-700 hover:text-brand-800"
+                          href={item.linkUrl}
+                          onClick={onClose}
+                        >
+                          Mở liên quan
+                        </Link>
+                      ) : null}
+                      {!item.readAt ? (
+                        <button
+                          className="text-xs font-semibold text-slate-600 hover:text-slate-900 disabled:text-slate-400"
+                          disabled={updating !== null}
+                          type="button"
+                          onClick={() => onMarkRead(item.id)}
+                        >
+                          {updating === item.id ? 'Đang cập nhật...' : 'Đánh dấu đã đọc'}
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
 
           {!loading && items.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-slate-500">

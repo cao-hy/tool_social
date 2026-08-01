@@ -1,3 +1,4 @@
+import { countGraphemes } from '@socialhub/shared';
 import type { PublishPostInput, ValidationResult, ValidationIssue } from '../core/types';
 
 export function validateInstagramPost(input: PublishPostInput): ValidationResult {
@@ -54,7 +55,7 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
   const fullCaption = [input.caption, input.hashtags?.map((t) => `#${t}`).join(' ')]
     .filter(Boolean)
     .join('\n\n');
-  if (fullCaption.length > 2200) {
+  if (countGraphemes(fullCaption) > 2200) {
     issues.push({
       field: 'caption',
       message: 'Nội dung (bao gồm hashtag) vượt quá 2200 ký tự.',

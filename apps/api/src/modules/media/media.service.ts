@@ -32,6 +32,7 @@ import type {
   CompleteMultipartUploadInput,
   CreateMediaUploadInput,
   ListMediaInput,
+  RenameMediaInput,
 } from './media.schemas';
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -146,6 +147,20 @@ export class MediaService implements OnModuleDestroy {
     if (!media) throw AppError.notFound('media asset');
 
     return this.toMediaView(media);
+  }
+
+  async rename(workspaceId: string, mediaAssetId: string, input: RenameMediaInput) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+    });
+    if (!media) throw AppError.notFound('media asset');
+
+    const updated = await this.prisma.mediaAsset.update({
+      where: { id: media.id },
+      data: { originalFileName: normalizeMediaFileName(input.fileName) },
+    });
+
+    return this.toMediaView(updated);
   }
 
   async getObject(workspaceId: string, mediaAssetId: string, range?: string) {
@@ -884,4 +899,11 @@ function normalizeEtag(value: string): string {
   const trimmed = value.trim();
   if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed;
   return `"${trimmed}"`;
+}
+
+function normalizeMediaFileName(value: string): string {
+  return value
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
 }

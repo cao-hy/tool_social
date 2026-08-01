@@ -33,7 +33,7 @@ export function normalizeFacebookError(input: {
   const platformCode = [code, subcode].filter(Boolean).join(':') || undefined;
   const message = graphError?.message ?? `Facebook Graph API trả về lỗi HTTP ${input.status}.`;
 
-  const kind = mapFacebookErrorKind(input.status, code);
+  const kind = mapFacebookErrorKind(input.status, code, message);
 
   return createPlatformError(kind, 'FACEBOOK', message, {
     httpStatus: input.status,
@@ -70,7 +70,12 @@ export function facebookUnexpectedPayloadError(cause: unknown, payload: unknown)
   );
 }
 
-function mapFacebookErrorKind(status: number, code: string | undefined): PlatformErrorKind {
+function mapFacebookErrorKind(
+  status: number,
+  code: string | undefined,
+  message: string,
+): PlatformErrorKind {
+  if (status === 400 && code === '100' && isFacebookNotFoundMessage(message)) return 'NOT_FOUND';
   if (status === 401 || (code && AUTH_CODES.has(code))) return 'AUTH_INVALID';
   if (status === 403 || (code && PERMISSION_CODES.has(code))) return 'PERMISSION_DENIED';
   if (status === 429 || (code && RATE_LIMIT_CODES.has(code))) return 'RATE_LIMITED';
@@ -78,6 +83,16 @@ function mapFacebookErrorKind(status: number, code: string | undefined): Platfor
   if (status >= 500) return 'PLATFORM_ERROR';
   if (status >= 400) return 'VALIDATION';
   return 'UNKNOWN';
+}
+
+function isFacebookNotFoundMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('unsupported delete request') ||
+    normalized.includes('does not exist') ||
+    normalized.includes('object with id') ||
+    normalized.includes('cannot be loaded')
+  );
 }
 
 function summarizeNetworkCause(cause: unknown): string | null {

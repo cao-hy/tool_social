@@ -101,6 +101,40 @@ export class SocialAccountsController {
     );
   }
 
+  @Get('workspaces/:workspaceId/social-accounts/:socialAccountId/pinterest/boards')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:view')
+  pinterestBoards(
+    @Param('workspaceId') workspaceId: string,
+    @Param('socialAccountId') socialAccountId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.getPinterestBoards(
+      workspaceId,
+      socialAccountId,
+      this.auditContext(request),
+    );
+  }
+
+  @Get(
+    'workspaces/:workspaceId/social-accounts/:socialAccountId/pinterest/boards/:boardId/sections',
+  )
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:view')
+  pinterestBoardSections(
+    @Param('workspaceId') workspaceId: string,
+    @Param('socialAccountId') socialAccountId: string,
+    @Param('boardId') boardId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.getPinterestBoardSections(
+      workspaceId,
+      socialAccountId,
+      boardId,
+      this.auditContext(request),
+    );
+  }
+
   @Get('oauth/:platform/callback')
   async callback(
     @Param('platform') platform: string,

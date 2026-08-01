@@ -181,16 +181,6 @@ export class InstagramGraphClient {
     return response.id;
   }
 
-  async deleteMedia(input: { mediaId: string; accessToken: string }): Promise<void> {
-    await this.delete(
-      `/${input.mediaId}`,
-      {
-        access_token: input.accessToken,
-      },
-      instagramSuccessResponseSchema,
-    );
-  }
-
   async getUserMedia(input: {
     igAccountId: string;
     accessToken: string;

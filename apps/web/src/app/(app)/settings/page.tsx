@@ -82,6 +82,7 @@ export default function SettingsPage() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
+  const [renamingMediaId, setRenamingMediaId] = useState<string | null>(null);
   const [regeneratingMediaId, setRegeneratingMediaId] = useState<string | null>(null);
   const [previewMedia, setPreviewMedia] = useState<MediaLibraryItem | null>(null);
 
@@ -97,6 +98,7 @@ export default function SettingsPage() {
   }, [workspace]);
 
   const canViewAudit = workspace ? hasPermission(workspace.role, 'audit_log:view') : false;
+  const canRenameMedia = canUploadMedia;
 
   useEffect(() => {
     if (!workspace || !canUpdate) {
@@ -263,6 +265,35 @@ export default function SettingsPage() {
       toast.error(getErrorMessage(deleteError));
     } finally {
       setDeletingMediaId(null);
+    }
+  }
+
+  async function handleRenameMedia(media: MediaLibraryItem) {
+    if (!workspace) return;
+    const currentName = media.originalFileName ?? '';
+    const nextName = window.prompt('Tên media mới', currentName);
+    if (nextName === null) return;
+    const trimmedName = nextName.trim();
+    if (!trimmedName) {
+      toast.warning('Tên media không được để trống.');
+      return;
+    }
+    if (trimmedName === currentName) return;
+
+    setRenamingMediaId(media.id);
+    setError(null);
+    try {
+      const updated = await mediaApi.rename(workspace.id, media.id, trimmedName);
+      setMediaItems((current) =>
+        current.map((item) =>
+          item.id === media.id ? { ...item, originalFileName: updated.originalFileName } : item,
+        ),
+      );
+      toast.success('Đã đổi tên media.');
+    } catch (renameError) {
+      toast.error(getErrorMessage(renameError));
+    } finally {
+      setRenamingMediaId(null);
     }
   }
 
@@ -634,7 +665,7 @@ export default function SettingsPage() {
               return (
                 <div
                   key={media.id}
-                  className="grid items-center gap-4 px-5 py-4 lg:grid-cols-[24px_72px_1fr_140px_120px_160px]"
+                  className="grid items-center gap-4 px-5 py-4 lg:grid-cols-[24px_72px_1fr_140px_120px_180px]"
                 >
                   <input
                     type="checkbox"
@@ -712,6 +743,17 @@ export default function SettingsPage() {
                     </p>
                   </div>
                   <div className="flex flex-col gap-2 lg:items-end">
+                    <SecondaryButton
+                      disabled={
+                        !canRenameMedia ||
+                        renamingMediaId === media.id ||
+                        deletingMediaId === media.id ||
+                        deletingMultiple
+                      }
+                      onClick={() => void handleRenameMedia(media)}
+                    >
+                      {renamingMediaId === media.id ? 'Đang đổi...' : 'Đổi tên'}
+                    </SecondaryButton>
                     {canRegenerateThumbnail ? (
                       <SecondaryButton
                         disabled={

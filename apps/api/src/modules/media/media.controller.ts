@@ -6,6 +6,7 @@ import {
   Headers,
   Inject,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -26,10 +27,12 @@ import {
   completeMultipartUploadSchema,
   createMediaUploadSchema,
   listMediaSchema,
+  renameMediaSchema,
   type AbortMultipartUploadInput,
   type CompleteMultipartUploadInput,
   type CreateMediaUploadInput,
   type ListMediaInput,
+  type RenameMediaInput,
 } from './media.schemas';
 import { MediaService } from './media.service';
 
@@ -57,6 +60,16 @@ export class MediaController {
   @RequirePermissions('media:view')
   get(@Param('workspaceId') workspaceId: string, @Param('mediaAssetId') mediaAssetId: string) {
     return this.media.get(workspaceId, mediaAssetId);
+  }
+
+  @Patch(':mediaAssetId')
+  @RequirePermissions('media:upload')
+  rename(
+    @Param('workspaceId') workspaceId: string,
+    @Param('mediaAssetId') mediaAssetId: string,
+    @Body(zodPipe(renameMediaSchema)) body: RenameMediaInput,
+  ) {
+    return this.media.rename(workspaceId, mediaAssetId, body);
   }
 
   @Get(':mediaAssetId/object')

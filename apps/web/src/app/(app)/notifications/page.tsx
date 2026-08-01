@@ -7,6 +7,11 @@ import { useToast } from '@/components/toast-provider';
 import { notificationsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
+import {
+  notificationBodyText,
+  notificationDisplayMeta,
+  platformBadgeClass,
+} from '@/lib/notification-format';
 import type { NotificationView } from '@/lib/types';
 
 export default function NotificationsPage() {
@@ -111,42 +116,56 @@ export default function NotificationsPage() {
 
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="divide-y divide-slate-200">
-          {items.map((item) => (
-            <article key={item.id} className="flex flex-col gap-3 p-5 lg:flex-row lg:items-start">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  {!item.readAt ? (
-                    <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-semibold text-brand-700">
-                      Unread
+          {items.map((item) => {
+            const meta = notificationDisplayMeta(item);
+            const body = notificationBodyText(item);
+            return (
+              <article key={item.id} className="flex flex-col gap-3 p-5 lg:flex-row lg:items-start">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!item.readAt ? (
+                      <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-semibold text-brand-700">
+                        Unread
+                      </span>
+                    ) : null}
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                      {item.type}
                     </span>
+                    {meta.platformLabel ? (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${platformBadgeClass(meta.platform)}`}
+                      >
+                        {meta.platformLabel}
+                      </span>
+                    ) : null}
+                    <span className="text-xs text-slate-500">
+                      {new Date(item.createdAt).toLocaleString()}
+                    </span>
+                  </div>
+                  <h2 className="mt-2 text-base font-semibold text-slate-950">{item.title}</h2>
+                  {body ? <p className="mt-1 text-sm text-slate-600">{body}</p> : null}
+                  {meta.postTitle ? (
+                    <p className="mt-1 text-xs text-slate-500">Bài: {meta.postTitle}</p>
                   ) : null}
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
-                    {item.type}
-                  </span>
-                  <span className="text-xs text-slate-500">
-                    {new Date(item.createdAt).toLocaleString()}
-                  </span>
+                  {item.linkUrl ? (
+                    <Link
+                      className="mt-2 inline-block text-sm font-medium text-brand-700"
+                      href={item.linkUrl}
+                    >
+                      Mở liên quan
+                    </Link>
+                  ) : null}
                 </div>
-                <h2 className="mt-2 text-base font-semibold text-slate-950">{item.title}</h2>
-                {item.body ? <p className="mt-1 text-sm text-slate-600">{item.body}</p> : null}
-                {item.linkUrl ? (
-                  <Link
-                    className="mt-2 inline-block text-sm font-medium text-brand-700"
-                    href={item.linkUrl}
-                  >
-                    Mở liên quan
-                  </Link>
-                ) : null}
-              </div>
-              <SecondaryButton
-                disabled={Boolean(item.readAt) || updating !== null}
-                onClick={() => void markRead(item.id)}
-                type="button"
-              >
-                {updating === item.id ? 'Đang cập nhật...' : 'Đã đọc'}
-              </SecondaryButton>
-            </article>
-          ))}
+                <SecondaryButton
+                  disabled={Boolean(item.readAt) || updating !== null}
+                  onClick={() => void markRead(item.id)}
+                  type="button"
+                >
+                  {updating === item.id ? 'Đang cập nhật...' : 'Đã đọc'}
+                </SecondaryButton>
+              </article>
+            );
+          })}
 
           {!loading && items.length === 0 ? (
             <p className="p-6 text-sm text-slate-600">Chưa có notification nào.</p>

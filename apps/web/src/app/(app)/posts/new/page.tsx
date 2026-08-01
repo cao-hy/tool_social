@@ -1,6 +1,12 @@
 'use client';
 
-import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
+import {
+  hasPermission,
+  normalizeOptionalSocialText,
+  splitAndNormalizeHashtags,
+  PLATFORM_LABELS,
+  type Platform,
+} from '@socialhub/shared';
 import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -20,6 +26,7 @@ import { getErrorMessage } from '@/lib/errors';
 import {
   isPlatformOverrideActive,
   platformOverrideDefaults,
+  platformOverrideFromCommon,
   platformOptions,
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
@@ -147,14 +154,27 @@ export default function NewPostPage() {
     const account = accounts.find((a) => a.id === accountId);
     if (!account) return;
 
-    setPlatformOverrides((current) => ({
-      ...current,
-      [accountId]: {
-        ...(current[accountId] ?? platformOverrideDefaults(account.platform, account.scopes)),
-        customized: patch.customized ?? true,
-        ...patch,
-      },
-    }));
+    setPlatformOverrides((current) => {
+      const existing = current[accountId];
+      const shouldSeedFromCommon = patch.customized === true && !existing?.customized;
+      const base = shouldSeedFromCommon
+        ? platformOverrideFromCommon(account.platform, account.scopes, {
+            title,
+            body,
+            linkUrl,
+            mediaAssetIds: mediaAssets.map((item) => item.id),
+          })
+        : (existing ?? platformOverrideDefaults(account.platform, account.scopes));
+
+      return {
+        ...current,
+        [accountId]: {
+          ...base,
+          customized: patch.customized ?? true,
+          ...patch,
+        },
+      };
+    });
   }
 
   async function createDraft() {
@@ -227,13 +247,10 @@ export default function NewPostPage() {
   function payload() {
     const platformOverridePayload = buildPlatformOverridePayload();
     return {
-      title: title.trim() || undefined,
-      body: body.trim() || undefined,
+      title: normalizeOptionalSocialText(title),
+      body: normalizeOptionalSocialText(body),
       linkUrl: linkUrl.trim() || undefined,
-      hashtags: hashtags
-        .split(/[,\s]+/)
-        .map((item) => item.replace(/^#/, '').trim())
-        .filter(Boolean),
+      hashtags: splitAndNormalizeHashtags(hashtags),
       socialAccountIds: selectedIds,
       mediaAssetIds: mediaAssets.map((item) => item.id),
       platformOverrides: platformOverridePayload,
@@ -264,8 +281,8 @@ export default function NewPostPage() {
             : undefined;
         return {
           socialAccountId: account.id,
-          title: draft.title.trim() || undefined,
-          caption: draft.caption.trim() || undefined,
+          title: normalizeOptionalSocialText(draft.title),
+          caption: normalizeOptionalSocialText(draft.caption),
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssets: selectedMedia,
           options: platformOptions(account.platform, draft),
@@ -282,9 +299,9 @@ export default function NewPostPage() {
         const options = platformOptions(account.platform, draft);
         return {
           socialAccountId: account.id,
-          title: draft.title.trim() || undefined,
-          caption: draft.caption.trim() || undefined,
-          description: draft.description.trim() || undefined,
+          title: normalizeOptionalSocialText(draft.title),
+          caption: normalizeOptionalSocialText(draft.caption),
+          description: normalizeOptionalSocialText(draft.description),
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssetIds: draft.mediaAssetIds.length > 0 ? draft.mediaAssetIds : undefined,
           options,
@@ -615,7 +632,7 @@ export default function NewPostPage() {
 
         <InlineError message={error} />
 
-        <div className="space-y-5 rounded-lg border border-slate-200 bg-white p-5">
+        <div className="space-y-5 rounded-lg border border-sky-200 bg-sky-50/40 p-5">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
             <div>
               <h2 className="text-base font-semibold text-slate-950">Nội dung chung</h2>
@@ -641,12 +658,15 @@ export default function NewPostPage() {
           </Field>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Link">
+            <Field label="Link đích">
               <TextInput
                 placeholder="https://..."
                 value={linkUrl}
                 onChange={(event) => setLinkUrl(event.target.value)}
               />
+              <p className="mt-1 text-xs text-slate-500">
+                URL đính kèm khi nền tảng hỗ trợ link/CTA. Đây không phải URL media.
+              </p>
             </Field>
             <Field label="Hashtags">
               <TextInput
@@ -654,6 +674,10 @@ export default function NewPostPage() {
                 value={hashtags}
                 onChange={(event) => setHashtags(event.target.value)}
               />
+              <p className="mt-1 text-xs text-slate-500">
+                Nhập cách nhau bằng dấu phẩy hoặc khoảng trắng. Nền tảng dùng hashtag trong mô tả sẽ
+                được hệ thống tự gắn khi publish.
+              </p>
             </Field>
           </div>
 
@@ -753,7 +777,7 @@ export default function NewPostPage() {
 
         <PlatformComposerPanels
           accounts={selectedAccounts}
-          common={{ title, body, linkUrl }}
+          common={{ title, body, linkUrl, hashtags }}
           drafts={platformOverrides}
           mediaAssets={mediaAssets}
           workspaceId={workspace.id}

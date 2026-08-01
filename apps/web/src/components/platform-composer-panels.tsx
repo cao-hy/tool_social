@@ -6,10 +6,17 @@ import { Field, SelectInput, TextInput } from '@/components/form-controls';
 import { socialAccountsApi } from '@/lib/api-client';
 import { getErrorMessage } from '@/lib/errors';
 import {
+  type CommonComposerContent,
   platformOverrideDefaults,
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
-import type { MediaAssetView, SocialAccountView, TikTokCreatorInfoView } from '@/lib/types';
+import type {
+  MediaAssetView,
+  PinterestBoardSectionView,
+  PinterestBoardView,
+  SocialAccountView,
+  TikTokCreatorInfoView,
+} from '@/lib/types';
 
 interface PlatformComposerPanelsProps {
   accounts: SocialAccountView[];
@@ -18,10 +25,8 @@ interface PlatformComposerPanelsProps {
   disabled?: boolean;
   mediaLocked?: boolean;
   workspaceId?: string;
-  common?: {
-    title?: string;
-    body?: string;
-    linkUrl?: string;
+  common?: CommonComposerContent & {
+    hashtags?: string;
   };
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
 }
@@ -42,8 +47,22 @@ export function PlatformComposerPanels({
   >({});
   const [creatorLoadingIds, setCreatorLoadingIds] = useState<string[]>([]);
   const [creatorErrors, setCreatorErrors] = useState<Record<string, string>>({});
+  const [pinterestBoardsByAccountId, setPinterestBoardsByAccountId] = useState<
+    Record<string, PinterestBoardView[]>
+  >({});
+  const [pinterestBoardLoadingIds, setPinterestBoardLoadingIds] = useState<string[]>([]);
+  const [pinterestBoardErrors, setPinterestBoardErrors] = useState<Record<string, string>>({});
+  const [pinterestSectionsByKey, setPinterestSectionsByKey] = useState<
+    Record<string, PinterestBoardSectionView[]>
+  >({});
+  const [pinterestSectionLoadingKeys, setPinterestSectionLoadingKeys] = useState<string[]>([]);
+  const [pinterestSectionErrors, setPinterestSectionErrors] = useState<Record<string, string>>({});
   const tiktokAccountKey = accounts
     .filter((account) => account.platform === 'TIKTOK')
+    .map((account) => `${account.id}:${account.scopes.join(',')}`)
+    .join('|');
+  const pinterestAccountKey = accounts
+    .filter((account) => account.platform === 'PINTEREST')
     .map((account) => `${account.id}:${account.scopes.join(',')}`)
     .join('|');
 
@@ -57,6 +76,25 @@ export function PlatformComposerPanels({
       void loadTikTokCreatorInfo(account.id);
     }
   }, [workspaceId, tiktokAccountKey, creatorInfoByAccountId, creatorLoadingIds, creatorErrors]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    for (const account of accounts) {
+      if (account.platform !== 'PINTEREST') continue;
+      if (!account.scopes.includes('boards:read')) continue;
+      if (pinterestBoardErrors[account.id]) continue;
+      if (pinterestBoardsByAccountId[account.id] || pinterestBoardLoadingIds.includes(account.id)) {
+        continue;
+      }
+      void loadPinterestBoards(account.id);
+    }
+  }, [
+    workspaceId,
+    pinterestAccountKey,
+    pinterestBoardsByAccountId,
+    pinterestBoardLoadingIds,
+    pinterestBoardErrors,
+  ]);
 
   if (accounts.length === 0) return null;
 
@@ -77,6 +115,51 @@ export function PlatformComposerPanels({
       setCreatorErrors((current) => ({ ...current, [accountId]: getErrorMessage(error) }));
     } finally {
       setCreatorLoadingIds((current) => current.filter((id) => id !== accountId));
+    }
+  }
+
+  async function loadPinterestBoards(accountId: string) {
+    if (!workspaceId) return;
+    setPinterestBoardLoadingIds((current) =>
+      current.includes(accountId) ? current : [...current, accountId],
+    );
+    setPinterestBoardErrors((current) => {
+      const next = { ...current };
+      delete next[accountId];
+      return next;
+    });
+    try {
+      const response = await socialAccountsApi.pinterestBoards(workspaceId, accountId);
+      setPinterestBoardsByAccountId((current) => ({ ...current, [accountId]: response.items }));
+    } catch (error) {
+      setPinterestBoardErrors((current) => ({ ...current, [accountId]: getErrorMessage(error) }));
+    } finally {
+      setPinterestBoardLoadingIds((current) => current.filter((id) => id !== accountId));
+    }
+  }
+
+  async function loadPinterestBoardSections(accountId: string, boardId: string) {
+    if (!workspaceId || !boardId) return;
+    const key = pinterestSectionKey(accountId, boardId);
+    setPinterestSectionLoadingKeys((current) =>
+      current.includes(key) ? current : [...current, key],
+    );
+    setPinterestSectionErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    try {
+      const response = await socialAccountsApi.pinterestBoardSections(
+        workspaceId,
+        accountId,
+        boardId,
+      );
+      setPinterestSectionsByKey((current) => ({ ...current, [key]: response.items }));
+    } catch (error) {
+      setPinterestSectionErrors((current) => ({ ...current, [key]: getErrorMessage(error) }));
+    } finally {
+      setPinterestSectionLoadingKeys((current) => current.filter((item) => item !== key));
     }
   }
 
@@ -105,7 +188,8 @@ export function PlatformComposerPanels({
         <div>
           <h2 className="text-base font-semibold text-slate-950">Nội dung riêng từng nền tảng</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Chọn Tùy chỉnh khi target này cần caption, link, media hoặc option khác nội dung chung.
+            Chọn Tùy chỉnh khi target cần caption, link, media hoặc option khác nội dung chung. Nội
+            dung chung sẽ được điền sẵn để sửa nhanh.
           </p>
         </div>
         <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
@@ -119,16 +203,21 @@ export function PlatformComposerPanels({
             drafts[account.id] ?? platformOverrideDefaults(account.platform, account.scopes);
           const issues = platformChecklist(account.platform, resolveMedia(draft, mediaAssets));
           const expanded = expandedAccountIds.includes(account.id);
+          const tone = platformPanelTone(account.platform);
           return (
             <article
               key={account.id}
-              className="overflow-hidden rounded-md border border-slate-200 bg-white"
+              className={`overflow-hidden rounded-md border bg-white ${tone.article}`}
             >
-              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+              <div
+                className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${tone.header}`}
+              >
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="truncate text-sm font-semibold text-slate-950">{account.name}</p>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${tone.badge}`}
+                    >
                       {PLATFORM_LABELS[account.platform]}
                     </span>
                   </div>
@@ -189,15 +278,44 @@ export function PlatformComposerPanels({
                       draft={draft}
                       mediaLocked={mediaLocked}
                       mediaAssets={mediaAssets}
+                      pinterestBoards={pinterestBoardsByAccountId[account.id] ?? []}
+                      pinterestBoardsError={pinterestBoardErrors[account.id]}
+                      pinterestBoardsLoading={pinterestBoardLoadingIds.includes(account.id)}
+                      pinterestSections={
+                        draft.pinterestBoardId
+                          ? (pinterestSectionsByKey[
+                              pinterestSectionKey(account.id, draft.pinterestBoardId)
+                            ] ?? [])
+                          : []
+                      }
+                      pinterestSectionsError={
+                        draft.pinterestBoardId
+                          ? pinterestSectionErrors[
+                              pinterestSectionKey(account.id, draft.pinterestBoardId)
+                            ]
+                          : undefined
+                      }
+                      pinterestSectionsLoading={
+                        draft.pinterestBoardId
+                          ? pinterestSectionLoadingKeys.includes(
+                              pinterestSectionKey(account.id, draft.pinterestBoardId),
+                            )
+                          : false
+                      }
                       tiktokCreatorInfo={creatorInfoByAccountId[account.id]}
                       tiktokCreatorInfoError={creatorErrors[account.id]}
                       tiktokCreatorInfoLoading={creatorLoadingIds.includes(account.id)}
+                      onLoadPinterestSections={(boardId) =>
+                        loadPinterestBoardSections(account.id, boardId)
+                      }
+                      onRefreshPinterestBoards={() => loadPinterestBoards(account.id)}
                       onRefreshTikTokCreatorInfo={() => loadTikTokCreatorInfo(account.id)}
                       onChange={onChange}
                     />
                   ) : (
                     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                      Target này đang lấy tiêu đề, nội dung, link và media từ phần nội dung chung.
+                      Target này đang lấy tiêu đề, nội dung, link, hashtag và media từ phần nội dung
+                      chung.
                     </div>
                   )}
                 </div>
@@ -267,9 +385,17 @@ function PlatformFields({
   draft,
   mediaLocked,
   mediaAssets,
+  pinterestBoards,
+  pinterestBoardsError,
+  pinterestBoardsLoading,
+  pinterestSections,
+  pinterestSectionsError,
+  pinterestSectionsLoading,
   tiktokCreatorInfo,
   tiktokCreatorInfoError,
   tiktokCreatorInfoLoading,
+  onLoadPinterestSections,
+  onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
   onChange,
 }: {
@@ -278,9 +404,17 @@ function PlatformFields({
   draft: PlatformOverrideDraft;
   mediaLocked: boolean;
   mediaAssets: MediaAssetView[];
+  pinterestBoards: PinterestBoardView[];
+  pinterestBoardsError?: string;
+  pinterestBoardsLoading: boolean;
+  pinterestSections: PinterestBoardSectionView[];
+  pinterestSectionsError?: string;
+  pinterestSectionsLoading: boolean;
   tiktokCreatorInfo?: TikTokCreatorInfoView;
   tiktokCreatorInfoError?: string;
   tiktokCreatorInfoLoading?: boolean;
+  onLoadPinterestSections: (boardId: string) => void;
+  onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
 }) {
@@ -341,9 +475,17 @@ function PlatformFields({
         disabled={disabled}
         draft={draft}
         mediaAssets={resolvedMedia}
+        pinterestBoards={pinterestBoards}
+        pinterestBoardsError={pinterestBoardsError}
+        pinterestBoardsLoading={pinterestBoardsLoading}
+        pinterestSections={pinterestSections}
+        pinterestSectionsError={pinterestSectionsError}
+        pinterestSectionsLoading={pinterestSectionsLoading}
         tiktokCreatorInfo={tiktokCreatorInfo}
         tiktokCreatorInfoError={tiktokCreatorInfoError}
         tiktokCreatorInfoLoading={tiktokCreatorInfoLoading ?? false}
+        onLoadPinterestSections={onLoadPinterestSections}
+        onRefreshPinterestBoards={onRefreshPinterestBoards}
         onRefreshTikTokCreatorInfo={onRefreshTikTokCreatorInfo}
         onChange={onChange}
       />
@@ -363,9 +505,17 @@ function PlatformOptions({
   disabled,
   draft,
   mediaAssets,
+  pinterestBoards,
+  pinterestBoardsError,
+  pinterestBoardsLoading,
+  pinterestSections,
+  pinterestSectionsError,
+  pinterestSectionsLoading,
   tiktokCreatorInfo,
   tiktokCreatorInfoError,
   tiktokCreatorInfoLoading,
+  onLoadPinterestSections,
+  onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
   onChange,
 }: {
@@ -373,9 +523,17 @@ function PlatformOptions({
   disabled: boolean;
   draft: PlatformOverrideDraft;
   mediaAssets: MediaAssetView[];
+  pinterestBoards: PinterestBoardView[];
+  pinterestBoardsError?: string;
+  pinterestBoardsLoading: boolean;
+  pinterestSections: PinterestBoardSectionView[];
+  pinterestSectionsError?: string;
+  pinterestSectionsLoading: boolean;
   tiktokCreatorInfo?: TikTokCreatorInfoView;
   tiktokCreatorInfoError?: string;
   tiktokCreatorInfoLoading: boolean;
+  onLoadPinterestSections: (boardId: string) => void;
+  onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
 }) {
@@ -437,49 +595,20 @@ function PlatformOptions({
 
   if (account.platform === 'PINTEREST') {
     return (
-      <div className="grid gap-3 md:grid-cols-2">
-        <Field label="Board ID">
-          <TextInput
-            disabled={disabled}
-            placeholder="Để trống dùng board khi kết nối"
-            value={draft.pinterestBoardId}
-            onChange={(event) => onChange(account.id, { pinterestBoardId: event.target.value })}
-          />
-        </Field>
-        <Field label="Board section ID">
-          <TextInput
-            disabled={disabled}
-            placeholder="Tùy chọn"
-            value={draft.pinterestBoardSectionId}
-            onChange={(event) =>
-              onChange(account.id, { pinterestBoardSectionId: event.target.value })
-            }
-          />
-        </Field>
-        <Field label="Alt text ảnh">
-          <TextInput
-            disabled={disabled}
-            placeholder="Mô tả ảnh cho accessibility"
-            value={draft.pinterestAltText}
-            onChange={(event) => onChange(account.id, { pinterestAltText: event.target.value })}
-          />
-        </Field>
-        <Field label="AI disclosure">
-          <SelectInput
-            disabled={disabled}
-            value={draft.pinterestAiDisclosure}
-            onChange={(event) =>
-              onChange(account.id, {
-                pinterestAiDisclosure: event.target
-                  .value as PlatformOverrideDraft['pinterestAiDisclosure'],
-              })
-            }
-          >
-            <option value="NONE">Không khai báo AI</option>
-            <option value="GENERATIVE_AI">Có nội dung AI-generated</option>
-          </SelectInput>
-        </Field>
-      </div>
+      <PinterestOptionsPanel
+        account={account}
+        boards={pinterestBoards}
+        boardsError={pinterestBoardsError}
+        boardsLoading={pinterestBoardsLoading}
+        disabled={disabled}
+        draft={draft}
+        sections={pinterestSections}
+        sectionsError={pinterestSectionsError}
+        sectionsLoading={pinterestSectionsLoading}
+        onChange={onChange}
+        onLoadSections={onLoadPinterestSections}
+        onRefreshBoards={onRefreshPinterestBoards}
+      />
     );
   }
 
@@ -502,13 +631,21 @@ function PlatformOptions({
             <option value="private">Private</option>
           </SelectInput>
         </Field>
-        <Field label="Category ID">
-          <TextInput
+        <Field label="Danh mục YouTube">
+          <SelectInput
             disabled={disabled}
-            placeholder="22 = People & Blogs"
             value={draft.youtubeCategoryId}
             onChange={(event) => onChange(account.id, { youtubeCategoryId: event.target.value })}
-          />
+          >
+            {YOUTUBE_CATEGORIES.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.id} - {category.label}
+              </option>
+            ))}
+          </SelectInput>
+          <p className="mt-1 text-xs text-slate-500">
+            Category ID là mã danh mục video của YouTube Data API. Mặc định 22 là People & Blogs.
+          </p>
         </Field>
         <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
           <input
@@ -551,6 +688,141 @@ function PlatformOptions({
   }
 
   return null;
+}
+
+function PinterestOptionsPanel({
+  account,
+  boards,
+  boardsError,
+  boardsLoading,
+  disabled,
+  draft,
+  sections,
+  sectionsError,
+  sectionsLoading,
+  onChange,
+  onLoadSections,
+  onRefreshBoards,
+}: {
+  account: SocialAccountView;
+  boards: PinterestBoardView[];
+  boardsError?: string;
+  boardsLoading: boolean;
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  sections: PinterestBoardSectionView[];
+  sectionsError?: string;
+  sectionsLoading: boolean;
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onLoadSections: (boardId: string) => void;
+  onRefreshBoards: () => void;
+}) {
+  return (
+    <div className="space-y-3 rounded-md border border-red-100 bg-red-50/50 p-3">
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Board Pinterest">
+          <SelectInput
+            disabled={disabled || boardsLoading}
+            value={draft.pinterestBoardId}
+            onChange={(event) => {
+              const boardId = event.target.value;
+              onChange(account.id, { pinterestBoardId: boardId, pinterestBoardSectionId: '' });
+              if (boardId) onLoadSections(boardId);
+            }}
+          >
+            <option value="">
+              {boardsLoading ? 'Đang tải board...' : 'Dùng board mặc định lúc kết nối'}
+            </option>
+            {boards.map((board) => (
+              <option key={board.id} value={board.id}>
+                {board.name}
+                {board.privacy ? ` (${board.privacy})` : ''}
+              </option>
+            ))}
+          </SelectInput>
+          {boardsError ? (
+            <p className="mt-1 text-xs text-red-700">{boardsError}</p>
+          ) : (
+            <p className="mt-1 text-xs text-slate-500">
+              Lấy board thật từ Pinterest bằng scope boards:read.
+            </p>
+          )}
+        </Field>
+
+        <Field label="Board section">
+          <SelectInput
+            disabled={disabled || !draft.pinterestBoardId || sectionsLoading}
+            value={draft.pinterestBoardSectionId}
+            onChange={(event) =>
+              onChange(account.id, { pinterestBoardSectionId: event.target.value })
+            }
+            onFocus={() => {
+              if (draft.pinterestBoardId && sections.length === 0 && !sectionsLoading) {
+                onLoadSections(draft.pinterestBoardId);
+              }
+            }}
+          >
+            <option value="">
+              {!draft.pinterestBoardId
+                ? 'Chọn board trước'
+                : sectionsLoading
+                  ? 'Đang tải section...'
+                  : 'Không dùng section'}
+            </option>
+            {sections.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.name}
+              </option>
+            ))}
+          </SelectInput>
+          {sectionsError ? (
+            <p className="mt-1 text-xs text-red-700">{sectionsError}</p>
+          ) : (
+            <p className="mt-1 text-xs text-slate-500">Section là thư mục con trong board.</p>
+          )}
+        </Field>
+
+        <Field label="Alt text ảnh Pinterest">
+          <TextInput
+            disabled={disabled}
+            placeholder="Mô tả ảnh ngắn gọn, chứa từ khóa tự nhiên"
+            value={draft.pinterestAltText}
+            onChange={(event) => onChange(account.id, { pinterestAltText: event.target.value })}
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Gửi lên Pinterest dưới dạng alt_text cho SEO/accessibility. Đổi tên media dùng nút riêng
+            trong Storage.
+          </p>
+        </Field>
+
+        <Field label="AI disclosure">
+          <SelectInput
+            disabled={disabled}
+            value={draft.pinterestAiDisclosure}
+            onChange={(event) =>
+              onChange(account.id, {
+                pinterestAiDisclosure: event.target
+                  .value as PlatformOverrideDraft['pinterestAiDisclosure'],
+              })
+            }
+          >
+            <option value="NONE">Không khai báo AI</option>
+            <option value="GENERATIVE_AI">Có nội dung AI-generated</option>
+          </SelectInput>
+        </Field>
+      </div>
+
+      <button
+        className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-60"
+        disabled={disabled || boardsLoading}
+        type="button"
+        onClick={onRefreshBoards}
+      >
+        <RefreshCw className={`h-4 w-4 ${boardsLoading ? 'animate-spin' : ''}`} />
+        Làm mới board
+      </button>
+    </div>
+  );
 }
 
 function TikTokOptionsPanel({
@@ -925,6 +1197,73 @@ function SwitchRow({
   );
 }
 
+const YOUTUBE_CATEGORIES = [
+  { id: '1', label: 'Film & Animation' },
+  { id: '2', label: 'Autos & Vehicles' },
+  { id: '10', label: 'Music' },
+  { id: '15', label: 'Pets & Animals' },
+  { id: '17', label: 'Sports' },
+  { id: '19', label: 'Travel & Events' },
+  { id: '20', label: 'Gaming' },
+  { id: '22', label: 'People & Blogs' },
+  { id: '23', label: 'Comedy' },
+  { id: '24', label: 'Entertainment' },
+  { id: '25', label: 'News & Politics' },
+  { id: '26', label: 'Howto & Style' },
+  { id: '27', label: 'Education' },
+  { id: '28', label: 'Science & Technology' },
+  { id: '29', label: 'Nonprofits & Activism' },
+] as const;
+
+function pinterestSectionKey(accountId: string, boardId: string): string {
+  return `${accountId}:${boardId}`;
+}
+
+function platformPanelTone(platform: Platform): {
+  article: string;
+  header: string;
+  badge: string;
+} {
+  switch (platform) {
+    case 'FACEBOOK':
+      return {
+        article: 'border-blue-200',
+        header: 'bg-blue-50/70',
+        badge: 'bg-blue-100 text-blue-700',
+      };
+    case 'INSTAGRAM':
+      return {
+        article: 'border-fuchsia-200',
+        header: 'bg-fuchsia-50/70',
+        badge: 'bg-fuchsia-100 text-fuchsia-700',
+      };
+    case 'PINTEREST':
+      return {
+        article: 'border-red-200',
+        header: 'bg-red-50/70',
+        badge: 'bg-red-100 text-red-700',
+      };
+    case 'YOUTUBE':
+      return {
+        article: 'border-amber-200',
+        header: 'bg-amber-50/70',
+        badge: 'bg-amber-100 text-amber-800',
+      };
+    case 'TIKTOK':
+      return {
+        article: 'border-cyan-200',
+        header: 'bg-cyan-50/70',
+        badge: 'bg-cyan-100 text-cyan-700',
+      };
+    default:
+      return {
+        article: 'border-slate-200',
+        header: 'bg-white',
+        badge: 'bg-slate-100 text-slate-600',
+      };
+  }
+}
+
 function tiktokPrivacyLabel(value: string): string {
   switch (value) {
     case 'PUBLIC_TO_EVERYONE':
@@ -1036,6 +1375,7 @@ function commonTextSummary(common: PlatformComposerPanelsProps['common']): strin
     common.title?.trim() ? 'tiêu đề' : null,
     common.body?.trim() ? 'nội dung' : null,
     common.linkUrl?.trim() ? 'link' : null,
+    common.hashtags?.trim() ? 'hashtag' : null,
   ].filter(Boolean);
   return parts.length > 0 ? `Dùng ${parts.join(' + ')}` : 'Chưa có text chung';
 }
@@ -1053,10 +1393,10 @@ function mediaSummary(mediaAssets: MediaAssetView[]): string {
 }
 
 function platformModeHint(platform: Platform): string {
-  if (platform === 'YOUTUBE') return 'Dùng title + 1 video chung';
-  if (platform === 'TIKTOK') return 'Mặc định gửi vào TikTok Inbox';
-  if (platform === 'PINTEREST') return 'Dùng title/link/media chung';
-  if (platform === 'INSTAGRAM') return 'Dùng caption/media chung';
+  if (platform === 'YOUTUBE') return 'Title/description chung + tags metadata';
+  if (platform === 'TIKTOK') return 'Caption chung + hashtag trong caption';
+  if (platform === 'PINTEREST') return 'Title/link/description chung';
+  if (platform === 'INSTAGRAM') return 'Caption chung + hashtag trong caption';
   return 'Kế thừa nội dung chung';
 }
 

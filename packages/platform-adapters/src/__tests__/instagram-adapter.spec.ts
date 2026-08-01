@@ -128,23 +128,8 @@ describe('InstagramAdapter', () => {
     ]);
   });
 
-  it('xóa media Instagram bằng DELETE /{ig_media_id}', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ success: true }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await createAdapter().deletePost(
-      {
-        accessToken: 'page-token',
-        externalAccountId: 'ig-user-1',
-        correlationId: 'corr-1',
-      },
-      'media-1',
-    );
-
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [URL | string, RequestInit];
-    expect(new URL(String(url)).pathname).toBe('/v24.0/media-1');
-    expect(new URL(String(url)).searchParams.get('access_token')).toBe('page-token');
-    expect(init.method).toBe('DELETE');
+  it('không expose deletePost vì Instagram Media API không hỗ trợ xóa media', () => {
+    expect('deletePost' in createAdapter()).toBe(false);
   });
 
   it('đọc danh sách media Instagram của account', async () => {

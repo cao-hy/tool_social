@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { notificationsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
+import { notificationToastMessage } from '@/lib/notification-format';
 import type { NotificationView } from '@/lib/types';
 import { useToast } from './toast-provider';
 
@@ -90,7 +91,7 @@ function pushNotificationToast(item: NotificationView, toast: ReturnType<typeof 
   if (notifiedNotificationIds.has(item.id) || !isToastWorthShowing(item)) return;
   notifiedNotificationIds.add(item.id);
 
-  const message = item.body ? `${item.title}: ${item.body}` : item.title;
+  const message = notificationToastMessage(item);
   if (item.type === 'POST_FAILED') {
     toast.error(message, 'Publish thất bại');
     return;

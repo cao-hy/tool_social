@@ -1,11 +1,21 @@
-import { platformSchema } from '@socialhub/shared';
+import {
+  countGraphemes,
+  normalizeHashtag,
+  normalizeOptionalSocialText,
+  platformSchema,
+} from '@socialhub/shared';
 import { z } from 'zod';
 
 const optionalText = z
   .string()
-  .trim()
-  .transform((value) => (value.length === 0 ? undefined : value))
+  .transform((value) => normalizeOptionalSocialText(value))
   .optional();
+
+const hashtagSchema = z
+  .string()
+  .transform((value) => normalizeHashtag(value))
+  .refine((value) => value.length > 0, 'Hashtag không được rỗng.')
+  .refine((value) => countGraphemes(value) <= 80, 'Hashtag tối đa 80 ký tự.');
 
 const optionalUrl = z
   .string()
@@ -28,7 +38,7 @@ export const postComposerSchema = z.object({
   title: optionalText,
   body: optionalText,
   linkUrl: optionalUrl,
-  hashtags: z.array(z.string().trim().min(1).max(80)).max(30).default([]),
+  hashtags: z.array(hashtagSchema).max(30).default([]),
   socialAccountIds: z.array(z.string().min(1)).max(20).default([]),
   mediaAssetIds: z.array(z.string().min(1)).max(10).default([]),
   platformOverrides: z.array(platformOverrideSchema).max(20).default([]),

@@ -1,3 +1,4 @@
+import { countGraphemes } from '@socialhub/shared';
 import type { PublishPostInput, ValidationResult } from '../core/types';
 
 const TIKTOK_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
@@ -119,7 +120,7 @@ export function validateTikTokPost(input: PublishPostInput): ValidationResult {
   const caption = [input.caption, input.hashtags?.map((tag) => `#${tag}`).join(' ')]
     .filter(Boolean)
     .join('\n\n');
-  if (caption.length > 2200) {
+  if (countGraphemes(caption) > 2200) {
     issues.push({ field: 'caption', message: 'TikTok caption tối đa 2200 ký tự.', limit: 2200 });
   }
 

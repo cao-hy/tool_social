@@ -13,6 +13,8 @@ import type {
   MediaLibraryItem,
   MediaAssetView,
   NotificationView,
+  PinterestBoardSectionView,
+  PinterestBoardView,
   PlatformCapabilitiesView,
   PlatformPostState,
   ReplyTemplateView,
@@ -212,6 +214,14 @@ export const socialAccountsApi = {
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/tiktok/creator-info`,
       { method: 'POST' },
     ),
+  pinterestBoards: (workspaceId: string, socialAccountId: string) =>
+    apiFetch<{ items: PinterestBoardView[]; fetchedAt: string }>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/pinterest/boards`,
+    ),
+  pinterestBoardSections: (workspaceId: string, socialAccountId: string, boardId: string) =>
+    apiFetch<{ items: PinterestBoardSectionView[]; fetchedAt: string }>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/pinterest/boards/${encodeURIComponent(boardId)}/sections`,
+    ),
 };
 
 export const platformsApi = {
@@ -363,6 +373,11 @@ export const mediaApi = {
     ),
   get: (workspaceId: string, mediaAssetId: string) =>
     apiFetch<MediaAssetView>(`/workspaces/${workspaceId}/media/${mediaAssetId}`),
+  rename: (workspaceId: string, mediaAssetId: string, fileName: string) =>
+    apiFetch<MediaAssetView>(`/workspaces/${workspaceId}/media/${mediaAssetId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ fileName }),
+    }),
   uploadObject: (workspaceId: string, mediaAssetId: string, file: File) =>
     apiFetch<{ uploaded: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}/object`, {
       method: 'PUT',

@@ -70,7 +70,6 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
               (key === 'publishImage' ||
                 key === 'publishMultipleImages' ||
                 key === 'publishVideo' ||
-                key === 'deletePublishedPost' ||
                 key === 'readComments' ||
                 key === 'replyToComment' ||
                 key === 'hideComment' ||

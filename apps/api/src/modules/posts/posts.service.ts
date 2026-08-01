@@ -305,17 +305,29 @@ export class PostsService implements OnModuleDestroy {
       options.platformPostIds === undefined
         ? null
         : new Set(options.platformPostIds.filter(Boolean));
+    if (requestedPlatformPostIds) {
+      const postPlatformPostIds = new Set(post.platformPosts.map((item) => item.id));
+      const invalidIds = [...requestedPlatformPostIds].filter((id) => !postPlatformPostIds.has(id));
+      if (invalidIds.length > 0) {
+        throw AppError.validation('Một hoặc nhiều platform post không thuộc bài viết này.');
+      }
+    }
     const publishedRemoteTargets = post.platformPosts.filter(
-      (item) => item.status === 'PUBLISHED' && item.externalPostId,
+      (item) =>
+        item.status === 'PUBLISHED' &&
+        item.externalPostId &&
+        (!requestedPlatformPostIds || requestedPlatformPostIds.has(item.id)),
     );
     const remoteDeletePlatformPostIds =
       deletePublished && options.deleteFromPlatforms !== false
-        ? (options.platformPostIds ?? publishedRemoteTargets.map((item) => item.id))
+        ? publishedRemoteTargets.map((item) => item.id)
         : [];
-    const platformOnlyDelete =
-      requestedPlatformPostIds !== null &&
-      requestedPlatformPostIds.size > 0 &&
-      remoteDeletePlatformPostIds.length < publishedRemoteTargets.length;
+    const activePlatformPostIds = post.platformPosts
+      .filter((item) => item.status !== 'DELETED')
+      .map((item) => item.id);
+    const contentDeleteRequested =
+      requestedPlatformPostIds === null ||
+      activePlatformPostIds.every((id) => requestedPlatformPostIds.has(id));
 
     const remoteDeleteResults =
       remoteDeletePlatformPostIds.length > 0
@@ -329,23 +341,18 @@ export class PostsService implements OnModuleDestroy {
       .filter((result) => result.deleted)
       .map((result) => result.platformPostId);
     const remoteFailedResults = remoteDeleteResults.filter((result) => !result.deleted);
+    const remoteFailedPlatformPostIds = new Set(
+      remoteFailedResults.map((result) => result.platformPostId),
+    );
+    const localDeletedPlatformPostIds =
+      requestedPlatformPostIds === null
+        ? remoteDeletedPlatformPostIds
+        : [...requestedPlatformPostIds].filter((id) => !remoteFailedPlatformPostIds.has(id));
 
-    if (remoteDeletedPlatformPostIds.length > 0) {
-      await this.prisma.platformPost.updateMany({
-        where: {
-          id: { in: remoteDeletedPlatformPostIds },
-          workspaceId,
-          contentPostId: postId,
-        },
-        data: {
-          status: 'DELETED',
-          errorCode: null,
-          errorMessage: null,
-        },
-      });
-    }
-
-    if (platformOnlyDelete || remoteFailedResults.length > 0) {
+    if (!contentDeleteRequested || remoteFailedResults.length > 0) {
+      if (localDeletedPlatformPostIds.length > 0) {
+        await this.markPlatformPostsDeleted(workspaceId, postId, localDeletedPlatformPostIds);
+      }
       await this.updateParentStatus(postId);
       const mediaCleanup = await this.deleteUnusedPostMedia(
         workspaceId,
@@ -363,7 +370,7 @@ export class PostsService implements OnModuleDestroy {
         metadata: {
           previousStatus: post.status,
           contentDeleted: false,
-          platformOnlyDelete,
+          platformOnlyDelete: true,
           remoteDeleteResults,
           mediaCleanup,
         },
@@ -372,7 +379,7 @@ export class PostsService implements OnModuleDestroy {
       return {
         deleted: false,
         contentDeleted: false,
-        platformOnlyDelete,
+        platformOnlyDelete: true,
         remoteDeleteResults,
         mediaCleanup,
       };
@@ -387,45 +394,9 @@ export class PostsService implements OnModuleDestroy {
       }
     }
 
-    await this.prisma.$transaction([
-      this.prisma.platformPost.updateMany({
-        where: {
-          contentPostId: postId,
-          OR: [
-            { status: { in: ['PENDING', 'QUEUED', 'FAILED', 'CANCELLED'] } },
-            ...(remoteDeletePlatformPostIds.length > 0
-              ? [
-                  {
-                    id: { in: remoteDeletePlatformPostIds },
-                    status: { in: ['PROCESSING', 'PUBLISHED'] as PlatformPostStatus[] },
-                  },
-                ]
-              : []),
-          ],
-        },
-        data: { status: 'CANCELLED' },
-      }),
-      ...(remoteDeletedPlatformPostIds.length > 0
-        ? [
-            this.prisma.platformPost.updateMany({
-              where: {
-                id: { in: remoteDeletedPlatformPostIds },
-                workspaceId,
-                contentPostId: postId,
-              },
-              data: { status: 'DELETED', errorCode: null, errorMessage: null },
-            }),
-          ]
-        : []),
-      this.prisma.postSchedule.updateMany({
-        where: { contentPostId: postId },
-        data: { cancelledAt: new Date() },
-      }),
-      this.prisma.contentPost.update({
-        where: { id: postId },
-        data: { status: 'CANCELLED', deletedAt: new Date() },
-      }),
-    ]);
+    await this.prisma.contentPost.delete({
+      where: { id: postId },
+    });
 
     const mediaCleanup = await this.deleteUnusedPostMedia(
       workspaceId,
@@ -482,12 +453,14 @@ export class PostsService implements OnModuleDestroy {
         if (result.deleted) {
           results.push({ postId, deleted: true });
         } else {
+          const failureSummary = summarizePlatformDeleteFailures(result.remoteDeleteResults);
           results.push({
             postId,
             deleted: false,
             errorCode: 'PARTIAL_DELETE',
-            errorMessage:
-              'Chưa xóa bài khỏi workspace vì một hoặc nhiều social chưa xóa thành công.',
+            errorMessage: failureSummary
+              ? `Chưa xóa bài khỏi workspace. Lỗi: ${failureSummary}.`
+              : 'Chưa xóa bài khỏi workspace vì một hoặc nhiều social chưa xóa thành công.',
           });
         }
       } catch (error) {
@@ -1114,6 +1087,35 @@ export class PostsService implements OnModuleDestroy {
     ];
   }
 
+  private async markPlatformPostsDeleted(
+    workspaceId: string,
+    contentPostId: string,
+    platformPostIds: string[],
+  ): Promise<void> {
+    if (platformPostIds.length === 0) return;
+
+    await this.prisma.$transaction([
+      this.prisma.platformPostMedia.deleteMany({
+        where: {
+          platformPostId: { in: platformPostIds },
+          platformPost: { workspaceId, contentPostId },
+        },
+      }),
+      this.prisma.platformPost.updateMany({
+        where: {
+          id: { in: platformPostIds },
+          workspaceId,
+          contentPostId,
+        },
+        data: {
+          status: 'DELETED',
+          errorCode: null,
+          errorMessage: null,
+        },
+      }),
+    ]);
+  }
+
   private async deleteUnusedPostMedia(
     workspaceId: string,
     mediaAssetIds: string[],
@@ -1682,6 +1684,16 @@ export class PostsService implements OnModuleDestroy {
         );
         results.push({ ...baseResult, deleted: true });
       } catch (error) {
+        if (isPlatformError(error) && error.kind === 'NOT_FOUND') {
+          results.push({
+            ...baseResult,
+            deleted: true,
+            errorCode: 'REMOTE_ALREADY_DELETED',
+            errorMessage: error.message,
+          });
+          continue;
+        }
+
         results.push({
           ...baseResult,
           deleted: false,
@@ -1944,6 +1956,21 @@ function deleteErrorCode(error: unknown): string {
   if (isAppError(error)) return error.code;
   if (isPlatformError(error)) return error.kind;
   return 'UNKNOWN';
+}
+
+function summarizePlatformDeleteFailures(results: PlatformDeleteResult[]): string {
+  const failures = results.filter((item) => !item.deleted);
+  if (failures.length === 0) return '';
+  const visible = failures
+    .slice(0, 2)
+    .map((item) => {
+      const code = item.errorCode ? `${item.errorCode}: ` : '';
+      const message = item.errorMessage || 'Không rõ nguyên nhân.';
+      return `${item.platform} / ${item.socialAccountName}: ${code}${message}`;
+    })
+    .join('; ');
+  const hiddenCount = failures.length - 2;
+  return hiddenCount > 0 ? `${visible}; và ${hiddenCount} target khác` : visible;
 }
 
 function assertYouTubeReadyForPublic(state: YouTubeVideoPlatformState): void {

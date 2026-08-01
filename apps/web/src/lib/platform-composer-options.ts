@@ -69,10 +69,78 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   tiktokIsAiGenerated: false,
 };
 
+export interface CommonComposerContent {
+  title?: string;
+  body?: string;
+  linkUrl?: string;
+  mediaAssetIds?: string[];
+}
+
 export function platformOverrideDefaults(_platform: Platform, _scopes: string[] = []) {
   return {
     ...EMPTY_PLATFORM_OVERRIDE,
   } satisfies PlatformOverrideDraft;
+}
+
+export function platformOverrideFromCommon(
+  platform: Platform,
+  scopes: string[] = [],
+  common: CommonComposerContent,
+): PlatformOverrideDraft {
+  const title = common.title?.trim() ?? '';
+  const body = common.body?.trim() ?? '';
+  const linkUrl = common.linkUrl?.trim() ?? '';
+
+  const draft = platformOverrideDefaults(platform, scopes);
+  draft.customized = true;
+  draft.mediaAssetIds = common.mediaAssetIds ?? [];
+
+  switch (platform) {
+    case 'FACEBOOK':
+      draft.caption = body;
+      draft.linkUrl = linkUrl;
+      break;
+    case 'INSTAGRAM':
+    case 'TIKTOK':
+      draft.caption = body;
+      break;
+    case 'PINTEREST':
+      draft.title = title;
+      draft.description = body;
+      draft.linkUrl = linkUrl;
+      break;
+    case 'YOUTUBE':
+      draft.title = title;
+      draft.description = body;
+      break;
+    default:
+      draft.caption = body;
+      draft.linkUrl = linkUrl;
+      break;
+  }
+
+  return draft;
+}
+
+export function fillMissingPlatformOverrideFromCommon(
+  platform: Platform,
+  scopes: string[] = [],
+  draft: PlatformOverrideDraft,
+  common: CommonComposerContent,
+): PlatformOverrideDraft {
+  if (!draft.customized) return draft;
+
+  const seeded = platformOverrideFromCommon(platform, scopes, common);
+
+  return {
+    ...draft,
+    customized: true,
+    title: draft.title.trim() ? draft.title : seeded.title,
+    caption: draft.caption.trim() ? draft.caption : seeded.caption,
+    description: draft.description.trim() ? draft.description : seeded.description,
+    linkUrl: draft.linkUrl.trim() ? draft.linkUrl : seeded.linkUrl,
+    mediaAssetIds: draft.mediaAssetIds.length > 0 ? draft.mediaAssetIds : seeded.mediaAssetIds,
+  };
 }
 
 export function platformOverrideFromOptions(input: {

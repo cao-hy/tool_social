@@ -86,6 +86,19 @@ export interface TikTokCreatorInfo {
   maxVideoPostDurationSec?: number;
 }
 
+export interface PinterestBoardSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+  privacy?: string | null;
+  ownerUsername?: string | null;
+}
+
+export interface PinterestBoardSectionSummary {
+  id: string;
+  name: string;
+}
+
 export interface MediaInput {
   type: MediaType;
   /** URL tải được của media. Xem lưu ý về bucket private trong docs §7. */

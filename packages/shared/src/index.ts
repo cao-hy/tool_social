@@ -9,3 +9,4 @@ export * from './queues';
 export * from './audit';
 export * from './proxy';
 export * from './network-policy';
+export * from './social-text';

@@ -11,6 +11,8 @@ import type {
   AuthUrlInput,
   EditPostInput,
   PlatformPostData,
+  PinterestBoardSectionSummary,
+  PinterestBoardSummary,
   PostMetrics,
   PublishPostInput,
   PublishResult,
@@ -115,6 +117,36 @@ export class PinterestAdapter implements SocialPlatformAdapter {
         )
       : undefined;
     return mapPinterestProfile(account, board);
+  }
+
+  async listBoards(ctx: AdapterContext): Promise<PinterestBoardSummary[]> {
+    const boards = await this.client.listBoards(ctx.accessToken);
+    return boards.map((board) => ({
+      id: board.id,
+      name: board.name,
+      description: board.description,
+      privacy: board.privacy,
+      ownerUsername: board.owner?.username,
+    }));
+  }
+
+  async listBoardSections(
+    ctx: AdapterContext,
+    boardId: string,
+  ): Promise<PinterestBoardSectionSummary[]> {
+    const sections: PinterestBoardSectionSummary[] = [];
+    let bookmark: string | undefined;
+
+    do {
+      const response = await this.client.listBoardSections(ctx.accessToken, boardId, {
+        bookmark,
+        pageSize: 25,
+      });
+      sections.push(...response.items.map((item) => ({ id: item.id, name: item.name })));
+      bookmark = response.bookmark ?? undefined;
+    } while (bookmark);
+
+    return sections;
   }
 
   validatePost(input: PublishPostInput) {
