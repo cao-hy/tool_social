@@ -2,10 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { statfs } from 'node:fs/promises';
 import { extname } from 'node:path';
 import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
   S3Client,
+  UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
@@ -15,20 +19,26 @@ import {
   type MediaType,
   type QueuePayload,
 } from '@socialhub/shared';
-import { Queue } from 'bullmq';
+import { Job, Queue } from 'bullmq';
 import { fileTypeFromBuffer } from 'file-type';
 import sharp from 'sharp';
 import { AppError } from '../../common/errors/app-error';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
-import type { CreateMediaUploadInput, ListMediaInput } from './media.schemas';
+import type {
+  AbortMultipartUploadInput,
+  CompleteMultipartUploadInput,
+  CreateMediaUploadInput,
+  ListMediaInput,
+} from './media.schemas';
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 const SIGNED_UPLOAD_EXPIRES_SECONDS = 10 * 60;
 const SIGNED_READ_EXPIRES_SECONDS = 10 * 60;
 const THUMBNAIL_CONTENT_TYPE = 'image/webp';
+const MULTIPART_PART_SIZE_BYTES = 8 * 1024 * 1024;
 
 @Injectable()
 export class MediaService implements OnModuleDestroy {
@@ -173,13 +183,28 @@ export class MediaService implements OnModuleDestroy {
     };
   }
 
-  async createUpload(workspaceId: string, uploadedById: string, input: CreateMediaUploadInput) {
-    if (
-      input.declaredMimeType === 'image/svg+xml' ||
-      input.fileName.toLowerCase().endsWith('.svg')
-    ) {
-      throw AppError.validation('SVG không được hỗ trợ vì rủi ro bảo mật.');
+  async regenerateThumbnail(workspaceId: string, mediaAssetId: string) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+    });
+    if (!media) throw AppError.notFound('media');
+    if (media.type !== 'VIDEO') {
+      throw AppError.validation('Chỉ video mới cần tạo lại thumbnail.');
     }
+    if (media.status === 'ARCHIVED') {
+      throw AppError.validation('Media đã archived, không còn file gốc để tạo lại thumbnail.');
+    }
+
+    const updated = await this.prisma.mediaAsset.update({
+      where: { id: media.id },
+      data: { status: 'PROCESSING' },
+    });
+    await this.enqueueThumbnail(updated.workspaceId, updated.id, { force: true });
+    return this.toMediaView(updated);
+  }
+
+  async createUpload(workspaceId: string, uploadedById: string, input: CreateMediaUploadInput) {
+    this.assertAllowedUploadInput(input);
 
     const storageKey = this.storageKey(workspaceId, input.fileName);
     const media = await this.prisma.mediaAsset.create({
@@ -208,6 +233,137 @@ export class MediaService implements OnModuleDestroy {
       }),
       expiresInSeconds: SIGNED_UPLOAD_EXPIRES_SECONDS,
     };
+  }
+
+  async createMultipartUpload(
+    workspaceId: string,
+    uploadedById: string,
+    input: CreateMediaUploadInput,
+  ) {
+    this.assertAllowedUploadInput(input);
+    const partSizeBytes = MULTIPART_PART_SIZE_BYTES;
+    const partCount = Math.ceil(input.sizeBytes / partSizeBytes);
+
+    const storageKey = this.storageKey(workspaceId, input.fileName);
+    const media = await this.prisma.mediaAsset.create({
+      data: {
+        workspaceId,
+        storageKey,
+        originalFileName: input.fileName,
+        sizeBytes: input.sizeBytes,
+        uploadedById,
+        status: 'PENDING_UPLOAD',
+        type: this.typeFromDeclaredMime(input.declaredMimeType),
+      },
+    });
+
+    try {
+      const upload = await this.s3.send(
+        new CreateMultipartUploadCommand({
+          Bucket: this.env.S3_BUCKET,
+          Key: storageKey,
+          ContentType: input.declaredMimeType,
+        }),
+      );
+
+      if (!upload.UploadId) throw new Error('S3 did not return multipart uploadId');
+
+      const parts = await Promise.all(
+        Array.from({ length: partCount }, async (_, index) => {
+          const partNumber = index + 1;
+          const command = new UploadPartCommand({
+            Bucket: this.env.S3_BUCKET,
+            Key: storageKey,
+            UploadId: upload.UploadId,
+            PartNumber: partNumber,
+          });
+          return {
+            partNumber,
+            uploadUrl: await getSignedUrl(this.publicS3, command, {
+              expiresIn: SIGNED_UPLOAD_EXPIRES_SECONDS,
+            }),
+          };
+        }),
+      );
+
+      return {
+        mediaAsset: await this.toMediaView(media),
+        uploadId: upload.UploadId,
+        partSizeBytes,
+        parts,
+        expiresInSeconds: SIGNED_UPLOAD_EXPIRES_SECONDS,
+      };
+    } catch (error) {
+      await this.prisma.mediaAsset.delete({ where: { id: media.id } }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async completeMultipartUpload(
+    workspaceId: string,
+    mediaAssetId: string,
+    input: CompleteMultipartUploadInput,
+  ) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+    });
+    if (!media) throw AppError.notFound('media asset');
+    if (media.status !== 'PENDING_UPLOAD') {
+      throw AppError.conflict('Media asset này đã được upload hoặc đã bị xử lý.');
+    }
+
+    await this.s3.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: this.env.S3_BUCKET,
+        Key: media.storageKey,
+        UploadId: input.uploadId,
+        MultipartUpload: {
+          Parts: input.parts
+            .map((part) => ({
+              ETag: normalizeEtag(part.etag),
+              PartNumber: part.partNumber,
+            }))
+            .sort((a, b) => (a.PartNumber ?? 0) - (b.PartNumber ?? 0)),
+        },
+      }),
+    );
+
+    return this.confirmUpload(workspaceId, mediaAssetId);
+  }
+
+  async abortMultipartUpload(
+    workspaceId: string,
+    mediaAssetId: string,
+    input: AbortMultipartUploadInput,
+  ) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+    });
+    if (!media) throw AppError.notFound('media asset');
+    if (media.status !== 'PENDING_UPLOAD') {
+      return { aborted: false };
+    }
+
+    await this.s3
+      .send(
+        new AbortMultipartUploadCommand({
+          Bucket: this.env.S3_BUCKET,
+          Key: media.storageKey,
+          UploadId: input.uploadId,
+        }),
+      )
+      .catch(() => undefined);
+    await this.prisma.mediaAsset.delete({ where: { id: media.id } }).catch(() => undefined);
+    return { aborted: true };
+  }
+
+  private assertAllowedUploadInput(input: CreateMediaUploadInput): void {
+    if (
+      input.declaredMimeType === 'image/svg+xml' ||
+      input.fileName.toLowerCase().endsWith('.svg')
+    ) {
+      throw AppError.validation('SVG không được hỗ trợ vì rủi ro bảo mật.');
+    }
   }
 
   async confirmUpload(workspaceId: string, mediaAssetId: string) {
@@ -572,9 +728,17 @@ export class MediaService implements OnModuleDestroy {
     return key;
   }
 
-  private async enqueueThumbnail(workspaceId: string, mediaAssetId: string): Promise<void> {
+  private async enqueueThumbnail(
+    workspaceId: string,
+    mediaAssetId: string,
+    options?: { force?: boolean },
+  ): Promise<void> {
     const payload: QueuePayload<'generate-thumbnail'> = { workspaceId, mediaAssetId };
     const jobId = buildJobId('generate-thumbnail', payload);
+    if (options?.force) {
+      const existingJob = await Job.fromId(this.thumbnailQueue, jobId);
+      await existingJob?.remove().catch(() => undefined);
+    }
     await this.thumbnailQueue.add(
       'generate-thumbnail',
       payload,
@@ -704,4 +868,10 @@ export class MediaService implements OnModuleDestroy {
 function sanitizeRange(value: string | undefined): string | undefined {
   if (!value) return undefined;
   return /^bytes=\d*-\d*$/.test(value) ? value : undefined;
+}
+
+function normalizeEtag(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) return trimmed;
+  return `"${trimmed}"`;
 }

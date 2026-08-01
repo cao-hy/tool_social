@@ -15,6 +15,8 @@ export function JobActivityPanel({ workspaceId }: { workspaceId: string | null }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [isClearing, setIsClearing] = useState(false);
+
   async function load(options?: { silent?: boolean }) {
     if (!workspaceId) return;
     if (!options?.silent) setLoading(true);
@@ -26,6 +28,19 @@ export function JobActivityPanel({ workspaceId }: { workspaceId: string | null }
       setError(getErrorMessage(loadError));
     } finally {
       if (!options?.silent) setLoading(false);
+    }
+  }
+
+  async function clearFailed() {
+    if (!workspaceId) return;
+    setIsClearing(true);
+    try {
+      await jobsApi.clearFailed(workspaceId);
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setIsClearing(false);
     }
   }
 
@@ -50,6 +65,34 @@ export function JobActivityPanel({ workspaceId }: { workspaceId: string | null }
   const failedCount = activity?.failedCount ?? 0;
   const hasAttention = activeCount > 0 || failedCount > 0;
 
+  const activeLabels = useMemo(() => {
+    if (!activity) return [];
+    const active = activity.items.filter((job) => ACTIVE_STATUSES.has(job.status));
+    return [...new Set(active.map((job) => job.label ?? job.queueName))];
+  }, [activity]);
+
+  const failedLabels = useMemo(() => {
+    if (!activity) return [];
+    const failed = activity.items.filter((job) => FAILED_STATUSES.has(job.status));
+    return [...new Set(failed.map((job) => job.label ?? job.queueName))];
+  }, [activity]);
+
+  function renderBubbleText() {
+    if (activeCount > 0) {
+      if (activeLabels.length === 0) return `${activeCount} job đang chạy`;
+      const displayed = activeLabels.slice(0, 2).join(', ');
+      const extra = activeLabels.length > 2 ? ` (+${activeLabels.length - 2})` : '';
+      return `Đang: ${displayed}${extra}`;
+    }
+    if (failedCount > 0) {
+      if (failedLabels.length === 0) return `${failedCount} job lỗi`;
+      const displayed = failedLabels.slice(0, 2).join(', ');
+      const extra = failedLabels.length > 2 ? ` (+${failedLabels.length - 2})` : '';
+      return `Lỗi: ${displayed}${extra}`;
+    }
+    return 'Server rảnh';
+  }
+
   if (!workspaceId) return null;
 
   return (
@@ -65,15 +108,27 @@ export function JobActivityPanel({ workspaceId }: { workspaceId: string | null }
               <ChevronUp className="h-4 w-4" />
               Server activity
             </button>
-            <button
-              className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              disabled={loading}
-              onClick={() => void load()}
-              title="Làm mới"
-              type="button"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            </button>
+            <div className="flex items-center gap-2">
+              {failedCount > 0 ? (
+                <button
+                  className="inline-flex h-9 items-center justify-center rounded-md bg-rose-50 px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+                  disabled={isClearing || loading}
+                  onClick={() => void clearFailed()}
+                  type="button"
+                >
+                  Xóa lỗi
+                </button>
+              ) : null}
+              <button
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                disabled={loading}
+                onClick={() => void load()}
+                title="Làm mới"
+                type="button"
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
 
           <div className="max-h-[440px] overflow-auto">
@@ -116,13 +171,7 @@ export function JobActivityPanel({ workspaceId }: { workspaceId: string | null }
           ) : (
             <CheckCircle2 className="h-4 w-4" />
           )}
-          <span>
-            {activeCount > 0
-              ? `${activeCount} job đang chạy`
-              : failedCount > 0
-                ? `${failedCount} job lỗi`
-                : 'Server rảnh'}
-          </span>
+          <span>{renderBubbleText()}</span>
         </button>
       )}
     </div>

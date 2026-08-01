@@ -82,8 +82,10 @@ export default function SettingsPage() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
+  const [regeneratingMediaId, setRegeneratingMediaId] = useState<string | null>(null);
 
   const canViewMedia = workspace ? hasPermission(workspace.role, 'media:view') : false;
+  const canUploadMedia = workspace ? hasPermission(workspace.role, 'media:upload') : false;
   const canDeleteMedia = workspace ? hasPermission(workspace.role, 'media:delete') : false;
   const canUpdate = hasPermission(workspace?.role ?? 'VIEWER', 'workspace:update');
 
@@ -260,6 +262,21 @@ export default function SettingsPage() {
       toast.error(getErrorMessage(deleteError));
     } finally {
       setDeletingMediaId(null);
+    }
+  }
+
+  async function handleRegenerateThumbnail(media: MediaLibraryItem) {
+    if (!workspace) return;
+    setRegeneratingMediaId(media.id);
+    setError(null);
+    try {
+      await mediaApi.regenerateThumbnail(workspace.id, media.id);
+      await loadStoragePage(mediaCursorStack.at(-1));
+      toast.success('Đã đưa video vào queue tạo lại thumbnail.');
+    } catch (regenerateError) {
+      toast.error(getErrorMessage(regenerateError));
+    } finally {
+      setRegeneratingMediaId(null);
     }
   }
 
@@ -538,6 +555,7 @@ export default function SettingsPage() {
               <option value="">Tất cả trạng thái</option>
               <option value="READY">READY</option>
               <option value="PENDING_UPLOAD">PENDING_UPLOAD</option>
+              <option value="PROCESSING">PROCESSING</option>
               <option value="FAILED">FAILED</option>
               <option value="ARCHIVED">ARCHIVED</option>
             </SelectInput>
@@ -584,10 +602,12 @@ export default function SettingsPage() {
               const isDeletable =
                 canDeleteMedia && !(media.status === 'ARCHIVED' && media.usage.total > 0);
               const isArchive = media.usage.total > 0 && media.status !== 'ARCHIVED';
+              const canRegenerateThumbnail =
+                canUploadMedia && media.type === 'VIDEO' && media.status !== 'ARCHIVED';
               return (
                 <div
                   key={media.id}
-                  className="grid items-center gap-4 px-5 py-4 lg:grid-cols-[24px_72px_1fr_140px_120px_120px]"
+                  className="grid items-center gap-4 px-5 py-4 lg:grid-cols-[24px_72px_1fr_140px_120px_160px]"
                 >
                   <input
                     type="checkbox"
@@ -633,7 +653,19 @@ export default function SettingsPage() {
                       {media.usage.total} nơi
                     </p>
                   </div>
-                  <div className="flex items-center lg:justify-end">
+                  <div className="flex flex-col gap-2 lg:items-end">
+                    {canRegenerateThumbnail ? (
+                      <SecondaryButton
+                        disabled={
+                          regeneratingMediaId === media.id ||
+                          deletingMediaId === media.id ||
+                          deletingMultiple
+                        }
+                        onClick={() => void handleRegenerateThumbnail(media)}
+                      >
+                        {regeneratingMediaId === media.id ? 'Đang tạo...' : 'Tạo thumbnail'}
+                      </SecondaryButton>
+                    ) : null}
                     <SecondaryButton
                       disabled={!isDeletable || deletingMediaId === media.id || deletingMultiple}
                       onClick={() => void handleDeleteMedia(media)}

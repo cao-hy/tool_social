@@ -20,5 +20,24 @@ export const createMediaUploadSchema = z.object({
   declaredMimeType: z.string().trim().min(1).max(120),
 });
 
+export const completeMultipartUploadSchema = z.object({
+  uploadId: z.string().trim().min(1).max(1024),
+  parts: z
+    .array(
+      z.object({
+        partNumber: z.number().int().min(1).max(10_000),
+        etag: z.string().trim().min(1).max(256),
+      }),
+    )
+    .min(1)
+    .max(10_000),
+});
+
+export const abortMultipartUploadSchema = z.object({
+  uploadId: z.string().trim().min(1).max(1024),
+});
+
 export type ListMediaInput = z.infer<typeof listMediaSchema>;
 export type CreateMediaUploadInput = z.infer<typeof createMediaUploadSchema>;
+export type CompleteMultipartUploadInput = z.infer<typeof completeMultipartUploadSchema>;
+export type AbortMultipartUploadInput = z.infer<typeof abortMultipartUploadSchema>;

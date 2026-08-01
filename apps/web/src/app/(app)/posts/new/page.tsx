@@ -36,6 +36,20 @@ import type {
   StorageUsageView,
 } from '@/lib/types';
 
+const MAX_MEDIA_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MULTIPART_UPLOAD_THRESHOLD_BYTES = 16 * 1024 * 1024;
+
+type UploadStage = 'creating' | 'uploading' | 'confirming' | 'processing' | 'done' | 'failed';
+
+interface UploadProgressItem {
+  id: string;
+  fileName: string;
+  loadedBytes: number;
+  totalBytes: number;
+  stage: UploadStage;
+  via: 'direct' | 'multipart' | 'api-fallback' | null;
+}
+
 export default function NewPostPage() {
   const auth = useAuth();
   const toast = useToast();
@@ -64,6 +78,7 @@ export default function NewPostPage() {
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressItem[]>([]);
   const [busy, setBusy] = useState<'draft' | 'publish' | 'schedule' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -289,33 +304,50 @@ export default function NewPostPage() {
 
   async function uploadMedia(files: FileList | null) {
     if (!workspace || !files || files.length === 0) return;
+    const fileList = Array.from(files);
+    const oversizedFile = fileList.find((file) => file.size > MAX_MEDIA_UPLOAD_BYTES);
+    if (oversizedFile) {
+      toast.error(
+        `${oversizedFile.name} vượt giới hạn ${formatBytes(MAX_MEDIA_UPLOAD_BYTES)}. Nén file trước khi upload.`,
+      );
+      return;
+    }
+
     setUploading(true);
+    setUploadProgress([]);
     setError(null);
     try {
       const uploaded: Array<MediaAssetView & { previewUrl?: string }> = [];
       const processingIds: string[] = [];
-      for (const file of Array.from(files)) {
-        const request = await mediaApi.createUpload(workspace.id, {
+      for (const file of fileList) {
+        const uploadId = createUploadProgressId(file);
+        upsertUploadProgress({
+          id: uploadId,
           fileName: file.name,
-          sizeBytes: file.size,
-          declaredMimeType: file.type || 'application/octet-stream',
+          loadedBytes: 0,
+          totalBytes: file.size,
+          stage: 'creating',
+          via: null,
         });
-        let uploadedDirectly = false;
         try {
-          uploadedDirectly = await uploadDirectly(request.uploadUrl, file);
-        } catch {
-          uploadedDirectly = false;
-        }
-        if (!uploadedDirectly) {
-          await mediaApi.uploadObject(workspace.id, request.mediaAsset.id, file);
-        }
-        const confirmed = await mediaApi.confirmUpload(workspace.id, request.mediaAsset.id);
-        uploaded.push({
-          ...confirmed,
-          previewUrl: URL.createObjectURL(file),
-        });
-        if (confirmed.status === 'PROCESSING') {
-          processingIds.push(confirmed.id);
+          const confirmed = shouldUseMultipartUpload(file)
+            ? await uploadMultipartFile(workspace.id, file, uploadId)
+            : await uploadSmallFile(workspace.id, file, uploadId);
+          uploaded.push({
+            ...confirmed,
+            previewUrl: URL.createObjectURL(file),
+          });
+          updateUploadProgress(uploadId, {
+            loadedBytes: file.size,
+            stage: confirmed.status === 'PROCESSING' ? 'processing' : 'done',
+            totalBytes: file.size,
+          });
+          if (confirmed.status === 'PROCESSING') {
+            processingIds.push(confirmed.id);
+          }
+        } catch (fileUploadError) {
+          updateUploadProgress(uploadId, { stage: 'failed' });
+          throw fileUploadError;
         }
       }
       setMediaAssets((current) => [...current, ...uploaded].slice(0, 10));
@@ -338,14 +370,113 @@ export default function NewPostPage() {
     }
   }
 
-  async function uploadDirectly(uploadUrl: string, file: File): Promise<boolean> {
-    const response = await fetch(uploadUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': file.type || 'application/octet-stream' },
-      body: file,
-      signal: AbortSignal.timeout(120_000),
+  function upsertUploadProgress(next: UploadProgressItem) {
+    setUploadProgress((current) => {
+      const existing = current.findIndex((item) => item.id === next.id);
+      if (existing === -1) return [...current, next];
+      return current.map((item) => (item.id === next.id ? next : item));
     });
-    return response.ok;
+  }
+
+  function updateUploadProgress(id: string, patch: Partial<UploadProgressItem>) {
+    setUploadProgress((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    );
+  }
+
+  async function uploadSmallFile(
+    workspaceId: string,
+    file: File,
+    uploadProgressId: string,
+  ): Promise<MediaAssetView> {
+    const request = await mediaApi.createUpload(workspaceId, {
+      fileName: file.name,
+      sizeBytes: file.size,
+      declaredMimeType: file.type || 'application/octet-stream',
+    });
+
+    updateUploadProgress(uploadProgressId, { stage: 'uploading', via: 'direct' });
+    try {
+      await uploadDirectly(request.uploadUrl, file, (loadedBytes, totalBytes) => {
+        updateUploadProgress(uploadProgressId, { loadedBytes, totalBytes });
+      });
+    } catch (directUploadError) {
+      if (!shouldUseApiUploadFallback(request.uploadUrl)) {
+        throw directUploadError;
+      }
+      updateUploadProgress(uploadProgressId, {
+        loadedBytes: 0,
+        stage: 'uploading',
+        totalBytes: file.size,
+        via: 'api-fallback',
+      });
+      await mediaApi.uploadObject(workspaceId, request.mediaAsset.id, file);
+      updateUploadProgress(uploadProgressId, { loadedBytes: file.size, totalBytes: file.size });
+    }
+
+    updateUploadProgress(uploadProgressId, { stage: 'confirming' });
+    return mediaApi.confirmUpload(workspaceId, request.mediaAsset.id);
+  }
+
+  async function uploadMultipartFile(
+    workspaceId: string,
+    file: File,
+    uploadProgressId: string,
+  ): Promise<MediaAssetView> {
+    const request = await mediaApi.createMultipartUpload(workspaceId, {
+      fileName: file.name,
+      sizeBytes: file.size,
+      declaredMimeType: file.type || 'application/octet-stream',
+    });
+    const loadedByPart = new Map<number, number>();
+
+    updateUploadProgress(uploadProgressId, {
+      loadedBytes: 0,
+      stage: 'uploading',
+      totalBytes: file.size,
+      via: 'multipart',
+    });
+
+    try {
+      const completedParts = await uploadMultipartParts({
+        file,
+        partSizeBytes: request.partSizeBytes,
+        parts: request.parts,
+        onPartProgress: (partNumber, loadedBytes) => {
+          loadedByPart.set(partNumber, loadedBytes);
+          updateUploadProgress(uploadProgressId, {
+            loadedBytes: Math.min(sumLoadedParts(loadedByPart), file.size),
+            totalBytes: file.size,
+          });
+        },
+      });
+
+      updateUploadProgress(uploadProgressId, {
+        loadedBytes: file.size,
+        stage: 'confirming',
+        totalBytes: file.size,
+      });
+      return await mediaApi.completeMultipartUpload(workspaceId, request.mediaAsset.id, {
+        uploadId: request.uploadId,
+        parts: completedParts,
+      });
+    } catch (multipartError) {
+      await mediaApi
+        .abortMultipartUpload(workspaceId, request.mediaAsset.id, { uploadId: request.uploadId })
+        .catch(() => undefined);
+      throw multipartError;
+    }
+  }
+
+  function uploadDirectly(
+    uploadUrl: string,
+    file: File,
+    onProgress: (loadedBytes: number, totalBytes: number) => void,
+  ): Promise<void> {
+    return uploadPut(uploadUrl, file, {
+      contentType: file.type || 'application/octet-stream',
+      onProgress,
+    }).then(() => undefined);
   }
 
   async function pollMediaStatus(mediaAssetId: string) {
@@ -361,6 +492,12 @@ export default function NewPostPage() {
           ),
         );
         if (refreshed.status === 'READY') {
+          const refreshedFileName = refreshed.originalFileName;
+          setUploadProgress((current) =>
+            current.map((item) =>
+              item.fileName === refreshedFileName ? { ...item, stage: 'done' } : item,
+            ),
+          );
           toast.success('Thumbnail video đã sẵn sàng.');
           return;
         }
@@ -580,6 +717,7 @@ export default function NewPostPage() {
             )}
           </Field>
           {uploading ? <p className="text-sm text-slate-600">Đang upload media...</p> : null}
+          <UploadProgressList items={uploadProgress} />
           {mediaAssets.length > 0 ? (
             <div className="grid gap-3 sm:grid-cols-2">
               {mediaAssets.map((asset) => (
@@ -763,6 +901,47 @@ function ScheduleTimePreview({ preview }: { preview: SchedulePreview }) {
           ? 'Thời gian này đã qua theo UTC, API sẽ từ chối lên lịch.'
           : 'Bấm "Lên lịch" để lưu bài vào Calendar theo giờ workspace phía trên.'}
       </p>
+    </div>
+  );
+}
+
+function UploadProgressList({ items }: { items: UploadProgressItem[] }) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
+      {items.map((item) => {
+        const percent =
+          item.totalBytes > 0
+            ? Math.min(100, Math.round((item.loadedBytes / item.totalBytes) * 100))
+            : 0;
+        const tone =
+          item.stage === 'failed'
+            ? 'bg-red-500'
+            : item.stage === 'done'
+              ? 'bg-emerald-500'
+              : 'bg-brand-600';
+
+        return (
+          <div key={item.id}>
+            <div className="flex items-center justify-between gap-3 text-xs text-slate-600">
+              <span className="min-w-0 truncate font-medium text-slate-800">{item.fileName}</span>
+              <span className="shrink-0">
+                {uploadStageLabel(item.stage)}
+                {item.via === 'multipart' ? ' multipart' : ''}
+                {item.via === 'api-fallback' ? ' qua API local' : ''}
+                {item.stage === 'uploading' ? ` · ${percent}%` : ''}
+              </span>
+            </div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white">
+              <div
+                className={`h-full rounded-full transition-all ${tone}`}
+                style={{ width: `${item.stage === 'confirming' ? 100 : percent}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -964,6 +1143,198 @@ function formatBytes(bytes: number): string {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** index;
   return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+function createUploadProgressId(file: File): string {
+  const randomPart =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${file.name}-${file.size}-${randomPart}`;
+}
+
+function shouldUseMultipartUpload(file: File): boolean {
+  return file.type.startsWith('video/') || file.size >= MULTIPART_UPLOAD_THRESHOLD_BYTES;
+}
+
+async function uploadMultipartParts(input: {
+  file: File;
+  partSizeBytes: number;
+  parts: Array<{ partNumber: number; uploadUrl: string }>;
+  onPartProgress: (partNumber: number, loadedBytes: number) => void;
+}): Promise<Array<{ partNumber: number; etag: string }>> {
+  const completedParts: Array<{ partNumber: number; etag: string }> = [];
+
+  let currentConcurrency = 2;
+  const minConcurrency = 1;
+  const maxConcurrency = 4;
+
+  let activeWorkers = 0;
+  let nextIndex = 0;
+  let hasFailed = false;
+  let lastError: Error | null = null;
+
+  return new Promise((resolve, reject) => {
+    function startNext() {
+      if (hasFailed) return;
+      if (nextIndex >= input.parts.length && activeWorkers === 0) {
+        resolve(completedParts.sort((a, b) => a.partNumber - b.partNumber));
+        return;
+      }
+
+      while (activeWorkers < currentConcurrency && nextIndex < input.parts.length && !hasFailed) {
+        const part = input.parts[nextIndex];
+        nextIndex++;
+
+        if (!part) continue;
+
+        activeWorkers++;
+        processPart(part).finally(() => {
+          activeWorkers--;
+          startNext();
+        });
+      }
+    }
+
+    async function processPart(part: { partNumber: number; uploadUrl: string }) {
+      const start = (part.partNumber - 1) * input.partSizeBytes;
+      const end = Math.min(start + input.partSizeBytes, input.file.size);
+      const chunk = input.file.slice(start, end);
+
+      let attempt = 0;
+      const maxAttempts = 3;
+
+      while (attempt <= maxAttempts && !hasFailed) {
+        try {
+          const result = await uploadPart(part.uploadUrl, chunk, (loadedBytes) => {
+            input.onPartProgress(part.partNumber, loadedBytes);
+          });
+
+          completedParts.push({ partNumber: part.partNumber, etag: result.etag });
+
+          if (attempt === 0) {
+            currentConcurrency = Math.min(currentConcurrency + 1, maxConcurrency);
+          }
+          return;
+        } catch (error) {
+          attempt++;
+          currentConcurrency = minConcurrency;
+
+          if (attempt > maxAttempts) {
+            hasFailed = true;
+            lastError = error instanceof Error ? error : new Error(String(error));
+            reject(lastError);
+            return;
+          }
+
+          const delay = 1000 * Math.pow(2, attempt - 1) + Math.random() * 500;
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    }
+
+    startNext();
+  });
+}
+
+async function uploadPart(
+  uploadUrl: string,
+  chunk: Blob,
+  onProgress: (loadedBytes: number) => void,
+): Promise<{ etag: string }> {
+  const result = await uploadPut(uploadUrl, chunk, {
+    onProgress: (loadedBytes) => onProgress(loadedBytes),
+  });
+  if (!result.etag) {
+    throw new Error(
+      'Upload part thành công nhưng không đọc được ETag. Kiểm tra CORS của MinIO phải expose header ETag.',
+    );
+  }
+  return { etag: result.etag };
+}
+
+function uploadPut(
+  uploadUrl: string,
+  body: Blob,
+  options: {
+    contentType?: string;
+    onProgress: (loadedBytes: number, totalBytes: number) => void;
+  },
+): Promise<{ etag: string | null }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', uploadUrl);
+    xhr.timeout = 120_000;
+    if (options.contentType) xhr.setRequestHeader('Content-Type', options.contentType);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) options.onProgress(event.loaded, event.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        options.onProgress(body.size, body.size);
+        resolve({ etag: xhr.getResponseHeader('ETag') });
+        return;
+      }
+      reject(new Error(`Media host từ chối upload trực tiếp: HTTP ${xhr.status}.`));
+    };
+    xhr.onerror = () => reject(new Error(directUploadFailureMessage(uploadUrl)));
+    xhr.ontimeout = () => reject(new Error('Upload trực tiếp lên media host quá thời gian chờ.'));
+    xhr.send(body);
+  });
+}
+
+function sumLoadedParts(loadedByPart: Map<number, number>): number {
+  let total = 0;
+  for (const loadedBytes of loadedByPart.values()) total += loadedBytes;
+  return total;
+}
+
+function shouldUseApiUploadFallback(uploadUrl: string): boolean {
+  if (!isLocalBrowserHost()) return false;
+  try {
+    const hostname = new URL(uploadUrl).hostname.toLowerCase();
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === 'minio';
+  } catch {
+    return false;
+  }
+}
+
+function directUploadFailureMessage(uploadUrl: string): string {
+  const host = safeUploadHost(uploadUrl);
+  const suffix = isLocalBrowserHost()
+    ? ' Local dev có thể fallback qua API nếu media host là localhost/minio.'
+    : ' Production không fallback qua API để tránh làm nghẽn VPS; kiểm tra CORS/Nginx/MinIO media domain.';
+  return `Không upload trực tiếp lên media host${host ? ` ${host}` : ''}.${suffix}`;
+}
+
+function isLocalBrowserHost(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+}
+
+function safeUploadHost(uploadUrl: string): string | null {
+  try {
+    return new URL(uploadUrl).host;
+  } catch {
+    return null;
+  }
+}
+
+function uploadStageLabel(stage: UploadStage): string {
+  switch (stage) {
+    case 'creating':
+      return 'Chuẩn bị';
+    case 'uploading':
+      return 'Đang upload';
+    case 'confirming':
+      return 'Đang kiểm tra';
+    case 'processing':
+      return 'Đang tạo thumbnail';
+    case 'done':
+      return 'Hoàn tất';
+    case 'failed':
+      return 'Thất bại';
+  }
 }
 
 function formatDate(value: string): string {

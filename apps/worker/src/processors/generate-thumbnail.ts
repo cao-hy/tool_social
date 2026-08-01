@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -14,6 +13,7 @@ import { z } from 'zod';
 import { logger } from '../logger';
 
 const THUMBNAIL_CONTENT_TYPE = 'image/webp';
+const FFMPEG_TIMEOUT_MS = 30_000;
 const payloadSchema = z.object({
   mediaAssetId: z.string().min(1),
   workspaceId: z.string().min(1),
@@ -41,8 +41,8 @@ export function createGenerateThumbnailProcessor(input: {
 
     const thumbnailKey = buildThumbnailKey(media.workspaceId, media.id);
     const workdir = join(tmpdir(), `socialhub-thumb-${media.id}-${randomUUID()}`);
-    const inputPath = join(workdir, 'source-video');
     const framePath = join(workdir, 'frame.jpg');
+    const startedAt = Date.now();
 
     try {
       await input.prisma.mediaAsset.update({
@@ -50,13 +50,16 @@ export function createGenerateThumbnailProcessor(input: {
         data: { status: 'PROCESSING' },
       });
 
+      logger.info(
+        { mediaAssetId: media.id, sizeBytes: media.sizeBytes },
+        'Bắt đầu tạo thumbnail video',
+      );
       await mkdir(workdir, { recursive: true });
       const object = await input.storage.client.send(
         new GetObjectCommand({ Bucket: input.storage.bucket, Key: media.storageKey }),
       );
-      await writeS3BodyToFile(object.Body, inputPath);
 
-      const thumbnailBytes = await createVideoThumbnail(inputPath, framePath);
+      const thumbnailBytes = await createVideoThumbnail(object.Body, framePath);
       await input.storage.client.send(
         new PutObjectCommand({
           Bucket: input.storage.bucket,
@@ -72,6 +75,14 @@ export function createGenerateThumbnailProcessor(input: {
         data: { status: 'READY', thumbnailKey },
       });
 
+      logger.info(
+        {
+          mediaAssetId: media.id,
+          thumbnailKey,
+          durationMs: Date.now() - startedAt,
+        },
+        'Tạo thumbnail video xong',
+      );
       return { thumbnailKey };
     } catch (error) {
       await input.prisma.mediaAsset
@@ -93,16 +104,16 @@ export function createGenerateThumbnailProcessor(input: {
   };
 }
 
-async function writeS3BodyToFile(body: unknown, outputPath: string): Promise<void> {
+async function pipeS3BodyToWritable(body: unknown, writable: NodeJS.WritableStream): Promise<void> {
   if (!body) throw new Error('Video source is empty or missing');
 
   if (body instanceof Readable) {
-    await pipeline(body, createWriteStream(outputPath));
+    await pipeline(body, writable);
     return;
   }
 
   if (hasByteArrayTransform(body)) {
-    await writeFile(outputPath, Buffer.from(await body.transformToByteArray()));
+    writable.end(Buffer.from(await body.transformToByteArray()));
     return;
   }
 
@@ -120,17 +131,17 @@ function hasByteArrayTransform(
   );
 }
 
-async function createVideoThumbnail(inputPath: string, framePath: string): Promise<Buffer> {
+async function createVideoThumbnail(body: unknown, framePath: string): Promise<Buffer> {
   try {
-    await runFfmpeg([
+    await runFfmpegWithInput(body, [
       '-y',
       '-hide_banner',
       '-loglevel',
       'error',
+      '-i',
+      'pipe:0',
       '-ss',
       '1',
-      '-i',
-      inputPath,
       '-frames:v',
       '1',
       framePath,
@@ -147,23 +158,56 @@ async function createVideoThumbnail(inputPath: string, framePath: string): Promi
   }
 }
 
-function runFfmpeg(args: string[]): Promise<void> {
+function runFfmpegWithInput(body: unknown, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'] });
     let stderr = '';
+    let settled = false;
+    let pipeError: unknown = null;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      child.kill('SIGKILL');
+      reject(new Error(`ffmpeg timed out after ${FFMPEG_TIMEOUT_MS}ms`));
+    }, FFMPEG_TIMEOUT_MS);
 
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-    child.on('error', reject);
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
       if (code === 0) {
         resolve();
         return;
       }
-      reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`));
+      const message =
+        pipeError instanceof Error && !isBrokenPipeError(pipeError)
+          ? pipeError.message
+          : stderr.trim() || `ffmpeg exited with code ${code}`;
+      reject(new Error(message));
+    });
+    void pipeS3BodyToWritable(body, child.stdin).catch((error: unknown) => {
+      pipeError = error;
+      if (!isBrokenPipeError(error)) {
+        child.stdin.destroy(error instanceof Error ? error : undefined);
+      }
     });
   });
+}
+
+function isBrokenPipeError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ('code' in error || 'errno' in error) &&
+    String((error as NodeJS.ErrnoException).code ?? '') === 'EPIPE'
+  );
 }
 
 async function createFallbackVideoThumbnail(): Promise<Buffer> {

@@ -54,6 +54,16 @@ export class JobsService {
         })),
     };
   }
+
+  async clearFailed(workspaceId: string) {
+    await this.prisma.backgroundJob.deleteMany({
+      where: {
+        workspaceId,
+        status: { in: ['FAILED', 'DEAD'] },
+      },
+    });
+    return { cleared: true };
+  }
 }
 
 function scoreJob(status: JobStatus): number {

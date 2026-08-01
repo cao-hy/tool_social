@@ -1,4 +1,4 @@
-import { Controller, Get, Inject, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Delete, Get, Inject, Param, Query, UseGuards } from '@nestjs/common';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { AuthGuard } from '../../common/guards/auth.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
@@ -19,5 +19,11 @@ export class JobsController {
     @Query(zodPipe(listJobActivityQuerySchema)) query: ListJobActivityQuery,
   ) {
     return this.jobs.activity(workspaceId, query);
+  }
+
+  @Delete('failed')
+  @RequirePermissions('notification:view')
+  clearFailed(@Param('workspaceId') workspaceId: string) {
+    return this.jobs.clearFailed(workspaceId);
   }
 }

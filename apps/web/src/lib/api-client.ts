@@ -238,6 +238,8 @@ export const jobsApi = {
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
     return apiFetch<JobActivityView>(`/workspaces/${workspaceId}/jobs/activity${suffix}`);
   },
+  clearFailed: (workspaceId: string) =>
+    apiFetch<{ cleared: true }>(`/workspaces/${workspaceId}/jobs/failed`, { method: 'DELETE' }),
 };
 
 export const analyticsApi = {
@@ -298,10 +300,51 @@ export const mediaApi = {
       `/workspaces/${workspaceId}/media/uploads`,
       { method: 'POST', body: JSON.stringify(input) },
     ),
+  createMultipartUpload: (
+    workspaceId: string,
+    input: { fileName: string; sizeBytes: number; declaredMimeType: string },
+  ) =>
+    apiFetch<{
+      mediaAsset: MediaAssetView;
+      uploadId: string;
+      partSizeBytes: number;
+      parts: Array<{ partNumber: number; uploadUrl: string }>;
+      expiresInSeconds: number;
+    }>(`/workspaces/${workspaceId}/media/uploads/multipart`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   confirmUpload: (workspaceId: string, mediaAssetId: string) =>
     apiFetch<MediaAssetView>(`/workspaces/${workspaceId}/media/${mediaAssetId}/confirm`, {
       method: 'POST',
     }),
+  completeMultipartUpload: (
+    workspaceId: string,
+    mediaAssetId: string,
+    input: { uploadId: string; parts: Array<{ partNumber: number; etag: string }> },
+  ) =>
+    apiFetch<MediaAssetView>(
+      `/workspaces/${workspaceId}/media/${mediaAssetId}/multipart/complete`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      },
+    ),
+  abortMultipartUpload: (workspaceId: string, mediaAssetId: string, input: { uploadId: string }) =>
+    apiFetch<{ aborted: boolean }>(
+      `/workspaces/${workspaceId}/media/${mediaAssetId}/multipart/abort`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      },
+    ),
+  regenerateThumbnail: (workspaceId: string, mediaAssetId: string) =>
+    apiFetch<MediaAssetView>(
+      `/workspaces/${workspaceId}/media/${mediaAssetId}/thumbnail/regenerate`,
+      {
+        method: 'POST',
+      },
+    ),
   get: (workspaceId: string, mediaAssetId: string) =>
     apiFetch<MediaAssetView>(`/workspaces/${workspaceId}/media/${mediaAssetId}`),
   uploadObject: (workspaceId: string, mediaAssetId: string, file: File) =>

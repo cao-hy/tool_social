@@ -22,8 +22,12 @@ import { RoleGuard } from '../../common/guards/role.guard';
 import { WorkspaceGuard } from '../../common/guards/workspace.guard';
 import { zodPipe } from '../../common/pipes/zod-validation.pipe';
 import {
+  abortMultipartUploadSchema,
+  completeMultipartUploadSchema,
   createMediaUploadSchema,
   listMediaSchema,
+  type AbortMultipartUploadInput,
+  type CompleteMultipartUploadInput,
   type CreateMediaUploadInput,
   type ListMediaInput,
 } from './media.schemas';
@@ -106,10 +110,49 @@ export class MediaController {
     return this.media.createUpload(workspaceId, requireUser(request).id, body);
   }
 
+  @Post('uploads/multipart')
+  @RequirePermissions('media:upload')
+  createMultipartUpload(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(createMediaUploadSchema)) body: CreateMediaUploadInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.media.createMultipartUpload(workspaceId, requireUser(request).id, body);
+  }
+
   @Post(':mediaAssetId/confirm')
   @RequirePermissions('media:upload')
   confirm(@Param('workspaceId') workspaceId: string, @Param('mediaAssetId') mediaAssetId: string) {
     return this.media.confirmUpload(workspaceId, mediaAssetId);
+  }
+
+  @Post(':mediaAssetId/multipart/complete')
+  @RequirePermissions('media:upload')
+  completeMultipartUpload(
+    @Param('workspaceId') workspaceId: string,
+    @Param('mediaAssetId') mediaAssetId: string,
+    @Body(zodPipe(completeMultipartUploadSchema)) body: CompleteMultipartUploadInput,
+  ) {
+    return this.media.completeMultipartUpload(workspaceId, mediaAssetId, body);
+  }
+
+  @Post(':mediaAssetId/multipart/abort')
+  @RequirePermissions('media:upload')
+  abortMultipartUpload(
+    @Param('workspaceId') workspaceId: string,
+    @Param('mediaAssetId') mediaAssetId: string,
+    @Body(zodPipe(abortMultipartUploadSchema)) body: AbortMultipartUploadInput,
+  ) {
+    return this.media.abortMultipartUpload(workspaceId, mediaAssetId, body);
+  }
+
+  @Post(':mediaAssetId/thumbnail/regenerate')
+  @RequirePermissions('media:upload')
+  regenerateThumbnail(
+    @Param('workspaceId') workspaceId: string,
+    @Param('mediaAssetId') mediaAssetId: string,
+  ) {
+    return this.media.regenerateThumbnail(workspaceId, mediaAssetId);
   }
 
   @Put(':mediaAssetId/object')
