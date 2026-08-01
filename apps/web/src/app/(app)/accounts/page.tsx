@@ -3,6 +3,7 @@
 import { hasPermission, PLATFORM_LABELS, PLATFORMS, type Platform } from '@socialhub/shared';
 import { useEffect, useState } from 'react';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -10,13 +11,13 @@ import type { SocialAccountView } from '@/lib/types';
 
 export default function AccountsPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
   const [loading, setLoading] = useState(false);
   const [connecting, setConnecting] = useState<Platform | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   async function loadAccounts(workspaceId: string) {
     setLoading(true);
@@ -43,18 +44,22 @@ export default function AccountsPage() {
     const reason = params.get('reason');
 
     if (connected) {
-      setNotice(`Đã kết nối ${connected}.`);
+      toast.success(`Đã kết nối ${connected}.`);
     } else if (oauth === 'cancelled') {
-      setError(oauthReasonMessage(reason) ?? 'Bạn đã hủy luồng kết nối.');
+      toast.warning(oauthReasonMessage(reason) ?? 'Bạn đã hủy luồng kết nối.');
     } else if (oauth === 'timeout') {
-      setError('Kết nối quá thời gian chờ. Kiểm tra log API rồi thử lại.');
+      toast.error('Kết nối quá thời gian chờ. Kiểm tra log API rồi thử lại.');
     } else if (oauth === 'missing-code' || oauth === 'failed') {
-      setError(
+      toast.error(
         oauthReasonMessage(reason) ??
           'Kết nối chưa hoàn tất. Kiểm tra quyền app nền tảng và thử lại.',
       );
     }
-  }, []);
+
+    if (connected || oauth) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+    }
+  }, [toast]);
 
   async function connect(platform: Platform) {
     if (!workspace) return;
@@ -64,7 +69,7 @@ export default function AccountsPage() {
       const result = await socialAccountsApi.startOAuth(workspace.id, platform);
       window.location.href = result.authorizationUrl;
     } catch (connectError) {
-      setError(getErrorMessage(connectError));
+      toast.error(getErrorMessage(connectError));
       setConnecting(null);
     }
   }
@@ -75,8 +80,9 @@ export default function AccountsPage() {
     try {
       await socialAccountsApi.disconnect(workspace.id, accountId);
       await loadAccounts(workspace.id);
+      toast.success('Đã ngắt kết nối tài khoản.');
     } catch (disconnectError) {
-      setError(getErrorMessage(disconnectError));
+      toast.error(getErrorMessage(disconnectError));
     }
   }
 
@@ -84,13 +90,12 @@ export default function AccountsPage() {
     if (!workspace) return;
     setTesting(accountId);
     setError(null);
-    setNotice(null);
     try {
       const result = await socialAccountsApi.testConnection(workspace.id, accountId);
-      setNotice(`Kết nối OK: ${result.profile.name}`);
+      toast.success(`Kết nối OK: ${result.profile.name}`);
       await loadAccounts(workspace.id);
     } catch (testError) {
-      setError(getErrorMessage(testError));
+      toast.error(getErrorMessage(testError));
     } finally {
       setTesting(null);
     }
@@ -118,11 +123,6 @@ export default function AccountsPage() {
         </p>
       </header>
 
-      {notice ? (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-          {notice}
-        </div>
-      ) : null}
       <InlineError message={error} />
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">

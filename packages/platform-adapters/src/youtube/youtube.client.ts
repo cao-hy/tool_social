@@ -172,7 +172,7 @@ export class YouTubeClient {
     const response = await this.get(
       '/videos',
       {
-        part: 'processingDetails,status,snippet',
+        part: 'processingDetails,status,snippet,statistics',
         id: videoId,
       },
       youtubeVideosResponseSchema,

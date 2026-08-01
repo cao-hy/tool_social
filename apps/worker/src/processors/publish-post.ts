@@ -3,6 +3,7 @@ import {
   DevelopmentFixtureAdapter,
   isPlatformError,
   type AdapterContext,
+  type AdapterLogger,
   type SocialPlatformAdapter,
   type TikTokPublishPlatformState,
   type YouTubeVideoPlatformState,
@@ -47,6 +48,12 @@ interface PublishNetworkProof {
 }
 
 const proxyAwareFetch = createProxyAwareFetch();
+const adapterLogger: AdapterLogger = {
+  debug: (message, context) => logger.debug(context ?? {}, message),
+  info: (message, context) => logger.info(context ?? {}, message),
+  warn: (message, context) => logger.warn(context ?? {}, message),
+  error: (message, context) => logger.error(context ?? {}, message),
+};
 
 export function createPublishPostProcessor(input: {
   prisma: PrismaClientInstance;
@@ -203,6 +210,22 @@ async function publishPlatformPost(
         .filter((item) => item.mediaAsset.status === 'READY')
         .map((item) => mediaInputFromAsset(input.storage, item.mediaAsset)),
     );
+    logger.info(
+      {
+        correlationId: payload.correlationId,
+        platformPostId: platformPost.id,
+        platform: platformPost.platform,
+        mediaCount: media.length,
+        media: media.map((item, index) => ({
+          index,
+          type: item.type,
+          mimeType: item.mimeType,
+          sizeBytes: item.sizeBytes,
+          byteLength: item.bytes?.byteLength ?? 0,
+        })),
+      },
+      'Chuẩn bị media trước khi gọi platform publish',
+    );
 
     const publishInput = {
       caption: platformPost.caption ?? platformPost.contentPost.body ?? undefined,
@@ -231,6 +254,7 @@ async function publishPlatformPost(
       externalAccountId: platformPost.socialAccount.externalAccountId,
       externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
       correlationId: payload.correlationId,
+      logger: adapterLogger,
     } satisfies AdapterContext;
 
     publishNetworkProof = await capturePublishNetworkProof(readProxyConfig());

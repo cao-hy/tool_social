@@ -37,8 +37,11 @@ const devMediaSources = [
   "'self'",
   'data:',
   'blob:',
+  apiBaseUrl,
   storageBaseUrl,
+  'http://localhost:4000',
   'http://localhost:9000',
+  'http://127.0.0.1:4000',
   'http://127.0.0.1:9000',
   'https:',
 ].join(' ');
@@ -81,6 +84,9 @@ const nextConfig = {
     NEXT_PUBLIC_API_BASE_URL: apiBaseUrl,
   },
   transpilePackages: ['@socialhub/shared'],
+  devIndicators: {
+    buildActivityPosition: 'top-right',
+  },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
   },

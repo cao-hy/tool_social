@@ -86,6 +86,51 @@ CAPABILITY_MATRIX.FACEBOOK.capabilities.deletePublishedPost = {
   verifiedBy: 'Codex + Meta PagePost docs',
 };
 
+CAPABILITY_MATRIX.FACEBOOK.capabilities.postLikes = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc reaction count của Page post bằng reactions.limit(0).summary(true) với Page access token có pages_read_engagement.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/object/reactions/',
+  verifiedAt: '2026-08-01',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
+CAPABILITY_MATRIX.FACEBOOK.capabilities.postCommentCount = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc comment count của Page post bằng comments.limit(0).summary(true) với Page access token có pages_read_engagement.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/object/comments/',
+  verifiedAt: '2026-08-01',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
+CAPABILITY_MATRIX.FACEBOOK.capabilities.postShares = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc share count của Page post qua field shares khi Graph API trả dữ liệu cho object đó.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/page-post/',
+  verifiedAt: '2026-08-01',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
+CAPABILITY_MATRIX.FACEBOOK.capabilities.postReach = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc reach bằng Page post insight post_impressions_unique; token cần quyền read_insights/pages_read_engagement và Meta có thể trả rỗng nếu dữ liệu chưa sẵn sàng.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/insights/',
+  verifiedAt: '2026-08-01',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
+CAPABILITY_MATRIX.FACEBOOK.capabilities.postImpressions = {
+  state: 'CONDITIONAL',
+  condition:
+    'Đọc impressions bằng Page post insight post_impressions; token cần quyền read_insights/pages_read_engagement và Meta có thể trả rỗng nếu dữ liệu chưa sẵn sàng.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/insights/',
+  verifiedAt: '2026-08-01',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
 CAPABILITY_MATRIX.INSTAGRAM.capabilities.publishImage = {
   state: 'CONDITIONAL',
   condition:

@@ -1,4 +1,9 @@
-import { emptyPostMetrics, type Paginated } from '@socialhub/shared';
+import {
+  computeEngagementRate,
+  emptyPostMetrics,
+  metricFromApi,
+  type Paginated,
+} from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
@@ -181,8 +186,24 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
     return mapVideoState(video);
   }
 
-  async getPostMetrics(_ctx: AdapterContext, _externalPostId: string): Promise<PostMetrics> {
-    return emptyPostMetrics();
+  async getPostMetrics(ctx: AdapterContext, externalPostId: string): Promise<PostMetrics> {
+    const video = await this.client.getVideoStatus(ctx.accessToken, externalPostId);
+    const metrics = emptyPostMetrics('UNSUPPORTED');
+    if (video.statistics?.viewCount !== undefined) {
+      metrics.views = metricFromApi(video.statistics.viewCount);
+    }
+    if (video.statistics?.likeCount !== undefined) {
+      metrics.likes = metricFromApi(video.statistics.likeCount);
+    }
+    if (video.statistics?.commentCount !== undefined) {
+      metrics.comments = metricFromApi(video.statistics.commentCount);
+    }
+    const engagement = (video.statistics?.likeCount ?? 0) + (video.statistics?.commentCount ?? 0);
+    if (video.statistics?.likeCount !== undefined || video.statistics?.commentCount !== undefined) {
+      metrics.engagement = metricFromApi(engagement);
+    }
+    metrics.engagementRate = computeEngagementRate(metrics);
+    return metrics;
   }
 
   async getComments(

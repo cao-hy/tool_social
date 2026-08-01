@@ -37,7 +37,7 @@ export const QUEUE_SETTINGS: Record<QueueName, QueueSettings> = {
   'refresh-social-token': { concurrency: 3, attempts: 3, backoffDelayMs: 30_000 },
   'process-webhook': { concurrency: 10, attempts: 5, backoffDelayMs: 5_000 },
   'retry-failed-post': { concurrency: 3, attempts: 1, backoffDelayMs: 0 },
-  'generate-thumbnail': { concurrency: 3, attempts: 3, backoffDelayMs: 5_000 },
+  'generate-thumbnail': { concurrency: 1, attempts: 3, backoffDelayMs: 5_000 },
   'cleanup-unused-media': { concurrency: 1, attempts: 1, backoffDelayMs: 0 },
 };
 

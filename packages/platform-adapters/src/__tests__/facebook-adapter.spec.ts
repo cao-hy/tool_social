@@ -194,10 +194,18 @@ describe('FacebookPagesAdapter', () => {
       expect(init?.method).toBe('POST');
 
       if (url === 'https://graph.facebook.com/v24.0/page-1/photos?access_token=page-access-token') {
-        const body = init?.body as FormData;
-        expect(body.get('caption')).toBe('hello');
-        expect(body.get('published')).toBe('1');
-        expect(body.get('source')).toBeInstanceOf(Blob);
+        expect(init?.headers).toMatchObject({
+          'content-type': expect.stringContaining('multipart/form-data; boundary='),
+        });
+        const body = init?.body as Blob;
+        expect(body).toBeInstanceOf(Blob);
+        expect((init?.headers as Record<string, string>)['content-length']).toBe(String(body.size));
+        const text = new TextDecoder().decode(await body.arrayBuffer());
+        expect(text).toContain('name="caption"');
+        expect(text).toContain('hello');
+        expect(text).toContain('name="published"');
+        expect(text).toContain('name="source"; filename="image.jpg"');
+        expect(text).toContain('Content-Type: image/jpeg');
         return jsonResponse({ id: 'photo-1', post_id: 'page-1_post-1' });
       }
 
@@ -304,6 +312,124 @@ describe('FacebookPagesAdapter', () => {
         },
       ],
     });
+  });
+
+  it('đọc metrics Facebook Page post từ engagement fields và insights', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      expect(url.origin).toBe('https://graph.facebook.com');
+      expect(url.searchParams.get('access_token')).toBe('page-access-token');
+
+      if (url.pathname === '/v24.0/page-1_post-1') {
+        expect(url.searchParams.get('fields')).toContain('reactions.limit(0).summary(true)');
+        expect(url.searchParams.get('fields')).toContain('comments.limit(0).summary(true)');
+        expect(url.searchParams.get('fields')).toContain('shares');
+        return jsonResponse({
+          reactions: { summary: { total_count: 12 } },
+          comments: { summary: { total_count: 3 } },
+          shares: { count: 2 },
+        });
+      }
+
+      if (url.pathname === '/v24.0/page-1_post-1/insights') {
+        expect(url.searchParams.get('metric')).toBe(
+          'post_impressions,post_impressions_unique,post_engaged_users',
+        );
+        expect(url.searchParams.get('period')).toBe('lifetime');
+        return jsonResponse({
+          data: [
+            { name: 'post_impressions', values: [{ value: 100 }] },
+            { name: 'post_impressions_unique', values: [{ value: 80 }] },
+            { name: 'post_engaged_users', values: [{ value: 20 }] },
+          ],
+        });
+      }
+
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new FacebookPagesAdapter({
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+    });
+
+    const metrics = await adapter.getPostMetrics(
+      { accessToken: 'page-access-token', externalAccountId: 'page-1', correlationId: 'test' },
+      'page-1_post-1',
+    );
+
+    expect(metrics.likes).toEqual({ value: 12, source: 'PLATFORM_API' });
+    expect(metrics.comments).toEqual({ value: 3, source: 'PLATFORM_API' });
+    expect(metrics.shares).toEqual({ value: 2, source: 'PLATFORM_API' });
+    expect(metrics.impressions).toEqual({ value: 100, source: 'PLATFORM_API' });
+    expect(metrics.reach).toEqual({ value: 80, source: 'PLATFORM_API' });
+    expect(metrics.engagement).toEqual({ value: 20, source: 'PLATFORM_API' });
+    expect(metrics.engagementRate.value).toBeCloseTo(21.25);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('giữ metrics engagement khi Facebook insights bị thiếu quyền', async () => {
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v24.0/page-1_post-1') {
+        return jsonResponse({
+          reactions: { summary: { total_count: 4 } },
+          comments: { summary: { total_count: 1 } },
+          shares: { count: 1 },
+        });
+      }
+
+      if (url.pathname === '/v24.0/page-1_post-1/insights') {
+        return jsonResponse(
+          {
+            error: {
+              message: '(#100) Missing Permission',
+              type: 'OAuthException',
+              code: 100,
+            },
+          },
+          { status: 400 },
+        );
+      }
+
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new FacebookPagesAdapter({
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+    });
+
+    const metrics = await adapter.getPostMetrics(
+      {
+        accessToken: 'page-access-token',
+        externalAccountId: 'page-1',
+        correlationId: 'test',
+        logger,
+      },
+      'page-1_post-1',
+    );
+
+    expect(metrics.likes.value).toBe(4);
+    expect(metrics.comments.value).toBe(1);
+    expect(metrics.shares.value).toBe(1);
+    expect(metrics.engagement).toEqual({ value: 6, source: 'PLATFORM_API' });
+    expect(metrics.impressions.source).toBe('UNSUPPORTED');
+    expect(metrics.reach.source).toBe('UNSUPPORTED');
+    expect(logger.debug).toHaveBeenCalledWith(
+      'Facebook post insights unavailable',
+      expect.objectContaining({ externalPostId: 'page-1_post-1' }),
+    );
   });
 
   it('reply comment bằng Page access token', async () => {

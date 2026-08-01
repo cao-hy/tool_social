@@ -16,6 +16,7 @@ import {
   TextInput,
 } from '@/components/form-controls';
 import { RoleBadge } from '@/components/role-badge';
+import { useToast } from '@/components/toast-provider';
 import { workspaceApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -23,6 +24,7 @@ import type { WorkspaceInvitation, WorkspaceMember } from '@/lib/types';
 
 export default function TeamPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [loading, setLoading] = useState(false);
@@ -66,8 +68,9 @@ export default function TeamPage() {
       setInvitation(result);
       event.currentTarget.reset();
       setInviteRole('VIEWER');
+      toast.success(result.resent ? 'Đã gửi lại lời mời.' : 'Đã gửi lời mời.');
     } catch (inviteError) {
-      setError(getErrorMessage(inviteError));
+      toast.error(getErrorMessage(inviteError));
     } finally {
       setSubmitting(false);
     }
@@ -79,8 +82,9 @@ export default function TeamPage() {
     try {
       await workspaceApi.changeRole(workspace.id, memberId, role);
       await loadMembers(workspace.id);
+      toast.success('Đã cập nhật vai trò.');
     } catch (changeError) {
-      setError(getErrorMessage(changeError));
+      toast.error(getErrorMessage(changeError));
     }
   }
 
@@ -90,8 +94,9 @@ export default function TeamPage() {
     try {
       await workspaceApi.removeMember(workspace.id, memberId);
       await loadMembers(workspace.id);
+      toast.success('Đã xóa thành viên khỏi workspace.');
     } catch (removeError) {
-      setError(getErrorMessage(removeError));
+      toast.error(getErrorMessage(removeError));
     }
   }
 

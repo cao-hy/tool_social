@@ -10,6 +10,7 @@ import {
   PrimaryButton,
   TextInput,
 } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { authApi } from '@/lib/api-client';
 import { getErrorMessage } from '@/lib/errors';
 
@@ -34,6 +35,7 @@ export default function ResetPasswordPage() {
 
 function ResetPasswordForm() {
   const searchParams = useSearchParams();
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [changed, setChanged] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -51,8 +53,11 @@ function ResetPasswordForm() {
         password: String(form.get('password') ?? ''),
       });
       setChanged(true);
+      toast.success('Mật khẩu đã được cập nhật.');
     } catch (submitError) {
-      setError(getErrorMessage(submitError));
+      const message = getErrorMessage(submitError);
+      setError(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }

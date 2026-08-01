@@ -26,10 +26,21 @@ import {
   TextInput,
 } from '@/components/form-controls';
 import { DeletePostDialog } from '@/components/delete-post-dialog';
+import {
+  FallbackImage,
+  mediaPreviewSources,
+  mediaThumbnailSources,
+} from '@/components/media-preview';
+import { useToast } from '@/components/toast-provider';
 import { postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { rowsToCsv } from '@/lib/csv';
 import { getErrorMessage } from '@/lib/errors';
+import {
+  aggregatePlatformMetrics,
+  formatMetricNumber,
+  hasVisibleMetrics,
+} from '@/lib/post-metrics';
 import type { ContentPostView, SocialAccountView } from '@/lib/types';
 
 const POST_STATUSES = [
@@ -56,6 +67,7 @@ const DELETABLE_POST_STATUSES = [
 
 export default function PostsPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [posts, setPosts] = useState<ContentPostView[]>([]);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
@@ -141,6 +153,19 @@ export default function PostsPage() {
     void loadPosts();
   }, [workspace, activeFilters]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('created')) {
+      toast.success('Đã lưu draft.');
+    }
+    if (params.has('queued')) {
+      toast.info('Đã đưa bài vào queue publish.');
+    }
+    if (params.has('created') || params.has('queued')) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+    }
+  }, [toast]);
+
   async function retry(postId: string) {
     if (!workspace) return;
     setRetrying(postId);
@@ -148,8 +173,9 @@ export default function PostsPage() {
     try {
       await postsApi.retry(workspace.id, postId);
       await loadPosts(cursorStack.at(-1));
+      toast.info('Đã đưa bài vào queue retry.');
     } catch (retryError) {
-      setError(getErrorMessage(retryError));
+      toast.error(getErrorMessage(retryError));
     } finally {
       setRetrying(null);
     }
@@ -157,7 +183,7 @@ export default function PostsPage() {
 
   function openDeleteDialog(post: ContentPostView) {
     if (!canDeletePostStatus(post.status)) {
-      setError('Bài này không ở trạng thái có thể xóa.');
+      toast.warning('Bài này không ở trạng thái có thể xóa.');
       return;
     }
     setDeleteTarget(post);
@@ -166,7 +192,7 @@ export default function PostsPage() {
   async function deletePost(input: { platformPostIds: string[] }) {
     if (!workspace) return;
     if (!deleteTarget || !canDeletePostStatus(deleteTarget.status)) {
-      setError('Bài này không ở trạng thái có thể xóa.');
+      toast.warning('Bài này không ở trạng thái có thể xóa.');
       return;
     }
 
@@ -179,8 +205,9 @@ export default function PostsPage() {
       });
       setDeleteTarget(null);
       await loadPosts(cursorStack.at(-1));
+      toast.success('Đã xóa bài viết.');
     } catch (deleteError) {
-      setError(getErrorMessage(deleteError));
+      toast.error(getErrorMessage(deleteError));
     } finally {
       setDeleting(null);
     }
@@ -193,8 +220,9 @@ export default function PostsPage() {
     try {
       await postsApi.duplicate(workspace.id, postId);
       await loadPosts(cursorStack.at(-1));
+      toast.success('Đã nhân bản bài viết.');
     } catch (duplicateError) {
-      setError(getErrorMessage(duplicateError));
+      toast.error(getErrorMessage(duplicateError));
     } finally {
       setDuplicating(null);
     }
@@ -235,8 +263,9 @@ export default function PostsPage() {
         ],
       );
       downloadCsv(csv, `socialhub-posts-${new Date().toISOString().slice(0, 10)}.csv`);
+      toast.success('Đã xuất CSV.');
     } catch (exportError) {
-      setError(getErrorMessage(exportError));
+      toast.error(getErrorMessage(exportError));
     } finally {
       setExporting(false);
     }
@@ -469,6 +498,7 @@ export default function PostsPage() {
                 >
                   <td className="px-4 py-3">
                     <PostThumbnail post={post} onPreview={() => setPreviewPost(post)} />
+                    <MediaSummary media={post.media} compact />
                     <PlatformErrors post={post} />
                   </td>
                   <td className="px-4 py-3">
@@ -628,9 +658,8 @@ function IconLink({
 
 function PostThumbnail({ post, onPreview }: { post: ContentPostView; onPreview: () => void }) {
   const asset = post.media[0];
-  const source = asset?.displayUrl ?? asset?.readUrl;
 
-  if (!asset || !source) {
+  if (!asset) {
     return (
       <div className="flex h-12 w-[72px] shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs font-medium text-slate-500">
         No media
@@ -638,19 +667,36 @@ function PostThumbnail({ post, onPreview }: { post: ContentPostView; onPreview: 
     );
   }
 
-  if (asset.type === 'IMAGE') {
+  const sources =
+    asset.type === 'VIDEO' && asset.status !== 'ARCHIVED'
+      ? mediaThumbnailSources(asset)
+      : mediaPreviewSources(asset);
+  if (sources.length === 0) {
+    return (
+      <div className="flex h-12 w-[72px] shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs font-medium text-slate-500">
+        {asset.type}
+      </div>
+    );
+  }
+
+  if (asset.type === 'IMAGE' || asset.status === 'ARCHIVED') {
     return (
       <button
-        className="block h-12 w-[72px] overflow-hidden rounded-md transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+        className="relative block h-12 w-[72px] overflow-hidden rounded-md transition hover:-translate-y-px hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand-500"
         onClick={onPreview}
         title="Xem media"
         type="button"
       >
-        <img
+        <FallbackImage
           alt={asset.originalFileName ?? 'media'}
           className="h-full w-full object-cover"
-          src={source}
+          sources={sources}
         />
+        {asset.status === 'ARCHIVED' ? (
+          <span className="absolute bottom-1 left-1 rounded bg-slate-950/75 px-1 text-[9px] font-semibold text-white">
+            ARCHIVED
+          </span>
+        ) : null}
       </button>
     );
   }
@@ -662,11 +708,50 @@ function PostThumbnail({ post, onPreview }: { post: ContentPostView; onPreview: 
       title="Xem video"
       type="button"
     >
-      <video className="h-full w-full object-cover" muted preload="metadata" src={source} />
-      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold text-white">
+      {sources.length > 0 ? (
+        <FallbackImage
+          alt={asset.originalFileName ?? 'video thumbnail'}
+          className="h-full w-full object-cover"
+          sources={sources}
+        />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center text-[11px] font-semibold text-white">
+          VIDEO
+        </span>
+      )}
+      <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 text-[11px] font-semibold text-white">
         VIDEO
       </span>
     </button>
+  );
+}
+
+function MediaSummary({
+  media,
+  compact = false,
+}: {
+  media: ContentPostView['media'];
+  compact?: boolean;
+}) {
+  if (media.length === 0) {
+    return <p className="mt-1 text-xs text-slate-500">Không có media</p>;
+  }
+
+  const images = media.filter((asset) => asset.type === 'IMAGE').length;
+  const videos = media.filter((asset) => asset.type === 'VIDEO').length;
+  const statuses = [...new Set(media.map((asset) => asset.status))];
+  const totalBytes = media.reduce((sum, asset) => sum + (asset.sizeBytes ?? 0), 0);
+  const parts = [
+    images > 0 ? `${images} ảnh` : null,
+    videos > 0 ? `${videos} video` : null,
+    compact && media.length > 1 ? `${media.length} file` : null,
+  ].filter(Boolean);
+
+  return (
+    <p className="mt-1 max-w-24 truncate text-xs text-slate-500" title={mediaSummaryTitle(media)}>
+      {parts.join(' + ')} · {statuses.join('/')}
+      {totalBytes > 0 ? ` · ${formatBytes(totalBytes)}` : ''}
+    </p>
   );
 }
 
@@ -678,7 +763,7 @@ function MediaPreviewDialog({
   onClose: () => void;
 }) {
   const asset = post?.media[0];
-  const source = asset?.displayUrl ?? asset?.readUrl;
+  const source = asset?.displayUrl ?? asset?.thumbnailUrl ?? asset?.readUrl;
   if (!post || !asset || !source) return null;
 
   return (
@@ -693,13 +778,13 @@ function MediaPreviewDialog({
           </IconButton>
         </div>
         <div className="bg-slate-950 p-3">
-          {asset.type === 'VIDEO' ? (
+          {asset.type === 'VIDEO' && asset.status !== 'ARCHIVED' ? (
             <video className="max-h-[72vh] w-full rounded bg-black" controls src={source} />
           ) : (
-            <img
+            <FallbackImage
               alt={asset.originalFileName ?? 'media'}
               className="max-h-[72vh] w-full rounded object-contain"
-              src={source}
+              sources={mediaPreviewSources(asset)}
             />
           )}
         </div>
@@ -713,12 +798,23 @@ function PostResultSummary({ post }: { post: ContentPostView }) {
   const failed = post.platformPosts.filter((item) => item.status === 'FAILED').length;
   const attempts = post.platformPosts.reduce((sum, item) => sum + item.attemptCount, 0);
   const total = post.platformPosts.length;
+  const metrics = aggregatePlatformMetrics(post.platformPosts);
+  const hasMetrics = hasVisibleMetrics(metrics);
+  const views = metrics.values.views?.value ?? metrics.values.impressions?.value ?? null;
+  const engagement = metrics.values.engagement?.value ?? null;
+  const comments = metrics.values.comments?.value ?? null;
 
   return (
     <div className="grid gap-1 text-xs leading-5">
       <span className="font-semibold text-slate-900">
         {published}/{total || 1} đã đăng
       </span>
+      {hasMetrics ? (
+        <span className="text-slate-600">
+          {formatMetricNumber(views)} views · {formatMetricNumber(engagement)} tương tác ·{' '}
+          {formatMetricNumber(comments)} cmt
+        </span>
+      ) : null}
       <span className={failed > 0 ? 'font-medium text-red-700' : 'text-slate-500'}>
         {failed > 0 ? `${failed} lỗi` : 'Không lỗi'} · Attempts {attempts}/{total || 1}
       </span>
@@ -899,6 +995,30 @@ function formatShortDate(value: string | null) {
     minute: '2-digit',
     hour12: false,
   }).format(new Date(value));
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+function mediaSummaryTitle(media: ContentPostView['media']): string {
+  return media
+    .map((asset) =>
+      [
+        asset.originalFileName ?? asset.id,
+        asset.type,
+        asset.mimeType,
+        asset.status,
+        asset.sizeBytes ? formatBytes(asset.sizeBytes) : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    )
+    .join('\n');
 }
 
 function platformShortLabel(platform: string) {

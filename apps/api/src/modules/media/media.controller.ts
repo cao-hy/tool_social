@@ -49,6 +49,12 @@ export class MediaController {
     return this.media.list(workspaceId, query);
   }
 
+  @Get(':mediaAssetId')
+  @RequirePermissions('media:view')
+  get(@Param('workspaceId') workspaceId: string, @Param('mediaAssetId') mediaAssetId: string) {
+    return this.media.get(workspaceId, mediaAssetId);
+  }
+
   @Get(':mediaAssetId/object')
   @RequirePermissions('media:view')
   async object(
@@ -68,6 +74,24 @@ export class MediaController {
     }
     if (object.contentRange) {
       reply.header('Content-Range', object.contentRange);
+    }
+    return reply.send(object.body);
+  }
+
+  @Get(':mediaAssetId/thumbnail')
+  @RequirePermissions('media:view')
+  async thumbnail(
+    @Param('workspaceId') workspaceId: string,
+    @Param('mediaAssetId') mediaAssetId: string,
+    @Res() reply: FastifyReply,
+  ) {
+    const object = await this.media.getThumbnail(workspaceId, mediaAssetId);
+    reply
+      .code(object.statusCode)
+      .header('Content-Type', object.contentType)
+      .header('Cache-Control', 'private, max-age=3600');
+    if (object.contentLength !== undefined) {
+      reply.header('Content-Length', String(object.contentLength));
     }
     return reply.send(object.body);
   }

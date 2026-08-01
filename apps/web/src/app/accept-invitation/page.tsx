@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import { AuthLink, AuthPanel } from '@/components/auth-panel';
 import { Field, InlineError, PrimaryButton, TextInput } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { workspaceApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -12,6 +13,7 @@ import { withNextParam } from '@/lib/redirects';
 export default function AcceptInvitationPage() {
   const auth = useAuth();
   const router = useRouter();
+  const toast = useToast();
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -29,9 +31,12 @@ export default function AcceptInvitationPage() {
       const workspace = await workspaceApi.acceptInvitation(token);
       window.localStorage.setItem('socialhub.activeWorkspaceId', workspace.id);
       await auth.refresh();
+      toast.success('Đã tham gia workspace.');
       router.replace('/team');
     } catch (acceptError) {
-      setError(getErrorMessage(acceptError));
+      const message = getErrorMessage(acceptError);
+      setError(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }

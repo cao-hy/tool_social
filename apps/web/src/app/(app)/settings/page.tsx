@@ -10,6 +10,8 @@ import {
   SelectInput,
   TextInput,
 } from '@/components/form-controls';
+import { FallbackImage, mediaThumbnailSources } from '@/components/media-preview';
+import { useToast } from '@/components/toast-provider';
 import { mediaApi, workspaceApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -17,6 +19,7 @@ import type { AuditLogItem, MediaLibraryItem, StorageUsageView } from '@/lib/typ
 
 export default function SettingsPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [name, setName] = useState('');
   const [timezone, setTimezone] = useState('UTC');
@@ -30,7 +33,6 @@ export default function SettingsPage() {
   const [mediaType, setMediaType] = useState('');
   const [mediaStatus, setMediaStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
@@ -112,14 +114,13 @@ export default function SettingsPage() {
 
     setSubmitting(true);
     setError(null);
-    setSaved(false);
 
     try {
       await workspaceApi.update(workspace.id, { name, timezone });
       await auth.refresh();
-      setSaved(true);
+      toast.success('Đã lưu cấu hình workspace.');
     } catch (saveError) {
-      setError(getErrorMessage(saveError));
+      toast.error(getErrorMessage(saveError));
     } finally {
       setSubmitting(false);
     }
@@ -144,8 +145,9 @@ export default function SettingsPage() {
         await mediaApi.delete(workspace.id, media.id);
       }
       await loadStoragePage();
+      toast.success(isArchive ? 'Đã dọn dẹp file media.' : 'Đã xóa media.');
     } catch (deleteError) {
-      window.alert(`Lỗi: ${getErrorMessage(deleteError)}`);
+      toast.error(getErrorMessage(deleteError));
     } finally {
       setDeletingMediaId(null);
     }
@@ -193,8 +195,9 @@ export default function SettingsPage() {
       }
       setSelectedMediaIds(new Set());
       await loadStoragePage();
+      toast.success(`Đã xử lý ${selectedMediaIds.size} media.`);
     } catch (deleteError) {
-      window.alert(`Lỗi: ${getErrorMessage(deleteError)}`);
+      toast.error(getErrorMessage(deleteError));
     } finally {
       setDeletingMultiple(false);
     }
@@ -246,7 +249,6 @@ export default function SettingsPage() {
             Lưu
           </PrimaryButton>
         </form>
-        {saved ? <p className="mt-3 text-sm font-medium text-emerald-700">Đã lưu.</p> : null}
       </section>
 
       {canViewMedia ? (
@@ -321,6 +323,7 @@ export default function SettingsPage() {
               <option value="READY">READY</option>
               <option value="PENDING_UPLOAD">PENDING_UPLOAD</option>
               <option value="FAILED">FAILED</option>
+              <option value="ARCHIVED">ARCHIVED</option>
             </SelectInput>
             <SecondaryButton disabled={mediaLoading} onClick={() => void loadStoragePage()}>
               Lọc
@@ -352,7 +355,7 @@ export default function SettingsPage() {
 
           <div className="divide-y divide-slate-200 border-t border-slate-200">
             {mediaItems.map((media) => {
-              const source = media.displayUrl ?? media.readUrl;
+              const source = media.displayUrl ?? media.thumbnailUrl ?? media.readUrl;
               const isDeletable = canDeleteMedia && media.status !== 'ARCHIVED';
               const isArchive = media.usage.total > 0;
               return (
@@ -368,11 +371,11 @@ export default function SettingsPage() {
                     className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
-                    {media.type === 'IMAGE' && source ? (
-                      <img
+                    {source ? (
+                      <FallbackImage
                         alt={media.originalFileName ?? 'media'}
                         className="h-full w-full object-cover"
-                        src={source}
+                        sources={mediaThumbnailSources(media)}
                       />
                     ) : (
                       <span className="text-xs font-semibold text-slate-500">{media.type}</span>
@@ -382,7 +385,11 @@ export default function SettingsPage() {
                     <p className="truncate text-sm font-semibold text-slate-950">
                       {media.originalFileName ?? media.id}
                     </p>
-                    <p className="mt-1 text-xs text-slate-500">{media.mimeType ?? media.status}</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {media.status === 'ARCHIVED'
+                        ? 'ARCHIVED - chỉ còn thumbnail'
+                        : (media.mimeType ?? media.status)}
+                    </p>
                     <p className="mt-1 text-xs text-slate-500">
                       Upload bởi {media.uploadedByName ?? media.uploadedByEmail ?? 'không rõ'} ·{' '}
                       {media.createdAt ? new Date(media.createdAt).toLocaleString('vi-VN') : '-'}

@@ -8,10 +8,23 @@ import type { ButtonHTMLAttributes, ReactNode } from 'react';
 import { Fragment } from 'react';
 import { useEffect, useState } from 'react';
 import { DeletePostDialog } from '@/components/delete-post-dialog';
+import {
+  FallbackImage,
+  mediaPreviewSources,
+  mediaThumbnailSources,
+} from '@/components/media-preview';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
+import {
+  extractPlatformPostMetrics,
+  formatMetricNumber,
+  hasVisibleMetrics,
+  metricDefinitionsForPlatform,
+  metricSourceLabel,
+} from '@/lib/post-metrics';
 import type {
   ContentPostView,
   MediaAssetView,
@@ -34,6 +47,7 @@ const DELETABLE_POST_STATUSES = [
 
 export default function PostDetailPage() {
   const auth = useAuth();
+  const toast = useToast();
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const workspace = auth.activeWorkspace;
@@ -71,8 +85,9 @@ export default function PostDetailPage() {
     try {
       await postsApi.retry(workspace.id, post.id);
       await loadPost();
+      toast.info('Đã đưa bài vào queue retry.');
     } catch (retryError) {
-      setError(getErrorMessage(retryError));
+      toast.error(getErrorMessage(retryError));
     } finally {
       setRetrying(false);
     }
@@ -81,7 +96,7 @@ export default function PostDetailPage() {
   function openDeleteDialog() {
     if (!post) return;
     if (!canDeletePostStatus(post.status)) {
-      setError('Bài này không ở trạng thái có thể xóa.');
+      toast.warning('Bài này không ở trạng thái có thể xóa.');
       return;
     }
     setDeleteTarget(post);
@@ -97,9 +112,10 @@ export default function PostDetailPage() {
         platformPostIds: input.platformPostIds,
       });
       setDeleteTarget(null);
+      toast.success('Đã xóa bài viết.');
       router.push('/posts');
     } catch (deleteError) {
-      setError(getErrorMessage(deleteError));
+      toast.error(getErrorMessage(deleteError));
     } finally {
       setDeleting(false);
     }
@@ -112,8 +128,9 @@ export default function PostDetailPage() {
     try {
       const result = await postsApi.refreshPlatformState(workspace.id, post.id, platformPost.id);
       setPost(result.post);
+      toast.success('Đã cập nhật trạng thái nền tảng.');
     } catch (refreshError) {
-      setError(getErrorMessage(refreshError));
+      toast.error(getErrorMessage(refreshError));
     } finally {
       setPlatformAction(null);
     }
@@ -126,8 +143,9 @@ export default function PostDetailPage() {
     try {
       const result = await postsApi.makeYouTubePublic(workspace.id, post.id, platformPost.id);
       setPost(result.post);
+      toast.success('Đã chuyển YouTube video sang public.');
     } catch (publishError) {
-      setError(getErrorMessage(publishError));
+      toast.error(getErrorMessage(publishError));
     } finally {
       setPlatformAction(null);
     }
@@ -141,8 +159,9 @@ export default function PostDetailPage() {
     try {
       const result = await postsApi.cancelTikTokPublish(workspace.id, post.id, platformPost.id);
       setPost(result.post);
+      toast.success('Đã hủy publish TikTok.');
     } catch (cancelError) {
-      setError(getErrorMessage(cancelError));
+      toast.error(getErrorMessage(cancelError));
     } finally {
       setPlatformAction(null);
     }
@@ -237,6 +256,7 @@ export default function PostDetailPage() {
                   }
                 />
               </div>
+              <MediaInfoPanel media={post.media} />
               <MediaStrip media={post.media} onPreview={setPreviewAsset} />
             </article>
 
@@ -663,6 +683,14 @@ function formatDateTime(value: string) {
   }).format(new Date(value));
 }
 
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
 function canDeletePostStatus(status: ContentPostView['status']) {
   return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
 }
@@ -744,7 +772,10 @@ function MediaStrip({
   return (
     <div className="mt-4 flex flex-wrap gap-2">
       {media.map((asset) => {
-        const source = asset.displayUrl ?? asset.readUrl;
+        const sources =
+          asset.type === 'VIDEO' && asset.status !== 'ARCHIVED'
+            ? mediaThumbnailSources(asset)
+            : mediaPreviewSources(asset);
         return (
           <button
             key={asset.id}
@@ -753,14 +784,26 @@ function MediaStrip({
             title={asset.originalFileName ?? 'Xem media'}
             type="button"
           >
-            {asset.type === 'IMAGE' && source ? (
-              <img
+            {(asset.type === 'IMAGE' || asset.status === 'ARCHIVED') && sources.length > 0 ? (
+              <FallbackImage
                 alt={asset.originalFileName ?? 'media'}
                 className="h-full w-full object-cover"
-                src={source}
+                sources={sources}
               />
-            ) : asset.type === 'VIDEO' && source ? (
-              <video className="h-full w-full object-cover" muted preload="metadata" src={source} />
+            ) : asset.type === 'VIDEO' ? (
+              <>
+                {sources.length > 0 ? (
+                  <FallbackImage
+                    alt={asset.originalFileName ?? 'video thumbnail'}
+                    className="h-full w-full object-cover"
+                    sources={sources}
+                  />
+                ) : (
+                  <span className="flex h-full w-full items-center justify-center bg-slate-950 text-[11px] font-semibold text-white">
+                    VIDEO
+                  </span>
+                )}
+              </>
             ) : (
               <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
                 {asset.type}
@@ -769,9 +812,53 @@ function MediaStrip({
             <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
               <Eye className="h-5 w-5" />
             </span>
+            {asset.status === 'ARCHIVED' ? (
+              <span className="absolute bottom-1 left-1 rounded bg-slate-950/75 px-1 text-[9px] font-semibold text-white">
+                ARCHIVED
+              </span>
+            ) : null}
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function MediaInfoPanel({ media }: { media: MediaAssetView[] }) {
+  if (media.length === 0) {
+    return (
+      <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+        Bài này không có media.
+      </div>
+    );
+  }
+
+  const images = media.filter((asset) => asset.type === 'IMAGE').length;
+  const videos = media.filter((asset) => asset.type === 'VIDEO').length;
+  const totalBytes = media.reduce((sum, asset) => sum + (asset.sizeBytes ?? 0), 0);
+
+  return (
+    <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase text-slate-500">
+        <span>Media</span>
+        {images > 0 ? <span className="rounded bg-white px-2 py-1">{images} ảnh</span> : null}
+        {videos > 0 ? <span className="rounded bg-white px-2 py-1">{videos} video</span> : null}
+        <span className="rounded bg-white px-2 py-1">{formatBytes(totalBytes)}</span>
+      </div>
+      <div className="mt-2 grid gap-2">
+        {media.map((asset) => (
+          <div
+            key={asset.id}
+            className="grid gap-1 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600 sm:grid-cols-[1fr_auto_auto]"
+          >
+            <span className="min-w-0 truncate font-medium text-slate-800">
+              {asset.originalFileName ?? asset.id}
+            </span>
+            <span>{asset.mimeType ?? asset.type}</span>
+            <span className="font-semibold">{asset.status}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -783,7 +870,7 @@ function MediaPreviewDialog({
   asset: MediaAssetView | null;
   onClose: () => void;
 }) {
-  const source = asset?.displayUrl ?? asset?.readUrl;
+  const source = asset?.displayUrl ?? asset?.thumbnailUrl ?? asset?.readUrl;
   if (!asset || !source) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
@@ -797,13 +884,13 @@ function MediaPreviewDialog({
           </IconButton>
         </div>
         <div className="bg-slate-950 p-3">
-          {asset.type === 'VIDEO' ? (
+          {asset.type === 'VIDEO' && asset.status !== 'ARCHIVED' ? (
             <video className="max-h-[72vh] w-full rounded bg-black" controls src={source} />
           ) : (
-            <img
+            <FallbackImage
               alt={asset.originalFileName ?? 'media'}
               className="max-h-[72vh] w-full rounded object-contain"
-              src={source}
+              sources={mediaPreviewSources(asset)}
             />
           )}
         </div>
@@ -813,10 +900,21 @@ function MediaPreviewDialog({
 }
 
 function PlatformPostNote({ platformPost }: { platformPost: PlatformPostView }) {
+  const metrics = extractPlatformPostMetrics(platformPost);
   if (platformPost.errorMessage) {
     return (
       <span className="text-red-700">
         {platformPost.errorCode}: {platformPost.errorMessage}
+      </span>
+    );
+  }
+  if (metrics.error) return <span className="text-amber-700">Metrics: {metrics.error}</span>;
+  if (hasVisibleMetrics(metrics)) {
+    const views = metrics.values.views?.value ?? metrics.values.impressions?.value ?? null;
+    const engagement = metrics.values.engagement?.value ?? null;
+    return (
+      <span>
+        {formatMetricNumber(views)} views · {formatMetricNumber(engagement)} tương tác
       </span>
     );
   }
@@ -894,6 +992,11 @@ function PlatformPostDetails({
         </section>
 
         <aside className="space-y-3">
+          <PlatformMetricsPanel
+            onRefresh={onRefresh}
+            platformAction={platformAction}
+            platformPost={platformPost}
+          />
           {platformPost.platform === 'YOUTUBE' ? (
             <YouTubeStatePanel
               canPublish={canPublish}
@@ -916,6 +1019,83 @@ function PlatformPostDetails({
         </aside>
       </div>
     </div>
+  );
+}
+
+function PlatformMetricsPanel({
+  platformPost,
+  platformAction,
+  onRefresh,
+}: {
+  platformPost: PlatformPostView;
+  platformAction: string | null;
+  onRefresh: () => void;
+}) {
+  const metrics = extractPlatformPostMetrics(platformPost);
+  const definitions = metricDefinitionsForPlatform(platformPost.platform);
+  const busy = platformAction === `refresh:${platformPost.id}`;
+  const hasMetrics = hasVisibleMetrics(metrics);
+
+  return (
+    <section className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">
+            Insights {PLATFORM_LABELS[platformPost.platform]}
+          </h3>
+          <p className="mt-1 text-xs text-slate-500">
+            {metrics.refreshedAt
+              ? `Cập nhật ${formatDateTime(metrics.refreshedAt)}`
+              : 'Chưa có snapshot metrics.'}
+          </p>
+        </div>
+        <SecondaryButton
+          disabled={!platformPost.externalPostId || platformAction !== null}
+          onClick={onRefresh}
+          type="button"
+        >
+          {busy ? 'Đang sync...' : 'Sync'}
+        </SecondaryButton>
+      </div>
+
+      {metrics.error ? (
+        <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {metrics.error}
+        </p>
+      ) : null}
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {definitions.map((definition) => {
+          const metric = metrics.values[definition.key];
+          return (
+            <div
+              key={definition.key}
+              className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+              title={definition.hint}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-xs font-semibold uppercase text-slate-500">
+                  {definition.label}
+                </p>
+                <span className="shrink-0 rounded bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                  {metricSourceLabel(metric?.source)}
+                </span>
+              </div>
+              <p className="mt-1 text-lg font-semibold text-slate-950">
+                {formatMetricNumber(metric?.value, definition.percent)}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+
+      {!hasMetrics && !metrics.error ? (
+        <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          Chưa có số liệu thật. Bấm Sync sau khi bài đã publish; nếu nền tảng không cấp API metrics
+          thì ô tương ứng sẽ giữ trạng thái chưa sync/không hỗ trợ.
+        </p>
+      ) : null}
+    </section>
   );
 }
 

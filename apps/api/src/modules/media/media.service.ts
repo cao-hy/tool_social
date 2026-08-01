@@ -8,29 +8,35 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Inject, Injectable } from '@nestjs/common';
-import type { MediaType } from '@socialhub/shared';
+import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { buildJobId, type MediaType, type QueuePayload } from '@socialhub/shared';
+import { Queue } from 'bullmq';
 import { fileTypeFromBuffer } from 'file-type';
 import sharp from 'sharp';
 import { AppError } from '../../common/errors/app-error';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 import type { CreateMediaUploadInput, ListMediaInput } from './media.schemas';
 
 const ALLOWED_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const ALLOWED_VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 const SIGNED_UPLOAD_EXPIRES_SECONDS = 10 * 60;
 const SIGNED_READ_EXPIRES_SECONDS = 10 * 60;
+const THUMBNAIL_CONTENT_TYPE = 'image/webp';
 
 @Injectable()
-export class MediaService {
+export class MediaService implements OnModuleDestroy {
   private readonly s3: S3Client;
   private readonly publicS3: S3Client;
+  private readonly thumbnailQueue: Queue;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(RedisService) private readonly redis: RedisService,
     @Inject(ENV) private readonly env: ApiEnv,
   ) {
+    this.thumbnailQueue = new Queue('generate-thumbnail', { connection: this.redis.getClient() });
     this.s3 = new S3Client({
       endpoint: env.S3_ENDPOINT,
       region: env.S3_REGION,
@@ -49,6 +55,10 @@ export class MediaService {
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
       },
     });
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.thumbnailQueue.close();
   }
 
   async usage(workspaceId: string) {
@@ -105,6 +115,15 @@ export class MediaService {
     };
   }
 
+  async get(workspaceId: string, mediaAssetId: string) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+    });
+    if (!media) throw AppError.notFound('media asset');
+
+    return this.toMediaView(media);
+  }
+
   async getObject(workspaceId: string, mediaAssetId: string, range?: string) {
     const media = await this.prisma.mediaAsset.findFirst({
       where: { id: mediaAssetId, workspaceId, deletedAt: null, status: 'READY' },
@@ -125,6 +144,27 @@ export class MediaService {
       contentType: object.ContentType ?? media.mimeType ?? 'application/octet-stream',
       contentLength: object.ContentLength,
       contentRange: object.ContentRange,
+    };
+  }
+
+  async getThumbnail(workspaceId: string, mediaAssetId: string) {
+    const media = await this.prisma.mediaAsset.findFirst({
+      where: { id: mediaAssetId, workspaceId, deletedAt: null },
+    });
+    if (!media?.thumbnailKey) throw AppError.notFound('media thumbnail');
+
+    const object = await this.s3.send(
+      new GetObjectCommand({
+        Bucket: this.env.S3_BUCKET,
+        Key: media.thumbnailKey,
+      }),
+    );
+
+    return {
+      body: object.Body,
+      statusCode: 200,
+      contentType: object.ContentType ?? THUMBNAIL_CONTENT_TYPE,
+      contentLength: object.ContentLength,
     };
   }
 
@@ -191,12 +231,24 @@ export class MediaService {
         where: { id: media.id },
         data: {
           type: mediaType,
-          status: 'READY',
+          status: 'PROCESSING',
           mimeType: detectedMime,
           sizeBytes: media.sizeBytes,
         },
       });
 
+      try {
+        await this.enqueueThumbnail(updated.workspaceId, updated.id);
+      } catch (error) {
+        await this.prisma.mediaAsset
+          .update({ where: { id: updated.id }, data: { status: 'FAILED' } })
+          .catch(() => undefined);
+        throw AppError.internal(
+          `Đã upload video nhưng chưa thể đưa vào queue xử lý thumbnail: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
       return this.toMediaView(updated);
     }
 
@@ -222,6 +274,8 @@ export class MediaService {
       }),
     );
 
+    const thumbnailKey = await this.createImageThumbnail(media.workspaceId, media.id, finalBytes);
+
     const updated = await this.prisma.mediaAsset.update({
       where: { id: media.id },
       data: {
@@ -231,6 +285,7 @@ export class MediaService {
         sizeBytes: finalBytes.length,
         width: metadata?.width,
         height: metadata?.height,
+        thumbnailKey,
       },
     });
 
@@ -340,7 +395,19 @@ export class MediaService {
       return { archived: true };
     }
 
-    // Chỉ xóa file gốc
+    let thumbnailKey = media.thumbnailKey;
+    if (!thumbnailKey) {
+      thumbnailKey =
+        media.type === 'IMAGE'
+          ? await this.createImageThumbnail(
+              media.workspaceId,
+              media.id,
+              await this.readObjectBytes(media.storageKey),
+            )
+          : await this.createVideoThumbnail(media.workspaceId, media.id);
+    }
+
+    // Chỉ xóa file gốc, giữ thumbnail để UI còn xem lại lịch sử.
     await this.s3.send(
       new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.storageKey }),
     );
@@ -349,7 +416,8 @@ export class MediaService {
       where: { id: media.id },
       data: {
         status: 'ARCHIVED',
-        sizeBytes: 0, // Tiết kiệm dung lượng, xem như 0 hoặc size thumbnail
+        thumbnailKey,
+        sizeBytes: 0,
       },
     });
 
@@ -374,8 +442,82 @@ export class MediaService {
     return `workspaces/${workspaceId}/media/${randomUUID()}${extension}`;
   }
 
+  private thumbnailKey(workspaceId: string, mediaAssetId: string): string {
+    return `workspaces/${workspaceId}/media-thumbnails/${mediaAssetId}.webp`;
+  }
+
   private displayUrl(workspaceId: string, mediaAssetId: string): string {
     return `${this.env.API_BASE_URL.replace(/\/$/, '')}/api/v1/workspaces/${workspaceId}/media/${mediaAssetId}/object`;
+  }
+
+  private thumbnailUrl(workspaceId: string, mediaAssetId: string): string {
+    return `${this.env.API_BASE_URL.replace(/\/$/, '')}/api/v1/workspaces/${workspaceId}/media/${mediaAssetId}/thumbnail`;
+  }
+
+  private async createImageThumbnail(
+    workspaceId: string,
+    mediaAssetId: string,
+    bytes: Buffer,
+  ): Promise<string> {
+    const key = this.thumbnailKey(workspaceId, mediaAssetId);
+    const thumbnailBytes = await sharp(bytes, { failOn: 'none' })
+      .rotate()
+      .resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 78 })
+      .toBuffer();
+
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.env.S3_BUCKET,
+        Key: key,
+        Body: thumbnailBytes,
+        ContentType: THUMBNAIL_CONTENT_TYPE,
+        ContentLength: thumbnailBytes.length,
+      }),
+    );
+
+    return key;
+  }
+
+  private async createVideoThumbnail(workspaceId: string, mediaAssetId: string): Promise<string> {
+    const key = this.thumbnailKey(workspaceId, mediaAssetId);
+    const overlay = Buffer.from(`
+      <svg width="640" height="360" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="320" cy="164" r="52" fill="rgba(255,255,255,0.16)" />
+        <path d="M304 134 L304 194 L354 164 Z" fill="white" />
+        <text x="320" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" font-weight="700" fill="white">VIDEO</text>
+      </svg>
+    `);
+    const thumbnailBytes = await sharp({
+      create: {
+        width: 640,
+        height: 360,
+        channels: 4,
+        background: { r: 15, g: 23, b: 42, alpha: 1 },
+      },
+    })
+      .composite([{ input: overlay }])
+      .webp({ quality: 76 })
+      .toBuffer();
+
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.env.S3_BUCKET,
+        Key: key,
+        Body: thumbnailBytes,
+        ContentType: THUMBNAIL_CONTENT_TYPE,
+        ContentLength: thumbnailBytes.length,
+      }),
+    );
+
+    return key;
+  }
+
+  private async enqueueThumbnail(workspaceId: string, mediaAssetId: string): Promise<void> {
+    const payload: QueuePayload<'generate-thumbnail'> = { workspaceId, mediaAssetId };
+    await this.thumbnailQueue.add('generate-thumbnail', payload, {
+      jobId: buildJobId('generate-thumbnail', payload),
+    });
   }
 
   private async diskUsage() {
@@ -407,6 +549,7 @@ export class MediaService {
     width: number | null;
     height: number | null;
     durationSec: number | null;
+    thumbnailKey: string | null;
     createdAt: Date;
     updatedAt: Date;
     uploadedBy: { name: string | null; email: string } | null;
@@ -437,6 +580,7 @@ export class MediaService {
     width: number | null;
     height: number | null;
     durationSec: number | null;
+    thumbnailKey: string | null;
     createdAt: Date;
   }) {
     const readUrl =
@@ -447,6 +591,7 @@ export class MediaService {
             { expiresIn: SIGNED_READ_EXPIRES_SECONDS },
           )
         : null;
+    const thumbnailUrl = media.thumbnailKey ? this.thumbnailUrl(media.workspaceId, media.id) : null;
 
     return {
       id: media.id,
@@ -459,7 +604,13 @@ export class MediaService {
       height: media.height,
       durationSec: media.durationSec,
       createdAt: media.createdAt,
-      displayUrl: media.status === 'READY' ? this.displayUrl(media.workspaceId, media.id) : null,
+      thumbnailUrl,
+      displayUrl:
+        media.status === 'READY'
+          ? this.displayUrl(media.workspaceId, media.id)
+          : media.status === 'ARCHIVED'
+            ? thumbnailUrl
+            : null,
       readUrl,
     };
   }

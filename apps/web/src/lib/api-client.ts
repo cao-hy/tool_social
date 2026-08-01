@@ -262,6 +262,8 @@ export const mediaApi = {
     apiFetch<MediaAssetView>(`/workspaces/${workspaceId}/media/${mediaAssetId}/confirm`, {
       method: 'POST',
     }),
+  get: (workspaceId: string, mediaAssetId: string) =>
+    apiFetch<MediaAssetView>(`/workspaces/${workspaceId}/media/${mediaAssetId}`),
   uploadObject: (workspaceId: string, mediaAssetId: string, file: File) =>
     apiFetch<{ uploaded: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}/object`, {
       method: 'PUT',

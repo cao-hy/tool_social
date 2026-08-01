@@ -3,10 +3,12 @@
 import { useState, type FormEvent } from 'react';
 import { AuthLink, AuthPanel } from '@/components/auth-panel';
 import { Field, InlineError, PrimaryButton, TextInput } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { authApi } from '@/lib/api-client';
 import { getErrorMessage } from '@/lib/errors';
 
 export default function ForgotPasswordPage() {
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [devToken, setDevToken] = useState<string | null>(null);
   const [accepted, setAccepted] = useState(false);
@@ -23,8 +25,11 @@ export default function ForgotPasswordPage() {
       const result = await authApi.forgotPassword({ email: String(form.get('email') ?? '') });
       setAccepted(result.accepted);
       setDevToken(result.devResetToken ?? null);
+      toast.success('Yêu cầu đặt lại mật khẩu đã được nhận.');
     } catch (submitError) {
-      setError(getErrorMessage(submitError));
+      const message = getErrorMessage(submitError);
+      setError(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }

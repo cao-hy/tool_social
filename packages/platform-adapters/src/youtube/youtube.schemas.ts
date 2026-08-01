@@ -92,6 +92,13 @@ export const youtubeVideoResponseSchema = z.object({
         .optional(),
     })
     .optional(),
+  statistics: z
+    .object({
+      viewCount: optionalNullableNonNegativeInt,
+      likeCount: optionalNullableNonNegativeInt,
+      commentCount: optionalNullableNonNegativeInt,
+    })
+    .optional(),
 });
 
 export type YouTubeVideoResponse = z.infer<typeof youtubeVideoResponseSchema>;

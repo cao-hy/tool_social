@@ -3,7 +3,9 @@ import { z } from 'zod';
 export const listMediaSchema = z.object({
   q: z.string().trim().max(120).optional(),
   type: z.enum(['IMAGE', 'VIDEO']).optional(),
-  status: z.enum(['PENDING_UPLOAD', 'UPLOADED', 'PROCESSING', 'READY', 'FAILED']).optional(),
+  status: z
+    .enum(['PENDING_UPLOAD', 'UPLOADED', 'PROCESSING', 'READY', 'FAILED', 'ARCHIVED'])
+    .optional(),
   cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });

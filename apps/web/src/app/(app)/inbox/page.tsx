@@ -33,6 +33,7 @@ import {
   SelectInput,
   TextInput,
 } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { commentsApi, platformsApi, socialAccountsApi, workspaceApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -48,9 +49,23 @@ import type {
 const STATUSES = ['OPEN', 'PENDING', 'RESOLVED'] as const;
 const TAG_COLORS = ['#64748b', '#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'] as const;
 const DEFAULT_TAG_COLOR = TAG_COLORS[0];
+const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
+  assign: 'Đã cập nhật người phụ trách.',
+  'create-tag': 'Đã tạo tag.',
+  'delete-comment': 'Đã xóa comment.',
+  'delete-template': 'Đã xóa mẫu trả lời.',
+  'edit-comment': 'Đã cập nhật comment.',
+  'hide-comment': 'Đã cập nhật trạng thái ẩn/hiện.',
+  note: 'Đã thêm note nội bộ.',
+  reply: 'Đã gửi reply.',
+  status: 'Đã cập nhật trạng thái comment.',
+  tags: 'Đã cập nhật tag.',
+  template: 'Đã lưu mẫu trả lời.',
+};
 
 export default function InboxPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [comments, setComments] = useState<CommentView[]>([]);
   const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
@@ -77,7 +92,6 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const filters = useMemo(
     () => ({
@@ -231,12 +245,13 @@ export default function InboxPage() {
   async function mutateComment(label: string, action: () => Promise<unknown>) {
     setBusy(label);
     setError(null);
-    setNotice(null);
     try {
       await action();
       await loadComments();
+      const successMessage = ACTION_SUCCESS_MESSAGES[label];
+      if (successMessage) toast.success(successMessage);
     } catch (actionError) {
-      setError(getErrorMessage(actionError));
+      toast.error(getErrorMessage(actionError));
     } finally {
       setBusy(null);
     }
@@ -245,12 +260,13 @@ export default function InboxPage() {
   async function mutateStatic(label: string, action: () => Promise<unknown>) {
     setBusy(label);
     setError(null);
-    setNotice(null);
     try {
       await action();
       await Promise.all([loadStaticData(), loadComments()]);
+      const successMessage = ACTION_SUCCESS_MESSAGES[label];
+      if (successMessage) toast.success(successMessage);
     } catch (actionError) {
-      setError(getErrorMessage(actionError));
+      toast.error(getErrorMessage(actionError));
     } finally {
       setBusy(null);
     }
@@ -259,7 +275,7 @@ export default function InboxPage() {
   async function syncSelectedAccount() {
     const accountId = syncAccount?.id;
     if (!workspace || !accountId) {
-      setError('Cần có ít nhất một social account để sync comments.');
+      toast.warning('Cần có ít nhất một social account để sync comments.');
       return;
     }
     const account = accounts.find((item) => item.id === accountId);
@@ -273,12 +289,12 @@ export default function InboxPage() {
           ? capabilityBlockReason(capability)
           : null;
     if (reason) {
-      setError(reason);
+      toast.warning(reason);
       return;
     }
     await mutateComment('sync', async () => {
       const result = await commentsApi.sync(workspace.id, { socialAccountId: accountId });
-      setNotice(`Đang sync comments trong nền: ${result.jobId}`);
+      toast.info(`Đang sync comments trong nền: ${result.jobId}`);
       scheduleCommentReloads();
     });
   }
@@ -316,11 +332,6 @@ export default function InboxPage() {
         </div>
       </header>
 
-      {notice ? (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          {notice}
-        </div>
-      ) : null}
       <InlineError message={error} />
 
       <section className="rounded-md border border-slate-200 bg-white p-4">

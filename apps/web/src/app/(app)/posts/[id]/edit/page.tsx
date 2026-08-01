@@ -11,7 +11,13 @@ import {
   SecondaryButton,
   TextInput,
 } from '@/components/form-controls';
+import {
+  FallbackImage,
+  mediaPreviewSources,
+  mediaThumbnailSources,
+} from '@/components/media-preview';
 import { PlatformComposerPanels } from '@/components/platform-composer-panels';
+import { useToast } from '@/components/toast-provider';
 import { postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -36,6 +42,7 @@ const TARGET_EDITABLE_POST_STATUSES = ['DRAFT', 'FAILED', 'SCHEDULED'] as const;
 
 export default function EditPostPage() {
   const auth = useAuth();
+  const toast = useToast();
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const workspace = auth.activeWorkspace;
@@ -177,9 +184,10 @@ export default function EditPostPage() {
         post.id,
         isPublishedEdit ? payload : { ...payload, socialAccountIds: selectedIds, mediaAssetIds },
       );
+      toast.success('Đã lưu thay đổi.');
       router.push('/posts');
     } catch (saveError) {
-      setError(getErrorMessage(saveError));
+      toast.error(getErrorMessage(saveError));
     } finally {
       setSaving(false);
     }
@@ -305,7 +313,10 @@ export default function EditPostPage() {
                 <p className="mb-2 text-sm font-medium text-slate-800">Media đã gắn</p>
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {post.media.map((asset) => {
-                    const source = asset.displayUrl ?? asset.readUrl;
+                    const sources =
+                      asset.type === 'VIDEO' && asset.status !== 'ARCHIVED'
+                        ? mediaThumbnailSources(asset)
+                        : mediaPreviewSources(asset);
                     return (
                       <label
                         key={asset.id}
@@ -320,19 +331,25 @@ export default function EditPostPage() {
                           title="Xem media"
                           type="button"
                         >
-                          {asset.type === 'IMAGE' && source ? (
-                            <img
+                          {(asset.type === 'IMAGE' || asset.status === 'ARCHIVED') &&
+                          sources.length > 0 ? (
+                            <FallbackImage
                               alt={asset.originalFileName ?? 'media'}
                               className="h-full w-full object-cover"
-                              src={source}
+                              sources={sources}
                             />
-                          ) : asset.type === 'VIDEO' && source ? (
-                            <video
-                              className="h-full w-full object-cover"
-                              muted
-                              preload="metadata"
-                              src={source}
-                            />
+                          ) : asset.type === 'VIDEO' ? (
+                            sources.length > 0 ? (
+                              <FallbackImage
+                                alt={asset.originalFileName ?? 'video thumbnail'}
+                                className="h-full w-full object-cover"
+                                sources={sources}
+                              />
+                            ) : (
+                              <span className="flex h-full w-full items-center justify-center bg-slate-950 text-[11px] font-semibold text-white">
+                                VIDEO
+                              </span>
+                            )
                           ) : (
                             <span className="flex h-full w-full items-center justify-center bg-slate-100 text-slate-500">
                               {asset.type}
@@ -341,6 +358,11 @@ export default function EditPostPage() {
                           <span className="absolute inset-0 flex items-center justify-center bg-slate-950/20 opacity-0 transition hover:opacity-100">
                             <Eye className="h-5 w-5" />
                           </span>
+                          {asset.status === 'ARCHIVED' ? (
+                            <span className="absolute bottom-1 left-1 rounded bg-slate-950/75 px-1 text-[9px] font-semibold text-white">
+                              ARCHIVED
+                            </span>
+                          ) : null}
                         </button>
                         <span className="flex min-w-0 flex-1 items-start gap-2">
                           <input
@@ -469,7 +491,7 @@ function MediaPreviewDialog({
   asset: MediaAssetView | null;
   onClose: () => void;
 }) {
-  const source = asset?.displayUrl ?? asset?.readUrl;
+  const source = asset?.displayUrl ?? asset?.thumbnailUrl ?? asset?.readUrl;
   if (!asset || !source) return null;
 
   return (
@@ -489,13 +511,13 @@ function MediaPreviewDialog({
           </button>
         </div>
         <div className="bg-slate-950 p-3">
-          {asset.type === 'VIDEO' ? (
+          {asset.type === 'VIDEO' && asset.status !== 'ARCHIVED' ? (
             <video className="max-h-[72vh] w-full rounded bg-black" controls src={source} />
           ) : (
-            <img
+            <FallbackImage
               alt={asset.originalFileName ?? 'media'}
               className="max-h-[72vh] w-full rounded object-contain"
-              src={source}
+              sources={mediaPreviewSources(asset)}
             />
           )}
         </div>

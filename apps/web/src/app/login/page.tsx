@@ -11,6 +11,7 @@ import {
   PrimaryButton,
   TextInput,
 } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { authApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -19,6 +20,7 @@ import { getSafeNextPath, withNextParam } from '@/lib/redirects';
 export default function LoginPage() {
   const router = useRouter();
   const auth = useAuth();
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -38,9 +40,12 @@ export default function LoginPage() {
         password: String(form.get('password') ?? ''),
       });
       auth.applyAuthPayload(payload);
+      toast.success('Đăng nhập thành công.');
       router.replace(getSafeNextPath());
     } catch (submitError) {
-      setError(getErrorMessage(submitError));
+      const message = getErrorMessage(submitError);
+      setError(message);
+      toast.error(message);
     } finally {
       setSubmitting(false);
     }

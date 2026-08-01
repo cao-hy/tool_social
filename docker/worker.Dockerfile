@@ -32,6 +32,7 @@ RUN npm prune --omit=dev --ignore-scripts
 FROM base AS runtime
 ENV NODE_ENV=production
 
+RUN apk add --no-cache ffmpeg
 RUN addgroup -g 1001 -S nodejs && adduser -S -u 1001 -G nodejs nodeapp
 
 COPY --from=build --chown=nodeapp:nodejs /app/node_modules ./node_modules

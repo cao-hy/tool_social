@@ -196,7 +196,7 @@ describe('YouTubeAdapter', () => {
       const url = new URL(String(input));
       if (url.pathname === '/youtube/v3/videos' && init?.method !== 'PUT') {
         statusReads += 1;
-        expect(url.searchParams.get('part')).toBe('processingDetails,status,snippet');
+        expect(url.searchParams.get('part')).toBe('processingDetails,status,snippet,statistics');
         expect(url.searchParams.get('id')).toBe('video-1');
         return jsonResponse({
           items: [
@@ -264,6 +264,51 @@ describe('YouTubeAdapter', () => {
       videoId: 'video-1',
       privacyStatus: 'public',
       processingStatus: 'succeeded',
+    });
+  });
+
+  it('đọc metrics video YouTube từ statistics', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/youtube/v3/videos') {
+        expect(url.searchParams.get('part')).toBe('processingDetails,status,snippet,statistics');
+        expect(url.searchParams.get('id')).toBe('video-1');
+        return jsonResponse({
+          items: [
+            {
+              id: 'video-1',
+              statistics: {
+                viewCount: '120',
+                likeCount: '9',
+                commentCount: '3',
+              },
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new YouTubeAdapter({
+      clientId: 'youtube-client',
+      clientSecret: 'youtube-secret',
+    });
+
+    await expect(
+      adapter.getPostMetrics(
+        {
+          accessToken: 'youtube-access',
+          externalAccountId: 'channel-1',
+          correlationId: 'test',
+        },
+        'video-1',
+      ),
+    ).resolves.toMatchObject({
+      views: { value: 120, source: 'PLATFORM_API' },
+      likes: { value: 9, source: 'PLATFORM_API' },
+      comments: { value: 3, source: 'PLATFORM_API' },
+      engagement: { value: 12, source: 'PLATFORM_API' },
     });
   });
 

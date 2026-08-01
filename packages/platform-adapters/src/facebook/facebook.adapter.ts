@@ -1,4 +1,9 @@
-import type { Paginated } from '@socialhub/shared';
+import {
+  computeEngagementRate,
+  emptyPostMetrics,
+  metricFromApi,
+  type Paginated,
+} from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
@@ -90,6 +95,14 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     if (videos.length === 1) {
       const video = videos[0];
       if (!video) throw new Error('Facebook video media không hợp lệ.');
+      ctx.logger?.info('Facebook publish video upload request', {
+        correlationId: ctx.correlationId,
+        pageId: ctx.externalAccountId,
+        mediaType: video.type,
+        mimeType: video.mimeType,
+        sizeBytes: video.sizeBytes,
+        byteLength: video.bytes?.byteLength ?? 0,
+      });
       const result = await this.client.publishPageVideo({
         pageId: ctx.externalAccountId,
         pageAccessToken: ctx.accessToken,
@@ -110,6 +123,14 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     if (images.length === 1) {
       const image = images[0];
       if (!image) throw new Error('Facebook photo media không hợp lệ.');
+      ctx.logger?.info('Facebook publish photo upload request', {
+        correlationId: ctx.correlationId,
+        pageId: ctx.externalAccountId,
+        mediaType: image.type,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        byteLength: image.bytes?.byteLength ?? 0,
+      });
       const result = await this.client.uploadPagePhoto({
         pageId: ctx.externalAccountId,
         pageAccessToken: ctx.accessToken,
@@ -132,6 +153,15 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
       images.length > 0
         ? await Promise.all(
             images.map(async (image, index) => {
+              ctx.logger?.info('Facebook unpublished photo upload request', {
+                correlationId: ctx.correlationId,
+                pageId: ctx.externalAccountId,
+                mediaType: image.type,
+                mimeType: image.mimeType,
+                sizeBytes: image.sizeBytes,
+                byteLength: image.bytes?.byteLength ?? 0,
+                index,
+              });
               const uploaded = await this.client.uploadPagePhoto({
                 pageId: ctx.externalAccountId,
                 pageAccessToken: ctx.accessToken,
@@ -299,8 +329,41 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     });
   }
 
-  async getPostMetrics(_ctx: AdapterContext, _externalPostId: string): Promise<PostMetrics> {
-    throw capabilityUnsupported('FACEBOOK', 'getPostMetrics');
+  async getPostMetrics(ctx: AdapterContext, externalPostId: string): Promise<PostMetrics> {
+    const metrics = emptyPostMetrics('UNSUPPORTED');
+
+    const engagement = await this.client.getPostEngagement({
+      externalPostId,
+      pageAccessToken: ctx.accessToken,
+    });
+    const likes = engagement.reactions?.summary?.total_count;
+    const comments = engagement.comments?.summary?.total_count;
+    const shares = engagement.shares?.count;
+
+    if (likes !== undefined) metrics.likes = metricFromApi(likes);
+    if (comments !== undefined) metrics.comments = metricFromApi(comments);
+    if (shares !== undefined) metrics.shares = metricFromApi(shares);
+
+    const insights = await this.readPostInsights(ctx, externalPostId, [
+      'post_impressions',
+      'post_impressions_unique',
+      'post_engaged_users',
+    ]);
+
+    if (insights.post_impressions !== undefined) {
+      metrics.impressions = metricFromApi(insights.post_impressions);
+    }
+    if (insights.post_impressions_unique !== undefined) {
+      metrics.reach = metricFromApi(insights.post_impressions_unique);
+    }
+    if (insights.post_engaged_users !== undefined) {
+      metrics.engagement = metricFromApi(insights.post_engaged_users);
+    } else if (likes !== undefined || comments !== undefined || shares !== undefined) {
+      metrics.engagement = metricFromApi((likes ?? 0) + (comments ?? 0) + (shares ?? 0));
+    }
+
+    metrics.engagementRate = computeEngagementRate(metrics);
+    return metrics;
   }
 
   verifyWebhookSignature(rawBody: Buffer, headers: Record<string, string | undefined>): boolean {
@@ -314,9 +377,46 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
   parseWebhookEvents(payload: unknown) {
     return parseMetaWebhookEvents(payload);
   }
+
+  private async readPostInsights(
+    ctx: AdapterContext,
+    externalPostId: string,
+    metrics: string[],
+  ): Promise<Record<string, number>> {
+    try {
+      const response = await this.client.getPostInsights({
+        externalPostId,
+        pageAccessToken: ctx.accessToken,
+        metrics,
+      });
+      return Object.fromEntries(
+        response.data.flatMap((item) => {
+          const value = readFacebookInsightNumber(item.values?.at(-1)?.value);
+          return value === undefined ? [] : [[item.name, value]];
+        }),
+      );
+    } catch (error) {
+      ctx.logger?.debug('Facebook post insights unavailable', {
+        correlationId: ctx.correlationId,
+        externalPostId,
+        metrics,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
+  }
 }
 
 function fileNameFromMediaUrl(value: string, fallback: string): string {
   const clean = value.split('?')[0]?.split('/').pop();
   return clean && clean.includes('.') ? clean : fallback;
+}
+
+function readFacebookInsightNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }

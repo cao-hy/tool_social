@@ -12,6 +12,7 @@ import {
 } from '@/components/form-controls';
 import { MediaPreview } from '@/components/media-preview';
 import { PlatformComposerPanels } from '@/components/platform-composer-panels';
+import { useToast } from '@/components/toast-provider';
 import { mediaApi, postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -22,10 +23,11 @@ import {
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
 import { validatePostComposer } from '@/lib/post-validation';
-import type { MediaAssetView, SocialAccountView } from '@/lib/types';
+import type { MediaAssetView, SocialAccountView, StorageUsageView } from '@/lib/types';
 
 export default function NewPostPage() {
   const auth = useAuth();
+  const toast = useToast();
   const router = useRouter();
   const workspace = auth.activeWorkspace;
   const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
@@ -41,6 +43,7 @@ export default function NewPostPage() {
   const [mediaAssets, setMediaAssets] = useState<Array<MediaAssetView & { previewUrl?: string }>>(
     [],
   );
+  const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(null);
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState<'draft' | 'publish' | 'schedule' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +54,11 @@ export default function NewPostPage() {
       .list(workspace.id)
       .then((result) => setAccounts(result.items.filter((item) => item.status === 'CONNECTED')))
       .catch((loadError) => setError(getErrorMessage(loadError)));
+
+    mediaApi
+      .usage(workspace.id)
+      .then((usage) => setStorageUsage(usage))
+      .catch(() => setStorageUsage(null));
   }, [workspace]);
 
   const groupedAccounts = useMemo(() => {
@@ -123,7 +131,7 @@ export default function NewPostPage() {
       const post = await postsApi.create(workspace.id, payload());
       router.push(`/posts?created=${post.id}`);
     } catch (createError) {
-      setError(getErrorMessage(createError));
+      toast.error(getErrorMessage(createError));
     } finally {
       setBusy(null);
     }
@@ -143,7 +151,7 @@ export default function NewPostPage() {
       await postsApi.publish(workspace.id, post.id, selectedIds);
       router.push(`/posts?queued=${post.id}`);
     } catch (publishError) {
-      setError(getErrorMessage(publishError));
+      toast.error(getErrorMessage(publishError));
     } finally {
       setBusy(null);
     }
@@ -165,7 +173,7 @@ export default function NewPostPage() {
       });
       router.push(`/calendar?scheduled=${post.id}`);
     } catch (scheduleError) {
-      setError(getErrorMessage(scheduleError));
+      toast.error(getErrorMessage(scheduleError));
     } finally {
       setBusy(null);
     }
@@ -255,6 +263,7 @@ export default function NewPostPage() {
     setError(null);
     try {
       const uploaded: Array<MediaAssetView & { previewUrl?: string }> = [];
+      const processingIds: string[] = [];
       for (const file of Array.from(files)) {
         const request = await mediaApi.createUpload(workspace.id, {
           fileName: file.name,
@@ -271,11 +280,30 @@ export default function NewPostPage() {
           await mediaApi.uploadObject(workspace.id, request.mediaAsset.id, file);
         }
         const confirmed = await mediaApi.confirmUpload(workspace.id, request.mediaAsset.id);
-        uploaded.push({ ...confirmed, previewUrl: URL.createObjectURL(file) });
+        uploaded.push({
+          ...confirmed,
+          previewUrl: URL.createObjectURL(file),
+        });
+        if (confirmed.status === 'PROCESSING') {
+          processingIds.push(confirmed.id);
+        }
       }
       setMediaAssets((current) => [...current, ...uploaded].slice(0, 10));
+      if (workspace) {
+        mediaApi
+          .usage(workspace.id)
+          .then((usage) => setStorageUsage(usage))
+          .catch(() => undefined);
+      }
+      toast.success(`Đã upload ${uploaded.length} media.`);
+      if (processingIds.length > 0) {
+        toast.info('Video đang xử lý thumbnail. Bạn có thể tiếp tục soạn bài.');
+        for (const mediaAssetId of processingIds) {
+          void pollMediaStatus(mediaAssetId);
+        }
+      }
     } catch (uploadError) {
-      setError(getErrorMessage(uploadError));
+      toast.error(getErrorMessage(uploadError));
     } finally {
       setUploading(false);
     }
@@ -289,6 +317,41 @@ export default function NewPostPage() {
       signal: AbortSignal.timeout(120_000),
     });
     return response.ok;
+  }
+
+  async function pollMediaStatus(mediaAssetId: string) {
+    if (!workspace) return;
+
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await sleep(2000);
+      try {
+        const refreshed = await mediaApi.get(workspace.id, mediaAssetId);
+        setMediaAssets((current) =>
+          current.map((item) =>
+            item.id === mediaAssetId ? { ...refreshed, previewUrl: item.previewUrl } : item,
+          ),
+        );
+        if (refreshed.status === 'READY') {
+          toast.success('Thumbnail video đã sẵn sàng.');
+          return;
+        }
+        if (refreshed.status === 'FAILED') {
+          toast.error('Xử lý video thất bại. Hãy thử upload lại file khác.');
+          return;
+        }
+      } catch (pollError) {
+        if (attempt >= 2) {
+          toast.error(getErrorMessage(pollError));
+          return;
+        }
+      }
+    }
+
+    toast.warning('Video vẫn đang xử lý. Làm mới trang sau ít phút nếu chưa thấy thumbnail.');
+  }
+
+  function sleep(ms: number) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
   function removeMedia(mediaAssetId: string) {
@@ -374,9 +437,10 @@ export default function NewPostPage() {
           </Field>
 
           <Field label="Media">
+            <StorageHint usage={storageUsage} uploading={uploading} />
             <input
               accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
-              className="block w-full text-sm text-slate-700 file:mr-3 file:h-10 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:text-sm file:font-medium file:text-slate-700"
+              className="mt-3 block w-full text-sm text-slate-700 file:mr-3 file:h-10 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:text-sm file:font-medium file:text-slate-700"
               disabled={uploading}
               multiple
               type="file"
@@ -518,4 +582,65 @@ export default function NewPostPage() {
       </aside>
     </div>
   );
+}
+
+function StorageHint({ usage, uploading }: { usage: StorageUsageView | null; uploading: boolean }) {
+  if (!usage) {
+    return (
+      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+        Đang kiểm tra dung lượng VPS...
+      </div>
+    );
+  }
+
+  const availablePercent =
+    usage.disk.totalBytes > 0 ? (usage.disk.availableBytes / usage.disk.totalBytes) * 100 : 0;
+  const isLow = usage.disk.availableBytes < 2 * 1024 ** 3 || availablePercent < 10;
+  const isVeryLow = usage.disk.availableBytes < 1 * 1024 ** 3 || availablePercent < 5;
+  const tone = isVeryLow
+    ? 'border-red-200 bg-red-50 text-red-800'
+    : isLow
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : 'border-emerald-200 bg-emerald-50 text-emerald-800';
+  const barTone = isVeryLow ? 'bg-red-500' : isLow ? 'bg-amber-500' : 'bg-emerald-500';
+
+  return (
+    <div className={`rounded-md border px-3 py-3 ${tone}`}>
+      <div className="grid gap-2 text-sm sm:grid-cols-3">
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-75">Còn trống</p>
+          <p className="mt-0.5 font-semibold">{formatBytes(usage.disk.availableBytes)}</p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-75">Media workspace</p>
+          <p className="mt-0.5 font-semibold">{formatBytes(usage.media.totalBytes)}</p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-75">
+            {uploading ? 'Đang upload' : 'Ổ đĩa đã dùng'}
+          </p>
+          <p className="mt-0.5 font-semibold">{usage.disk.usedPercent.toFixed(1)}%</p>
+        </div>
+      </div>
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/70">
+        <div
+          className={`h-full rounded-full ${barTone}`}
+          style={{ width: `${Math.min(Math.max(usage.disk.usedPercent, 0), 100)}%` }}
+        />
+      </div>
+      {isLow ? (
+        <p className="mt-2 text-xs">
+          Dung lượng VPS thấp. Nên dọn media cũ trong Settings trước khi upload video lớn.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }

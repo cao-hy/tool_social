@@ -38,7 +38,13 @@ const COUNTRY_LOCK_OPTIONS = [
   { code: 'FR', label: 'Pháp / France' },
 ] as const;
 
-export function ProxyWidget({ workspaceId }: { workspaceId: string }) {
+export function ProxyWidget({
+  workspaceId,
+  isCollapsed = false,
+}: {
+  workspaceId: string;
+  isCollapsed?: boolean;
+}) {
   const [status, setStatus] = useState<NetworkStatus | null>(null);
   const [open, setOpen] = useState(false);
   const [countryMenuOpen, setCountryMenuOpen] = useState(false);
@@ -148,26 +154,45 @@ export function ProxyWidget({ workspaceId }: { workspaceId: string }) {
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition ${buttonStateClass}`}
+        className={`flex w-full items-center rounded-md border px-3 py-2 text-sm transition ${buttonStateClass} ${isCollapsed ? 'justify-center' : 'justify-between'}`}
+        title={isCollapsed ? `Proxy: ${statusLabel} (${status.countryCode ?? '??'})` : undefined}
       >
-        <div className="flex items-center gap-2">
-          {isProxyActive ? <ShieldCheck className="h-4 w-4" /> : <Globe className="h-4 w-4" />}
-          <span className="flex items-center gap-1 font-medium">
-            <FlagIcon countryCode={status.countryCode} />
-            {status.countryCode ?? '??'}
-          </span>
-          <span>{status.ip}</span>
-        </div>
-        <span className="text-xs uppercase opacity-70">{statusLabel}</span>
+        {isCollapsed ? (
+          <div className="flex items-center justify-center">
+            {isProxyActive ? <ShieldCheck className="h-5 w-5" /> : <Globe className="h-5 w-5" />}
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-1 min-w-0 items-center gap-2 pr-2">
+              {isProxyActive ? (
+                <ShieldCheck className="h-4 w-4 shrink-0" />
+              ) : (
+                <Globe className="h-4 w-4 shrink-0" />
+              )}
+              <span className="flex shrink-0 items-center gap-1 font-medium">
+                <FlagIcon countryCode={status.countryCode} />
+                {status.countryCode ?? '??'}
+              </span>
+              <span className="truncate text-left" title={status.ip}>
+                {status.ip}
+              </span>
+            </div>
+            <span className="shrink-0 text-xs uppercase opacity-70">{statusLabel}</span>
+          </>
+        )}
       </button>
 
       {open && (
-        <div className="absolute top-full z-50 mt-1 w-full rounded-md border border-slate-200 bg-white p-3 shadow-lg">
+        <div
+          className={`absolute z-50 rounded-md border border-slate-200 bg-white p-3 shadow-lg ${isCollapsed ? 'left-full top-0 ml-4 w-72 mt-0' : 'top-full mt-1 w-full'}`}
+        >
           <div className="mb-2 text-xs font-semibold text-slate-500">THÔNG TIN MẠNG</div>
           <div className="mb-3 space-y-1 text-sm">
-            <div className="flex justify-between">
-              <span className="text-slate-500">IP:</span>
-              <span className="font-medium text-slate-900">{status.ip}</span>
+            <div className="flex justify-between gap-4">
+              <span className="shrink-0 text-slate-500">IP:</span>
+              <span className="truncate font-medium text-slate-900" title={status.ip}>
+                {status.ip}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500">Vị trí:</span>

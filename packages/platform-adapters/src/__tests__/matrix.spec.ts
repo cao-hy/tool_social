@@ -10,7 +10,7 @@ import { countVerified, findStaleCapabilities, isSupported } from '../core/capab
 
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
   const verifiedCounts = {
-    FACEBOOK: 6,
+    FACEBOOK: 11,
     INSTAGRAM: 16,
     PINTEREST: 14,
     TIKTOK: 10,
@@ -48,7 +48,12 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
               key === 'hideComment' ||
               key === 'deleteComment' ||
               key === 'editPublishedPost' ||
-              key === 'deletePublishedPost')) ||
+              key === 'deletePublishedPost' ||
+              key === 'postLikes' ||
+              key === 'postCommentCount' ||
+              key === 'postShares' ||
+              key === 'postReach' ||
+              key === 'postImpressions')) ||
             (platform === 'PINTEREST' &&
               (key === 'publishImage' ||
                 key === 'publishVideo' ||
@@ -118,7 +123,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       expect(progress[platform].verified).toBe(verifiedCounts[platform]);
       expect(progress[platform].percent).toBe(
         platform === 'FACEBOOK'
-          ? 18
+          ? 33
           : platform === 'INSTAGRAM'
             ? 48
             : platform === 'PINTEREST'

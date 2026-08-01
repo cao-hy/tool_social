@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useMemo, useState } from 'react';
 import type { MediaAssetView } from '@/lib/types';
 
 export function MediaPreview({
@@ -7,9 +10,25 @@ export function MediaPreview({
   asset: MediaAssetView & { previewUrl?: string };
   className?: string;
 }) {
-  const source = asset.previewUrl ?? asset.displayUrl ?? asset.readUrl;
+  const sources = useMemo(() => mediaSources(asset), [asset]);
+  const source = sources[0];
 
   if (asset.status === 'ARCHIVED') {
+    if (source) {
+      return (
+        <div className={`relative overflow-hidden rounded ${className}`}>
+          <FallbackImage
+            alt={asset.originalFileName ?? 'media thumbnail'}
+            className="aspect-video w-full object-cover"
+            sources={sources}
+          />
+          <span className="absolute left-2 top-2 rounded bg-slate-950/75 px-2 py-1 text-[10px] font-semibold uppercase text-white">
+            Đã dọn file gốc
+          </span>
+        </div>
+      );
+    }
+
     return (
       <div
         className={`flex flex-col items-center justify-center rounded bg-slate-100 p-4 text-center ${className}`}
@@ -22,10 +41,10 @@ export function MediaPreview({
 
   if (asset.type === 'IMAGE' && source) {
     return (
-      <img
+      <FallbackImage
         alt={asset.originalFileName ?? 'media'}
         className={`aspect-video w-full rounded object-cover ${className}`}
-        src={source}
+        sources={sources}
       />
     );
   }
@@ -47,4 +66,71 @@ export function MediaPreview({
       {asset.originalFileName ?? asset.type}
     </div>
   );
+}
+
+export function FallbackImage({
+  alt,
+  className = '',
+  sources,
+}: {
+  alt: string;
+  className?: string;
+  sources: string[];
+}) {
+  const stableSources = useMemo(() => uniqueUrls(sources), [sources]);
+  const sourceKey = stableSources.join('\n');
+  const [sourceIndex, setSourceIndex] = useState(0);
+  const source = stableSources[sourceIndex];
+
+  useEffect(() => {
+    setSourceIndex(0);
+  }, [sourceKey]);
+
+  if (!source) {
+    return (
+      <div
+        className={`flex items-center justify-center bg-slate-100 px-2 text-center text-xs font-medium text-slate-500 ${className}`}
+      >
+        {alt}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      alt={alt}
+      className={className}
+      onError={() => setSourceIndex((current) => Math.min(current + 1, stableSources.length))}
+      src={source}
+    />
+  );
+}
+
+export function mediaPreviewSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+  return mediaSources(asset);
+}
+
+export function mediaThumbnailSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+  if (asset.type === 'VIDEO' && asset.status !== 'ARCHIVED') {
+    return uniqueUrls([asset.previewUrl, asset.thumbnailUrl]);
+  }
+
+  return uniqueUrls([asset.previewUrl, asset.thumbnailUrl, asset.displayUrl, asset.readUrl]);
+}
+
+function mediaSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+  if (asset.type === 'VIDEO' && asset.status !== 'ARCHIVED') {
+    return uniqueUrls([asset.previewUrl, asset.displayUrl, asset.readUrl, asset.thumbnailUrl]);
+  }
+
+  return uniqueUrls([asset.previewUrl, asset.thumbnailUrl, asset.displayUrl, asset.readUrl]);
+}
+
+function uniqueUrls(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  return values.filter((value): value is string => {
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
 }

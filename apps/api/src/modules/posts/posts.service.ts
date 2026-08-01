@@ -5,6 +5,7 @@ import type { Prisma } from '@socialhub/db';
 import {
   type AdapterContext,
   type AdapterRegistry,
+  type PostMetrics,
   type SocialPlatformAdapter,
   type TikTokPublishPlatformState,
   type YouTubeVideoPlatformState,
@@ -1043,9 +1044,14 @@ export class PostsService implements OnModuleDestroy {
       height: number | null;
       durationSec: number | null;
       storageKey: string;
+      thumbnailKey: string | null;
     },
     position?: number,
   ) {
+    const thumbnailUrl = mediaAsset.thumbnailKey
+      ? `${this.env.API_BASE_URL.replace(/\/$/, '')}/api/v1/workspaces/${mediaAsset.workspaceId}/media/${mediaAsset.id}/thumbnail`
+      : null;
+
     return {
       id: mediaAsset.id,
       type: mediaAsset.type,
@@ -1057,6 +1063,7 @@ export class PostsService implements OnModuleDestroy {
       height: mediaAsset.height,
       durationSec: mediaAsset.durationSec,
       position,
+      thumbnailUrl,
       readUrl:
         mediaAsset.status === 'READY'
           ? await getSignedUrl(
@@ -1071,7 +1078,9 @@ export class PostsService implements OnModuleDestroy {
       displayUrl:
         mediaAsset.status === 'READY'
           ? `${this.env.API_BASE_URL.replace(/\/$/, '')}/api/v1/workspaces/${mediaAsset.workspaceId}/media/${mediaAsset.id}/object`
-          : null,
+          : mediaAsset.status === 'ARCHIVED'
+            ? thumbnailUrl
+            : null,
     };
   }
 
@@ -1081,16 +1090,33 @@ export class PostsService implements OnModuleDestroy {
     platformPostId: string,
   ): Promise<{
     platform: Platform;
-    state: YouTubeVideoPlatformState | TikTokPublishPlatformState;
+    state: Record<string, unknown>;
   }> {
     const base = await this.platformPostStateContext(workspaceId, postId, platformPostId);
-    const state =
+    const currentState = jsonObject(base.platformPost.platformState) ?? {};
+    const platformState =
       base.platformPost.platform === 'YOUTUBE' && hasYouTubeStatusMethods(base.adapter)
         ? await base.adapter.getVideoPlatformState(base.ctx, base.platformPost.externalPostId)
         : hasTikTokStatusMethods(base.adapter)
           ? await base.adapter.getPublishPlatformState(base.ctx, base.platformPost.externalPostId)
           : null;
-    if (!state) throw AppError.capabilityUnsupported(base.platformPost.platform, 'platform_state');
+    const metricsResult = await this.readPlatformPostMetrics(
+      base.adapter,
+      base.ctx,
+      base.platformPost.externalPostId,
+    );
+    const state: Record<string, unknown> = {
+      ...currentState,
+      ...(jsonObject(platformState) ?? {}),
+      metricsRefreshedAt: metricsResult.refreshedAt,
+    };
+    if (metricsResult.metrics) state.metrics = metricsResult.metrics;
+    if (metricsResult.error) {
+      state.metricsError = metricsResult.error;
+    } else {
+      delete state.metricsError;
+    }
+
     await this.prisma.platformPost.update({
       where: { id: base.platformPost.id },
       data: {
@@ -1102,6 +1128,32 @@ export class PostsService implements OnModuleDestroy {
     return { platform: base.platformPost.platform, state };
   }
 
+  private async readPlatformPostMetrics(
+    adapter: SocialPlatformAdapter,
+    ctx: AdapterContext,
+    externalPostId: string,
+  ): Promise<{
+    metrics?: PostMetrics;
+    error?: { code: string; message: string };
+    refreshedAt: string;
+  }> {
+    const refreshedAt = new Date().toISOString();
+    try {
+      return {
+        metrics: await adapter.getPostMetrics(ctx, externalPostId),
+        refreshedAt,
+      };
+    } catch (error) {
+      return {
+        error: {
+          code: isPlatformError(error) ? error.kind : 'METRICS_UNAVAILABLE',
+          message: error instanceof Error ? error.message : 'Không đọc được metrics nền tảng.',
+        },
+        refreshedAt,
+      };
+    }
+  }
+
   private async platformPostStateContext(
     workspaceId: string,
     postId: string,
@@ -1109,8 +1161,9 @@ export class PostsService implements OnModuleDestroy {
   ): Promise<{
     platformPost: {
       id: string;
-      platform: 'YOUTUBE' | 'TIKTOK';
+      platform: Platform;
       externalPostId: string;
+      platformState: Prisma.JsonValue | null;
       socialAccount: {
         id: string;
         workspaceId: string;
@@ -1139,9 +1192,6 @@ export class PostsService implements OnModuleDestroy {
       include: { socialAccount: { include: { token: true } } },
     });
     if (!platformPost) throw AppError.notFound('platform post');
-    if (platformPost.platform !== 'YOUTUBE' && platformPost.platform !== 'TIKTOK') {
-      throw AppError.capabilityUnsupported(platformPost.platform, 'platform_state');
-    }
     if (!platformPost.externalPostId) {
       throw AppError.conflict('Platform post chưa có externalPostId để kiểm tra trạng thái.');
     }
@@ -1150,10 +1200,6 @@ export class PostsService implements OnModuleDestroy {
     }
 
     const adapter = this.adapters.get(platformPost.platform);
-    if (!hasYouTubeStatusMethods(adapter) && !hasTikTokStatusMethods(adapter)) {
-      throw AppError.capabilityUnsupported(platformPost.platform, 'platform_state');
-    }
-
     const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
     const ctx = {
       accessToken,
@@ -1165,8 +1211,9 @@ export class PostsService implements OnModuleDestroy {
     return {
       platformPost: {
         id: platformPost.id,
-        platform: platformPost.platform,
+        platform: platformPost.platform as Platform,
         externalPostId: platformPost.externalPostId,
+        platformState: platformPost.platformState,
         socialAccount: {
           id: platformPost.socialAccount.id,
           workspaceId: platformPost.socialAccount.workspaceId,
@@ -1602,7 +1649,7 @@ function hasTikTokStatusMethods(
   return adapter.platform === 'TIKTOK' && 'getPublishPlatformState' in adapter;
 }
 
-function jsonObject(value: Prisma.JsonValue | null): Record<string, unknown> | undefined {
+function jsonObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
 }

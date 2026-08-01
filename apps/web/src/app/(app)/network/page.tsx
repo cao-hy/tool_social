@@ -4,6 +4,7 @@ import type { NetworkPolicyCategory, NetworkProxyPolicyItem } from '@socialhub/s
 import { Globe2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { InlineError, SecondaryButton } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { systemApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -26,19 +27,23 @@ const CATEGORY_LABELS: Record<NetworkPolicyCategory, string> = {
 
 export default function NetworkPolicyPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [policy, setPolicy] = useState<ProxyPolicyView | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadPolicy() {
+  async function loadPolicy(showToast = false) {
     if (!workspace) return;
     setLoading(true);
     setError(null);
     try {
       setPolicy(await systemApi.getProxyPolicy(workspace.id));
+      if (showToast) toast.success('Đã làm mới network policy.');
     } catch (loadError) {
-      setError(getErrorMessage(loadError));
+      const message = getErrorMessage(loadError);
+      setError(message);
+      if (showToast) toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -69,7 +74,7 @@ export default function NetworkPolicyPage() {
             Kiểm soát request nào đi qua proxy và request nào đi direct.
           </p>
         </div>
-        <SecondaryButton disabled={loading} onClick={() => void loadPolicy()} type="button">
+        <SecondaryButton disabled={loading} onClick={() => void loadPolicy(true)} type="button">
           <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           Làm mới
         </SecondaryButton>

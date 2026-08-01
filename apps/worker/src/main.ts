@@ -15,6 +15,7 @@ import {
 import { Keyring } from '@socialhub/security';
 import Redis from 'ioredis';
 import { logger } from './logger';
+import { createGenerateThumbnailProcessor } from './processors/generate-thumbnail';
 import { createProcessWebhookProcessor } from './processors/process-webhook';
 import { createPublishPostProcessor } from './processors/publish-post';
 import {
@@ -86,6 +87,10 @@ async function main(): Promise<void> {
       adapters,
       syncCommentsQueue: registry.getQueue('sync-comments'),
     }),
+  );
+  registry.registerWorker(
+    'generate-thumbnail',
+    createGenerateThumbnailProcessor({ prisma, storage }),
   );
   const scheduledPostScanner = startScheduledPostScanner({
     prisma,

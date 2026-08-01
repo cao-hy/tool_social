@@ -7,15 +7,19 @@ import {
 } from './facebook.errors';
 import {
   facebookPageProfileSchema,
+  facebookPostEngagementSchema,
   facebookPagesResponseSchema,
   facebookCommentReplyResponseSchema,
   facebookCommentsResponseSchema,
+  facebookInsightsResponseSchema,
   facebookMutationResponseSchema,
   facebookPhotoUploadResponseSchema,
   facebookPublishPostResponseSchema,
   facebookTokenResponseSchema,
   type FacebookCommentsResponse,
   type FacebookCommentReplyResponse,
+  type FacebookPostEngagement,
+  type FacebookInsightsResponse,
   type FacebookPage,
   type FacebookPageProfile,
   type FacebookMutationResponse,
@@ -141,11 +145,19 @@ export class FacebookGraphClient {
     published?: boolean;
     temporary?: boolean;
   }): Promise<FacebookPhotoUploadResponse> {
-    const form = new FormData();
-    if (input.caption) form.set('caption', input.caption);
-    form.set('published', input.published === false ? '0' : '1');
-    if (input.temporary !== undefined) form.set('temporary', String(input.temporary));
-    form.set('source', new File([input.bytes], input.fileName, { type: input.mimeType }));
+    const form = encodeMultipartForm([
+      ...(input.caption ? [{ name: 'caption', value: input.caption }] : []),
+      { name: 'published', value: input.published === false ? '0' : '1' },
+      ...(input.temporary !== undefined
+        ? [{ name: 'temporary', value: String(input.temporary) }]
+        : []),
+      {
+        name: 'source',
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        bytes: input.bytes,
+      },
+    ]);
 
     return this.postMultipart(
       `/${input.pageId}/photos?access_token=${encodeURIComponent(input.pageAccessToken)}`,
@@ -163,11 +175,17 @@ export class FacebookGraphClient {
     title?: string;
     description?: string;
   }): Promise<FacebookPublishPostResponse> {
-    const form = new FormData();
-    if (input.title) form.set('title', input.title);
-    if (input.description) form.set('description', input.description);
-    form.set('published', '1');
-    form.set('source', new File([input.bytes], input.fileName, { type: input.mimeType }));
+    const form = encodeMultipartForm([
+      ...(input.title ? [{ name: 'title', value: input.title }] : []),
+      ...(input.description ? [{ name: 'description', value: input.description }] : []),
+      { name: 'published', value: '1' },
+      {
+        name: 'source',
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        bytes: input.bytes,
+      },
+    ]);
 
     return this.postMultipart(
       `/${input.pageId}/videos?access_token=${encodeURIComponent(input.pageAccessToken)}`,
@@ -274,6 +292,36 @@ export class FacebookGraphClient {
     );
   }
 
+  async getPostEngagement(input: {
+    externalPostId: string;
+    pageAccessToken: string;
+  }): Promise<FacebookPostEngagement> {
+    return this.get(
+      `/${input.externalPostId}`,
+      {
+        access_token: input.pageAccessToken,
+        fields: 'reactions.limit(0).summary(true),comments.limit(0).summary(true),shares',
+      },
+      facebookPostEngagementSchema,
+    );
+  }
+
+  async getPostInsights(input: {
+    externalPostId: string;
+    pageAccessToken: string;
+    metrics: string[];
+  }): Promise<FacebookInsightsResponse> {
+    return this.get(
+      `/${input.externalPostId}/insights`,
+      {
+        access_token: input.pageAccessToken,
+        metric: input.metrics.join(','),
+        period: 'lifetime',
+      },
+      facebookInsightsResponseSchema,
+    );
+  }
+
   private async get<T>(
     path: string,
     params: Record<string, string>,
@@ -336,12 +384,20 @@ export class FacebookGraphClient {
     return parsed.data;
   }
 
-  private async postMultipart<T>(path: string, body: FormData, schema: z.ZodType<T>): Promise<T> {
+  private async postMultipart<T>(
+    path: string,
+    body: EncodedMultipartForm,
+    schema: z.ZodType<T>,
+  ): Promise<T> {
     let response: Response;
     try {
       response = await this.fetch(`${this.graphBaseUrl}${path}`, {
         method: 'POST',
-        body,
+        headers: {
+          'content-type': body.contentType,
+          'content-length': String(body.body.byteLength),
+        },
+        body: new Blob([body.body], { type: body.contentType }),
         signal: AbortSignal.timeout(120000),
       });
     } catch (error) {
@@ -395,6 +451,74 @@ export class FacebookGraphClient {
     if (!parsed.success) throw facebookUnexpectedPayloadError(parsed.error, payload);
     return parsed.data;
   }
+}
+
+interface EncodedMultipartForm {
+  contentType: string;
+  body: Uint8Array;
+}
+
+type MultipartPart =
+  | {
+      name: string;
+      value: string;
+    }
+  | {
+      name: string;
+      fileName: string;
+      mimeType: string;
+      bytes: Uint8Array;
+    };
+
+function encodeMultipartForm(parts: MultipartPart[]): EncodedMultipartForm {
+  const boundary = `socialhub-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const encoder = new TextEncoder();
+  const chunks: Uint8Array[] = [];
+
+  for (const part of parts) {
+    chunks.push(encoder.encode(`--${boundary}\r\n`));
+    if ('bytes' in part) {
+      chunks.push(
+        encoder.encode(
+          `Content-Disposition: form-data; name="${escapeMultipartValue(part.name)}"; filename="${escapeMultipartValue(part.fileName)}"\r\n` +
+            `Content-Type: ${sanitizeHeaderValue(part.mimeType)}\r\n\r\n`,
+        ),
+      );
+      chunks.push(part.bytes);
+      chunks.push(encoder.encode('\r\n'));
+    } else {
+      chunks.push(
+        encoder.encode(
+          `Content-Disposition: form-data; name="${escapeMultipartValue(part.name)}"\r\n\r\n${part.value}\r\n`,
+        ),
+      );
+    }
+  }
+  chunks.push(encoder.encode(`--${boundary}--\r\n`));
+
+  return {
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    body: concatUint8Arrays(chunks),
+  };
+}
+
+function concatUint8Arrays(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+function escapeMultipartValue(value: string): string {
+  return value.replace(/[\r\n"]/g, '_');
+}
+
+function sanitizeHeaderValue(value: string): string {
+  return value.replace(/[\r\n]/g, '').trim() || 'application/octet-stream';
 }
 
 async function parseJson(response: Response): Promise<unknown> {

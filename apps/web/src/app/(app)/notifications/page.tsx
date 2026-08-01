@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { InlineError, SecondaryButton } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { notificationsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -10,6 +11,7 @@ import type { NotificationView } from '@/lib/types';
 
 export default function NotificationsPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [items, setItems] = useState<NotificationView[]>([]);
   const [unreadOnly, setUnreadOnly] = useState(false);
@@ -42,8 +44,9 @@ export default function NotificationsPage() {
     try {
       await notificationsApi.markRead(workspace.id, notificationId);
       await loadNotifications();
+      toast.success('Đã đánh dấu notification là đã đọc.');
     } catch (updateError) {
-      setError(getErrorMessage(updateError));
+      toast.error(getErrorMessage(updateError));
     } finally {
       setUpdating(null);
     }
@@ -56,8 +59,9 @@ export default function NotificationsPage() {
     try {
       await notificationsApi.markAllRead(workspace.id);
       await loadNotifications();
+      toast.success('Đã đánh dấu tất cả notification là đã đọc.');
     } catch (updateError) {
-      setError(getErrorMessage(updateError));
+      toast.error(getErrorMessage(updateError));
     } finally {
       setUpdating(null);
     }

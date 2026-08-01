@@ -110,3 +110,57 @@ export const facebookMutationResponseSchema = z.object({
 });
 
 export type FacebookMutationResponse = z.infer<typeof facebookMutationResponseSchema>;
+
+const facebookSummaryCountSchema = z
+  .object({
+    total_count: z.coerce.number().nonnegative().optional(),
+  })
+  .passthrough()
+  .optional();
+
+export const facebookPostEngagementSchema = z
+  .object({
+    reactions: z
+      .object({
+        summary: facebookSummaryCountSchema,
+      })
+      .passthrough()
+      .optional(),
+    comments: z
+      .object({
+        summary: facebookSummaryCountSchema,
+      })
+      .passthrough()
+      .optional(),
+    shares: z
+      .object({
+        count: z.coerce.number().nonnegative().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
+
+export type FacebookPostEngagement = z.infer<typeof facebookPostEngagementSchema>;
+
+export const facebookInsightsResponseSchema = z.object({
+  data: z.array(
+    z
+      .object({
+        name: z.string().min(1),
+        values: z
+          .array(
+            z
+              .object({
+                value: z.unknown().optional(),
+                end_time: z.string().optional(),
+              })
+              .passthrough(),
+          )
+          .optional(),
+      })
+      .passthrough(),
+  ),
+});
+
+export type FacebookInsightsResponse = z.infer<typeof facebookInsightsResponseSchema>;

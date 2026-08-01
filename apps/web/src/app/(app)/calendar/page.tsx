@@ -21,6 +21,7 @@ import {
 } from 'date-fns';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { InlineError, SecondaryButton } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -29,6 +30,7 @@ import { CalendarEvent } from '@/components/calendar/calendar-event';
 
 export default function CalendarPage() {
   const auth = useAuth();
+  const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [posts, setPosts] = useState<ContentPostView[]>([]);
   const [loading, setLoading] = useState(false);
@@ -54,6 +56,14 @@ export default function CalendarPage() {
   useEffect(() => {
     void loadPosts();
   }, [workspace]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('scheduled')) {
+      toast.success('Đã lên lịch bài viết.');
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+    }
+  }, [toast]);
 
   const scheduledPosts = useMemo(() => posts.filter((post) => post.scheduledAt), [posts]);
 

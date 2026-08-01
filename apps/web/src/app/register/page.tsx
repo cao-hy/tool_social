@@ -10,6 +10,7 @@ import {
   PrimaryButton,
   TextInput,
 } from '@/components/form-controls';
+import { useToast } from '@/components/toast-provider';
 import { ApiClientError, authApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -23,6 +24,7 @@ function optionalFormText(form: FormData, field: string): string | undefined {
 export default function RegisterPage() {
   const router = useRouter();
   const auth = useAuth();
+  const toast = useToast();
   const [error, setError] = useState<string | null>(null);
   const [conflictEmail, setConflictEmail] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -44,6 +46,7 @@ export default function RegisterPage() {
 
     if (password !== confirmPassword) {
       setError('Mật khẩu xác nhận không khớp.');
+      toast.warning('Mật khẩu xác nhận không khớp.');
       setSubmitting(false);
       return;
     }
@@ -56,13 +59,18 @@ export default function RegisterPage() {
         workspaceName: optionalFormText(form, 'workspaceName'),
       });
       auth.applyAuthPayload(payload);
+      toast.success('Đăng ký thành công.');
       router.replace(getSafeNextPath());
     } catch (submitError) {
       if (submitError instanceof ApiClientError && submitError.status === 409) {
+        const message = 'Email này đã có tài khoản. Hãy đăng nhập hoặc đặt lại mật khẩu.';
         setConflictEmail(email);
-        setError('Email này đã có tài khoản. Hãy đăng nhập hoặc đặt lại mật khẩu.');
+        setError(message);
+        toast.warning(message);
       } else {
-        setError(getErrorMessage(submitError));
+        const message = getErrorMessage(submitError);
+        setError(message);
+        toast.error(message);
       }
     } finally {
       setSubmitting(false);
