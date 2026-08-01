@@ -82,6 +82,73 @@ export interface NotificationView {
   createdAt: string;
 }
 
+export interface JobActivityView {
+  generatedAt: string;
+  activeCount: number;
+  failedCount: number;
+  items: BackgroundJobView[];
+}
+
+export interface MetricValueView {
+  value: number | null;
+  source: string;
+}
+
+export type AnalyticsMetricKey =
+  | 'views'
+  | 'likes'
+  | 'comments'
+  | 'shares'
+  | 'reach'
+  | 'impressions'
+  | 'saves'
+  | 'engagement'
+  | 'engagementRate';
+
+export type AnalyticsMetricBag = Record<AnalyticsMetricKey, MetricValueView>;
+
+export interface AnalyticsDashboardView {
+  generatedAt: string;
+  range: { from: string; to: string; timezone: string };
+  summary: {
+    publishedTargets: number;
+    syncedTargets: number;
+    notSyncedTargets: number;
+    unsupportedTargets: number;
+  };
+  byPlatform: Array<{
+    platform: Platform;
+    targets: number;
+    syncedTargets: number;
+    metrics: AnalyticsMetricBag;
+  }>;
+  timeSeries: Array<{
+    date: string;
+    platform: Platform;
+    metrics: AnalyticsMetricBag;
+  }>;
+  topPosts: Array<{
+    id: string;
+    postId: string;
+    platform: Platform;
+    accountName: string;
+    title: string;
+    externalUrl: string | null;
+    publishedAt: string | null;
+    metrics: AnalyticsMetricBag;
+  }>;
+  followerGrowth: Array<{
+    socialAccountId: string;
+    platform: Platform;
+    accountName: string;
+    username: string | null;
+    followers: MetricValueView;
+    followersGained: MetricValueView;
+    firstDate: string | null;
+    lastDate: string | null;
+  }>;
+}
+
 export interface OAuthStartResult {
   authorizationUrl: string;
   expiresInSeconds: number;
@@ -251,7 +318,7 @@ export interface BackgroundJobView {
   id: string;
   queueName: string;
   jobId: string;
-  status: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'DEAD';
   attempts: number;
   maxAttempts: number;
   startedAt: string | null;
@@ -263,6 +330,7 @@ export interface BackgroundJobView {
   correlationId: string | null;
   createdAt: string;
   updatedAt: string;
+  label?: string;
 }
 
 export interface CommentTagView {

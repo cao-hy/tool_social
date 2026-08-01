@@ -1,7 +1,9 @@
 import type { ApiResponse, NetworkProxyPolicyItem, WorkspaceRole } from '@socialhub/shared';
 import type {
   AuditLogItem,
+  AnalyticsDashboardView,
   AuthPayload,
+  JobActivityView,
   OAuthStartResult,
   CommentTagView,
   CommentNoteView,
@@ -224,6 +226,44 @@ export const notificationsApi = {
     apiFetch<{ updated: number }>(`/workspaces/${workspaceId}/notifications/read-all`, {
       method: 'PATCH',
     }),
+};
+
+export const jobsApi = {
+  activity: (workspaceId: string, query?: { limit?: number; includeCompleted?: boolean }) => {
+    const params = new URLSearchParams();
+    if (query?.limit) params.set('limit', String(query.limit));
+    if (query?.includeCompleted !== undefined) {
+      params.set('includeCompleted', String(query.includeCompleted));
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return apiFetch<JobActivityView>(`/workspaces/${workspaceId}/jobs/activity${suffix}`);
+  },
+};
+
+export const analyticsApi = {
+  dashboard: (
+    workspaceId: string,
+    query?: { from?: string; to?: string; platform?: string; socialAccountId?: string },
+  ) => {
+    const params = new URLSearchParams();
+    if (query?.from) params.set('from', query.from);
+    if (query?.to) params.set('to', query.to);
+    if (query?.platform) params.set('platform', query.platform);
+    if (query?.socialAccountId) params.set('socialAccountId', query.socialAccountId);
+    const suffix = params.size > 0 ? `?${params.toString()}` : '';
+    return apiFetch<AnalyticsDashboardView>(`/workspaces/${workspaceId}/analytics${suffix}`);
+  },
+  sync: (
+    workspaceId: string,
+    input?: { platformPostIds?: string[]; platform?: string; socialAccountId?: string },
+  ) =>
+    apiFetch<{ queued: number; postMetricsQueued: number; accountMetricsQueued: number }>(
+      `/workspaces/${workspaceId}/analytics/sync`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input ?? {}),
+      },
+    ),
 };
 
 export const mediaApi = {

@@ -1,6 +1,6 @@
 # SocialHub Manager — Progress
 
-> Nhật ký tiến độ kỹ thuật. Cập nhật: 2026-07-28.
+> Nhật ký tiến độ kỹ thuật. Cập nhật: 2026-08-01.
 
 ## 2026-07-27
 
@@ -95,3 +95,19 @@
   - API create/update nhận `platformOverrides` nhưng vẫn tương thích payload cũ.
   - Worker publish ưu tiên override của `PlatformPost`, fallback về nội dung/media chung từ `ContentPost`.
   - UI Create/Edit cho chỉnh override theo từng tài khoản; Post detail hiển thị override để debug.
+
+## 2026-08-01
+
+- Phase 8 Analytics lát MVP đã thêm:
+  - API `GET /workspaces/:workspaceId/analytics` đọc dữ liệu thật từ `PostMetric` và `MetricSnapshot`, có filter ngày, platform và social account.
+  - API `POST /workspaces/:workspaceId/analytics/sync` enqueue job `sync-post-metrics` cho tối đa 50 platform posts đã published, hoặc danh sách target cụ thể; đồng thời enqueue `sync-account-metrics` cho các social account connected trong filter.
+  - Worker processor `sync-post-metrics` gọi `adapter.getPostMetrics()`, ghi latest metric vào `PostMetric`, ghi chuỗi thời gian vào `MetricSnapshot`, cập nhật `PlatformPost.platformState.metrics`.
+  - Worker processor `sync-account-metrics` gọi `adapter.getAccountMetrics()` nếu nền tảng hỗ trợ; nếu chưa hỗ trợ thì ghi snapshot `UNSUPPORTED` để dashboard hiển thị `—`, không giả số 0.
+  - `MetricSnapshot.metricDate` được tính theo timezone workspace để biểu đồ theo ngày không lệch khi workspace không dùng UTC.
+  - UI `/analytics` có filter ngày/platform/account, nút sync metrics, summary, follower growth theo tài khoản, so sánh theo nền tảng, bảng time series và top posts.
+  - Mọi metric hiển thị kèm nguồn (`MetricSource`); `UNSUPPORTED`/`NOT_SYNCED` vẫn hiển thị `—`, không ép thành `0`.
+  - Nav mở tới Phase 8 (`CURRENT_PHASE = 8`).
+- Giới hạn Phase 8 còn lại:
+  - Chưa có E2E #9 theo yêu cầu hiện tại "E2E để sau".
+  - Follower growth/account metrics đã có pipeline chung, nhưng chưa có adapter nào trả số follower thật; sẽ hiển thị `UNSUPPORTED` cho đến khi từng nền tảng được bổ sung `getAccountMetrics()`.
+  - Chưa đo benchmark thời gian truy vấn analytics trên dữ liệu lớn; schema hiện đã có các index chính `workspaceId+metricDate`, `platformPostId+capturedAt`, `socialAccountId+capturedAt`.

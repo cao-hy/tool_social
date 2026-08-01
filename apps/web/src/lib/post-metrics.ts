@@ -137,7 +137,7 @@ export function metricSourceLabel(source: string | undefined): string {
 }
 
 export function formatMetricNumber(value: number | null | undefined, percent = false): string {
-  if (value === null || value === undefined) return '-';
+  if (value === null || value === undefined) return '—';
   if (percent) {
     return `${value.toLocaleString('en-US', {
       maximumFractionDigits: 2,

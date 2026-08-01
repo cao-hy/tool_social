@@ -22,7 +22,9 @@ import {
   createRefreshSocialTokenProcessor,
   createWorkerPrisma,
 } from './processors/refresh-social-token';
+import { createSyncAccountMetricsProcessor } from './processors/sync-account-metrics';
 import { createSyncCommentsProcessor } from './processors/sync-comments';
+import { createSyncPostMetricsProcessor } from './processors/sync-post-metrics';
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
 import { startScheduledPostScanner } from './schedulers/scheduled-post-scanner';
@@ -79,6 +81,14 @@ async function main(): Promise<void> {
   registry.registerWorker(
     'sync-comments',
     createSyncCommentsProcessor({ prisma, keyring, adapters }),
+  );
+  registry.registerWorker(
+    'sync-post-metrics',
+    createSyncPostMetricsProcessor({ prisma, keyring, adapters }),
+  );
+  registry.registerWorker(
+    'sync-account-metrics',
+    createSyncAccountMetricsProcessor({ prisma, keyring, adapters }),
   );
   registry.registerWorker(
     'process-webhook',

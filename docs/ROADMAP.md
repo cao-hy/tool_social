@@ -219,13 +219,13 @@ Track B (access)    ────────────────────
 
 **Acceptance criteria:**
 
-- [ ] **Mọi số liệu mang nhãn `MetricSource`**
-- [ ] **`UNSUPPORTED` và `NOT_SYNCED` hiển thị `—`, tuyệt đối không phải `0`** (test)
-- [ ] Metric không cùng định nghĩa **không bị cộng gộp** giữa các nền tảng
-- [ ] Chuỗi thời gian đọc từ `MetricSnapshot`, không tính lại từ dữ liệu thô
+- [x] **Mọi số liệu mang nhãn `MetricSource`**
+- [x] **`UNSUPPORTED` và `NOT_SYNCED` hiển thị `—`, tuyệt đối không phải `0`** (test)
+- [x] Metric không cùng định nghĩa **không bị cộng gộp** giữa các nền tảng
+- [x] Chuỗi thời gian đọc từ `MetricSnapshot`, không tính lại từ dữ liệu thô
 - [ ] Truy vấn analytics có index phù hợp; đo được thời gian truy vấn
-- [ ] Bộ lọc ngày tôn trọng timezone của workspace
-- [ ] Biểu đồ có empty state khi chưa có dữ liệu
+- [x] Bộ lọc ngày tôn trọng timezone của workspace
+- [x] Biểu đồ có empty state khi chưa có dữ liệu
 - [ ] E2E #9 pass
 
 ---

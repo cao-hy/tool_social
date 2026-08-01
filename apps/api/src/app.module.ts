@@ -3,9 +3,11 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 import { InfrastructureModule } from './infrastructure/infrastructure.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CommentsModule } from './modules/comments/comments.module';
 import { HealthModule } from './modules/health/health.module';
+import { JobsModule } from './modules/jobs/jobs.module';
 import { PlatformsModule } from './modules/platforms/platforms.module';
 import { MediaModule } from './modules/media/media.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -35,6 +37,8 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
     PostsModule,
     NotificationsModule,
     CommentsModule,
+    AnalyticsModule,
+    JobsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

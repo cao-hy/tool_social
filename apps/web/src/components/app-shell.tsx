@@ -45,6 +45,7 @@ const ICONS: Record<string, React.ElementType> = {
   '/settings': Settings,
 };
 import { NotificationToasts } from './notification-toasts';
+import { JobActivityPanel } from './job-activity-panel';
 import { RoleBadge } from './role-badge';
 import { ProxyWidget } from './proxy-widget';
 
@@ -453,6 +454,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <div className="px-5 py-6 sm:px-8 lg:px-10">{children}</div>
       </main>
+      <JobActivityPanel workspaceId={auth.activeWorkspaceId} />
       <NotificationToasts />
     </div>
   );
