@@ -1,8 +1,7 @@
 import { Controller, Get, HttpCode, Inject, Param, Post, Query, Req } from '@nestjs/common';
-import { platformSchema, type Platform } from '@socialhub/shared';
+import type { Platform } from '@socialhub/shared';
 import type { FastifyRequest } from 'fastify';
 import { raw } from '../../common/interceptors/response.interceptor';
-import { zodPipe } from '../../common/pipes/zod-validation.pipe';
 import { WebhooksService } from './webhooks.service';
 
 @Controller('webhooks/:platform')
@@ -11,18 +10,15 @@ export class WebhooksController {
 
   @Get()
   verifyChallenge(
-    @Param('platform', zodPipe(platformSchema)) platform: Platform,
+    @Param('platform') platformStr: string,
     @Query() query: Record<string, string | undefined>,
   ) {
-    return raw(this.webhooks.verifyChallenge(platform, query));
+    return raw(this.webhooks.verifyChallenge(platformStr.toUpperCase() as Platform, query));
   }
 
   @Post()
   @HttpCode(200)
-  receive(
-    @Param('platform', zodPipe(platformSchema)) platform: Platform,
-    @Req() request: FastifyRequest,
-  ) {
-    return this.webhooks.receive(platform, request);
+  receive(@Param('platform') platformStr: string, @Req() request: FastifyRequest) {
+    return this.webhooks.receive(platformStr.toUpperCase() as Platform, request);
   }
 }

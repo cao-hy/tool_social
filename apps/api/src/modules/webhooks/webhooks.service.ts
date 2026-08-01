@@ -47,12 +47,21 @@ export class WebhooksService implements OnModuleDestroy {
 
   async receive(platform: Platform, request: WebhookRequest) {
     platformSchema.parse(platform);
+
+    // Xử lý riêng cho TikTok webhook verification challenge (POST)
+    if (platform === 'TIKTOK' && typeof request.body === 'object' && request.body !== null) {
+      const bodyObj = request.body as Record<string, unknown>;
+      if (bodyObj.type === '2/webhook_management/verify' && typeof bodyObj.challenge === 'string') {
+        return { challenge: bodyObj.challenge };
+      }
+    }
+
     const rawBody = request.rawBody;
     if (!rawBody) throw AppError.validation('Webhook cần raw body để xác thực chữ ký.');
 
     const adapter = this.adapters.get(platform);
     const headers = normalizeHeaders(request.headers);
-    if (!adapter.verifyWebhookSignature?.(rawBody, headers)) {
+    if (adapter.verifyWebhookSignature && !adapter.verifyWebhookSignature(rawBody, headers)) {
       throw AppError.unauthenticated('Webhook signature không hợp lệ.');
     }
 
