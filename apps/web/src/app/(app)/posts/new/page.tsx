@@ -482,7 +482,7 @@ export default function NewPostPage() {
   async function pollMediaStatus(mediaAssetId: string) {
     if (!workspace) return;
 
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    for (let attempt = 0; attempt < 90; attempt += 1) {
       await sleep(2000);
       try {
         const refreshed = await mediaApi.get(workspace.id, mediaAssetId);
@@ -502,6 +502,12 @@ export default function NewPostPage() {
           return;
         }
         if (refreshed.status === 'FAILED') {
+          const refreshedFileName = refreshed.originalFileName;
+          setUploadProgress((current) =>
+            current.map((item) =>
+              item.fileName === refreshedFileName ? { ...item, stage: 'failed' } : item,
+            ),
+          );
           toast.error('Xử lý video thất bại. Hãy thử upload lại file khác.');
           return;
         }
@@ -513,7 +519,10 @@ export default function NewPostPage() {
       }
     }
 
-    toast.warning('Video vẫn đang xử lý. Làm mới trang sau ít phút nếu chưa thấy thumbnail.');
+    setUploadProgress((current) =>
+      current.map((item) => (item.stage === 'processing' ? { ...item, stage: 'done' } : item)),
+    );
+    toast.warning('Video vẫn đang xử lý nền. Làm mới trang sau ít phút nếu chưa thấy thumbnail.');
   }
 
   function sleep(ms: number) {

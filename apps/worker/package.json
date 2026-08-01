@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1095.0",
+    "@smithy/node-http-handler": "^4.9.13",
     "@socialhub/config": "*",
     "@socialhub/db": "*",
     "@socialhub/platform-adapters": "*",

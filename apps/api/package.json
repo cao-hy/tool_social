@@ -19,6 +19,7 @@
     "@nestjs/common": "^11.0.5",
     "@nestjs/core": "^11.0.5",
     "@nestjs/platform-fastify": "^11.0.5",
+    "@smithy/node-http-handler": "^4.9.13",
     "@socialhub/config": "*",
     "@socialhub/db": "*",
     "@socialhub/platform-adapters": "*",

@@ -12,6 +12,7 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { NodeHttpHandler } from '@smithy/node-http-handler';
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import {
   buildJobId,
@@ -56,6 +57,10 @@ export class MediaService implements OnModuleDestroy {
       endpoint: env.S3_ENDPOINT,
       region: env.S3_REGION,
       forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: 5000,
+        socketTimeout: 30000,
+      }),
       credentials: {
         accessKeyId: env.S3_ACCESS_KEY_ID,
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
@@ -65,6 +70,10 @@ export class MediaService implements OnModuleDestroy {
       endpoint: env.S3_PUBLIC_BASE_URL ?? env.S3_ENDPOINT,
       region: env.S3_REGION,
       forcePathStyle: env.S3_FORCE_PATH_STYLE,
+      requestHandler: new NodeHttpHandler({
+        connectionTimeout: 5000,
+        socketTimeout: 30000,
+      }),
       credentials: {
         accessKeyId: env.S3_ACCESS_KEY_ID,
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
