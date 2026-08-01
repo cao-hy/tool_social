@@ -106,11 +106,15 @@ export function FallbackImage({
   );
 }
 
-export function mediaPreviewSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+export function mediaPreviewSources(
+  asset: MediaAssetView & { previewUrl?: string; updatedAt?: string },
+): string[] {
   return mediaSources(asset);
 }
 
-export function mediaThumbnailSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+export function mediaThumbnailSources(
+  asset: MediaAssetView & { previewUrl?: string; updatedAt?: string },
+): string[] {
   let urls: Array<string | null | undefined>;
   if (asset.type === 'VIDEO' && asset.status !== 'ARCHIVED') {
     urls = [asset.previewUrl, asset.thumbnailUrl];
@@ -120,7 +124,9 @@ export function mediaThumbnailSources(asset: MediaAssetView & { previewUrl?: str
   return uniqueUrls(urls.map((url) => appendVersion(url, asset.updatedAt)));
 }
 
-function mediaSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+function mediaSources(
+  asset: MediaAssetView & { previewUrl?: string; updatedAt?: string },
+): string[] {
   let urls: Array<string | null | undefined>;
   if (asset.type === 'VIDEO' && asset.status !== 'ARCHIVED') {
     urls = [asset.previewUrl, asset.displayUrl, asset.readUrl, asset.thumbnailUrl];
