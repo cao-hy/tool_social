@@ -1,0 +1,1 @@
+ALTER TYPE "PlatformPostStatus" ADD VALUE IF NOT EXISTS 'DELETED';

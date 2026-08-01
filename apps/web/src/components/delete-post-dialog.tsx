@@ -25,6 +25,10 @@ export function DeletePostDialog({
     [post],
   );
   const [selectedPlatformPostIds, setSelectedPlatformPostIds] = useState<string[]>([]);
+  const selectedAllRemoteTargets =
+    remoteTargets.length > 0 && selectedPlatformPostIds.length === remoteTargets.length;
+  const selectedSomeRemoteTargets =
+    selectedPlatformPostIds.length > 0 && selectedPlatformPostIds.length < remoteTargets.length;
 
   useEffect(() => {
     setSelectedPlatformPostIds(remoteTargets.map((item) => item.id));
@@ -46,7 +50,8 @@ export function DeletePostDialog({
         <div className="border-b border-slate-200 px-5 py-4">
           <h2 className="text-lg font-semibold text-slate-950">Xóa bài viết</h2>
           <p className="mt-1 text-sm text-slate-600">
-            Chọn nơi cần xóa. Bài trong server luôn được xóa khỏi workspace.
+            Hệ thống sẽ xóa trên nền tảng trước. Chỉ khi các target cần xóa đều thành công thì mới
+            xóa bài khỏi workspace.
           </p>
         </div>
 
@@ -54,9 +59,15 @@ export function DeletePostDialog({
           <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
             <input checked disabled className="mt-1" type="checkbox" />
             <span>
-              <span className="block font-semibold text-slate-950">Server / workspace</span>
+              <span className="block font-semibold text-slate-950">
+                Server / workspace {selectedSomeRemoteTargets ? '(giữ lại bài cha)' : ''}
+              </span>
               <span className="block text-slate-500">
-                Xóa khỏi web quản lý và xóa media không còn được bài nào dùng.
+                {selectedSomeRemoteTargets
+                  ? 'Bạn đang chọn một phần target, nên chỉ xóa target đó và giữ bài cha cho các social còn lại.'
+                  : selectedAllRemoteTargets
+                    ? 'Nếu tất cả target trên nền tảng xóa thành công, bài sẽ bị xóa khỏi workspace và media không còn dùng sẽ được dọn.'
+                    : 'Xóa khỏi workspace, hủy lịch/job và dọn media không còn được bài nào dùng.'}
               </span>
             </span>
           </label>

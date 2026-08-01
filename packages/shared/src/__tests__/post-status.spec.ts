@@ -41,8 +41,16 @@ describe('deriveContentPostStatus', () => {
     expect(deriveContentPostStatus(['FAILED', 'CANCELLED'])).toBe('FAILED');
   });
 
-  it('tất cả bị hủy → CANCELLED', () => {
+  it('bản đã xóa không làm cả bài đăng kẹt lại', () => {
+    expect(deriveContentPostStatus(['PUBLISHED', 'DELETED'])).toBe('PUBLISHED');
+    expect(deriveContentPostStatus(['PUBLISHED', 'FAILED', 'DELETED'])).toBe('PARTIALLY_PUBLISHED');
+    expect(deriveContentPostStatus(['FAILED', 'DELETED'])).toBe('FAILED');
+  });
+
+  it('tất cả bị hủy/xóa → CANCELLED', () => {
     expect(deriveContentPostStatus(['CANCELLED', 'CANCELLED'])).toBe('CANCELLED');
+    expect(deriveContentPostStatus(['DELETED', 'DELETED'])).toBe('CANCELLED');
+    expect(deriveContentPostStatus(['CANCELLED', 'DELETED'])).toBe('CANCELLED');
   });
 
   it('luôn trả về một trạng thái hợp lệ với mọi tổ hợp 2 phần tử', () => {
@@ -67,9 +75,10 @@ describe('isRetryablePlatformPost', () => {
 });
 
 describe('isTerminalPlatformPostStatus', () => {
-  it('PUBLISHED và CANCELLED là trạng thái kết thúc', () => {
+  it('PUBLISHED, CANCELLED và DELETED là trạng thái kết thúc', () => {
     expect(isTerminalPlatformPostStatus('PUBLISHED')).toBe(true);
     expect(isTerminalPlatformPostStatus('CANCELLED')).toBe(true);
+    expect(isTerminalPlatformPostStatus('DELETED')).toBe(true);
   });
 
   it('FAILED KHÔNG phải trạng thái kết thúc — còn retry được', () => {

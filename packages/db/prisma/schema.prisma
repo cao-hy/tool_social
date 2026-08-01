@@ -64,6 +64,7 @@ enum PlatformPostStatus {
   PUBLISHED
   FAILED
   CANCELLED
+  DELETED
 }
 
 enum MediaType {

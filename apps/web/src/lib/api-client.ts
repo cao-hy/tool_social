@@ -9,6 +9,7 @@ import type {
   CommentNoteView,
   CommentView,
   ContentPostView,
+  DeletePostResult,
   MediaLibraryItem,
   MediaAssetView,
   NotificationView,
@@ -483,7 +484,7 @@ export const postsApi = {
       params.set('platformPostIds', options.platformPostIds.join(','));
     }
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
-    return apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/posts/${postId}${suffix}`, {
+    return apiFetch<DeletePostResult>(`/workspaces/${workspaceId}/posts/${postId}${suffix}`, {
       method: 'DELETE',
     });
   },

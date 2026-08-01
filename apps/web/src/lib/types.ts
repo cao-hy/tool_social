@@ -167,6 +167,29 @@ export interface TikTokCreatorInfoView {
   fetchedAt: string;
 }
 
+export interface DeletePlatformResult {
+  platformPostId: string;
+  platform: Platform;
+  socialAccountId: string;
+  socialAccountName: string;
+  externalPostId: string;
+  deleted: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface DeletePostResult {
+  deleted: boolean;
+  contentDeleted?: boolean;
+  platformOnlyDelete?: boolean;
+  remoteDeleteResults?: DeletePlatformResult[];
+  mediaCleanup?: {
+    deleted: number;
+    skipped?: number;
+    error?: string;
+  };
+}
+
 export interface PlatformCapabilitiesView {
   platform: Platform;
   label: string;

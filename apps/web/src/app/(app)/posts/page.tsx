@@ -42,7 +42,7 @@ import {
   formatMetricNumber,
   hasVisibleMetrics,
 } from '@/lib/post-metrics';
-import type { ContentPostView, SocialAccountView } from '@/lib/types';
+import type { ContentPostView, DeletePostResult, SocialAccountView } from '@/lib/types';
 
 const POST_STATUSES = [
   'DRAFT',
@@ -234,13 +234,20 @@ export default function PostsPage() {
     setDeleting(deleteTarget.id);
     setError(null);
     try {
-      await postsApi.delete(workspace.id, deleteTarget.id, {
+      const result = await postsApi.delete(workspace.id, deleteTarget.id, {
         deleteFromPlatforms: input.platformPostIds.length > 0,
         platformPostIds: input.platformPostIds,
       });
       setDeleteTarget(null);
       await loadPosts(cursorStack.at(-1));
-      toast.success('Đã xóa bài viết.');
+      const message = deleteResultMessage(result);
+      if (result.deleted) {
+        toast.success(message);
+      } else if (deleteResultFailures(result).length > 0) {
+        toast.warning(message);
+      } else {
+        toast.success(message);
+      }
     } catch (deleteError) {
       toast.error(getErrorMessage(deleteError));
     } finally {
@@ -315,14 +322,30 @@ export default function PostsPage() {
                 .filter((item) => item.status === 'PUBLISHED' && item.externalPostId)
                 .map((item) => item.id)
             : [];
-          await postsApi.delete(workspace.id, post.id, {
+          const result = await postsApi.delete(workspace.id, post.id, {
             deleteFromPlatforms: input.deleteFromPlatforms,
             platformPostIds,
           });
-          deleted += 1;
-          setBulkDeleteProgress((current) =>
-            current.map((item) => (item.postId === post.id ? { ...item, status: 'DONE' } : item)),
-          );
+          if (result.deleted) {
+            deleted += 1;
+            setBulkDeleteProgress((current) =>
+              current.map((item) => (item.postId === post.id ? { ...item, status: 'DONE' } : item)),
+            );
+          } else {
+            failed += 1;
+            failedPostIds.add(post.id);
+            setBulkDeleteProgress((current) =>
+              current.map((item) =>
+                item.postId === post.id
+                  ? {
+                      ...item,
+                      status: 'ERROR',
+                      errorMessage: deleteResultMessage(result),
+                    }
+                  : item,
+              ),
+            );
+          }
         } catch (deleteError) {
           failed += 1;
           failedPostIds.add(post.id);
@@ -811,6 +834,32 @@ function canDeletePostStatus(status: ContentPostView['status']) {
   return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
 }
 
+function deleteResultFailures(result: DeletePostResult) {
+  return result.remoteDeleteResults?.filter((item) => !item.deleted) ?? [];
+}
+
+function deleteResultMessage(result: DeletePostResult) {
+  const failures = deleteResultFailures(result);
+  const deletedTargets = result.remoteDeleteResults?.filter((item) => item.deleted).length ?? 0;
+  if (result.deleted) {
+    return deletedTargets > 0
+      ? `Đã xóa bài viết và ${deletedTargets} bản đăng trên nền tảng.`
+      : 'Đã xóa bài viết khỏi workspace.';
+  }
+  if (failures.length > 0) {
+    const failedNames = failures
+      .map((item) => `${item.platform} / ${item.socialAccountName}`)
+      .slice(0, 2)
+      .join(', ');
+    const suffix = failures.length > 2 ? ` và ${failures.length - 2} target khác` : '';
+    const partial = deletedTargets > 0 ? `Đã xóa ${deletedTargets} target, nhưng ` : '';
+    return `${partial}chưa xóa bài khỏi workspace vì lỗi ở ${failedNames}${suffix}.`;
+  }
+  return deletedTargets > 0
+    ? `Đã xóa ${deletedTargets} bản đăng đã chọn trên nền tảng. Bài trong workspace vẫn còn.`
+    : 'Không có bản đăng trên nền tảng nào được xóa.';
+}
+
 function IconButton({
   label,
   children,
@@ -1057,7 +1106,7 @@ function BulkDeletePostsDialog({
             <span>
               <span className="block font-semibold text-slate-950">Xóa ở server / workspace</span>
               <span className="block text-slate-500">
-                Xóa khỏi danh sách quản lý, hủy lịch, dọn job publish và xóa media không còn dùng.
+                Xóa khỏi danh sách quản lý, hủy lịch/job và dọn media không còn dùng.
               </span>
             </span>
           </label>
@@ -1075,7 +1124,8 @@ function BulkDeletePostsDialog({
                 Xóa cả trên nền tảng ({remoteTargetCount} bản đã publish)
               </span>
               <span className="block text-slate-500">
-                Chỉ áp dụng với nền tảng có API xóa bài. Nếu nền tảng từ chối, bài đó sẽ báo lỗi.
+                Nếu bật mục này, từng bài chỉ bị xóa khỏi workspace sau khi mọi target social của
+                bài đó xóa thành công.
               </span>
             </span>
           </label>
@@ -1355,6 +1405,8 @@ function postStatusLabel(status: string) {
     PARTIALLY_PUBLISHED: 'Đăng một phần',
     FAILED: 'Lỗi',
     PENDING: 'Đang chờ',
+    CANCELLED: 'Đã hủy',
+    DELETED: 'Đã xóa',
   };
   return labels[status] ?? status;
 }

@@ -301,21 +301,90 @@ export class PostsService implements OnModuleDestroy {
       throw AppError.conflict('Bài này không ở trạng thái có thể xóa.');
     }
 
+    const requestedPlatformPostIds =
+      options.platformPostIds === undefined
+        ? null
+        : new Set(options.platformPostIds.filter(Boolean));
+    const publishedRemoteTargets = post.platformPosts.filter(
+      (item) => item.status === 'PUBLISHED' && item.externalPostId,
+    );
     const remoteDeletePlatformPostIds =
       deletePublished && options.deleteFromPlatforms !== false
-        ? (options.platformPostIds ??
-          post.platformPosts
-            .filter((item) => item.status === 'PUBLISHED' && item.externalPostId)
-            .map((item) => item.id))
+        ? (options.platformPostIds ?? publishedRemoteTargets.map((item) => item.id))
         : [];
+    const platformOnlyDelete =
+      requestedPlatformPostIds !== null &&
+      requestedPlatformPostIds.size > 0 &&
+      remoteDeletePlatformPostIds.length < publishedRemoteTargets.length;
+
+    const remoteDeleteResults =
+      remoteDeletePlatformPostIds.length > 0
+        ? await this.deletePublishedPlatformPosts(
+            post,
+            auditContext.requestId,
+            remoteDeletePlatformPostIds,
+          )
+        : [];
+    const remoteDeletedPlatformPostIds = remoteDeleteResults
+      .filter((result) => result.deleted)
+      .map((result) => result.platformPostId);
+    const remoteFailedResults = remoteDeleteResults.filter((result) => !result.deleted);
+
+    if (remoteDeletedPlatformPostIds.length > 0) {
+      await this.prisma.platformPost.updateMany({
+        where: {
+          id: { in: remoteDeletedPlatformPostIds },
+          workspaceId,
+          contentPostId: postId,
+        },
+        data: {
+          status: 'DELETED',
+          errorCode: null,
+          errorMessage: null,
+        },
+      });
+    }
+
+    if (platformOnlyDelete || remoteFailedResults.length > 0) {
+      await this.updateParentStatus(postId);
+      const mediaCleanup = await this.deleteUnusedPostMedia(
+        workspaceId,
+        candidateMediaAssetIds,
+        auditContext.requestId ?? 'manual',
+      );
+
+      await this.audit.record({
+        ...auditContext,
+        actorUserId,
+        workspaceId,
+        action: 'POST_DELETED',
+        resourceType: 'ContentPost',
+        resourceId: postId,
+        metadata: {
+          previousStatus: post.status,
+          contentDeleted: false,
+          platformOnlyDelete,
+          remoteDeleteResults,
+          mediaCleanup,
+        },
+      });
+
+      return {
+        deleted: false,
+        contentDeleted: false,
+        platformOnlyDelete,
+        remoteDeleteResults,
+        mediaCleanup,
+      };
+    }
 
     await this.removeScheduledJobs(post.id, workspaceId, auditContext.requestId);
     if (remoteDeletePlatformPostIds.length > 0) {
-      await this.deletePublishedPlatformPosts(
-        post,
-        auditContext.requestId,
-        remoteDeletePlatformPostIds,
-      );
+      const deletedIdSet = new Set(remoteDeletedPlatformPostIds);
+      const missingDeletedIds = remoteDeletePlatformPostIds.filter((id) => !deletedIdSet.has(id));
+      if (missingDeletedIds.length > 0) {
+        throw AppError.conflict('Một hoặc nhiều social chưa được xóa thành công.');
+      }
     }
 
     await this.prisma.$transaction([
@@ -336,6 +405,18 @@ export class PostsService implements OnModuleDestroy {
         },
         data: { status: 'CANCELLED' },
       }),
+      ...(remoteDeletedPlatformPostIds.length > 0
+        ? [
+            this.prisma.platformPost.updateMany({
+              where: {
+                id: { in: remoteDeletedPlatformPostIds },
+                workspaceId,
+                contentPostId: postId,
+              },
+              data: { status: 'DELETED', errorCode: null, errorMessage: null },
+            }),
+          ]
+        : []),
       this.prisma.postSchedule.updateMany({
         where: { contentPostId: postId },
         data: { cancelledAt: new Date() },
@@ -359,10 +440,20 @@ export class PostsService implements OnModuleDestroy {
       action: 'POST_DELETED',
       resourceType: 'ContentPost',
       resourceId: postId,
-      metadata: { previousStatus: post.status, mediaCleanup },
+      metadata: {
+        previousStatus: post.status,
+        contentDeleted: true,
+        remoteDeleteResults,
+        mediaCleanup,
+      },
     });
 
-    return { deleted: true, mediaCleanup };
+    return {
+      deleted: true,
+      contentDeleted: true,
+      remoteDeleteResults,
+      mediaCleanup,
+    };
   }
 
   async bulkDeletePosts(
@@ -381,14 +472,24 @@ export class PostsService implements OnModuleDestroy {
 
     for (const postId of uniquePostIds) {
       try {
-        await this.deletePost(
+        const result = await this.deletePost(
           workspaceId,
           postId,
           actorUserId,
           { deleteFromPlatforms: input.deleteFromPlatforms },
           auditContext,
         );
-        results.push({ postId, deleted: true });
+        if (result.deleted) {
+          results.push({ postId, deleted: true });
+        } else {
+          results.push({
+            postId,
+            deleted: false,
+            errorCode: 'PARTIAL_DELETE',
+            errorMessage:
+              'Chưa xóa bài khỏi workspace vì một hoặc nhiều social chưa xóa thành công.',
+          });
+        }
       } catch (error) {
         results.push({
           postId,
@@ -1526,7 +1627,7 @@ export class PostsService implements OnModuleDestroy {
     post: Awaited<ReturnType<typeof this.findPost>>,
     correlationId = 'manual',
     platformPostIds?: string[],
-  ): Promise<void> {
+  ): Promise<PlatformDeleteResult[]> {
     const selectedIds = platformPostIds ? new Set(platformPostIds) : null;
     const targets = post.platformPosts.filter(
       (item) =>
@@ -1534,41 +1635,64 @@ export class PostsService implements OnModuleDestroy {
         item.externalPostId &&
         (!selectedIds || selectedIds.has(item.id)),
     );
-    if (targets.length === 0) return;
+    if (targets.length === 0) return [];
 
     const adapters = await this.adapterFactory.forWorkspace(post.workspaceId);
-    const operations = targets.map((platformPost) => {
-      const adapter = adapters.requireCapability(
-        platformPost.platform as Platform,
-        'deletePublishedPost',
-      );
-      if (!adapter.deletePost) {
-        throw AppError.capabilityUnsupported(
+    const results: PlatformDeleteResult[] = [];
+
+    for (const platformPost of targets) {
+      const baseResult = {
+        platformPostId: platformPost.id,
+        platform: platformPost.platform as Platform,
+        socialAccountId: platformPost.socialAccountId,
+        socialAccountName: platformPost.socialAccount.name,
+        externalPostId: platformPost.externalPostId as string,
+      };
+
+      try {
+        const adapter = adapters.requireCapability(
           platformPost.platform as Platform,
           'deletePublishedPost',
         );
-      }
-      if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
-        throw AppError.conflict(
-          `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
-        );
-      }
-      return { platformPost, adapter };
-    });
+        if (!adapter.deletePost) {
+          throw AppError.capabilityUnsupported(
+            platformPost.platform as Platform,
+            'deletePublishedPost',
+          );
+        }
+        if (
+          !platformPost.socialAccount.token ||
+          platformPost.socialAccount.status !== 'CONNECTED'
+        ) {
+          throw AppError.conflict(
+            `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
+          );
+        }
 
-    for (const { platformPost, adapter } of operations) {
-      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-      await adapter.deletePost?.(
-        {
-          accessToken,
-          externalAccountId: platformPost.socialAccount.externalAccountId,
-          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-          correlationId,
-          logger,
-        },
-        platformPost.externalPostId as string,
-      );
+        const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+        await adapter.deletePost(
+          {
+            accessToken,
+            externalAccountId: platformPost.socialAccount.externalAccountId,
+            externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+            correlationId,
+            logger,
+          },
+          platformPost.externalPostId as string,
+        );
+        results.push({ ...baseResult, deleted: true });
+      } catch (error) {
+        results.push({
+          ...baseResult,
+          deleted: false,
+          errorCode: deleteErrorCode(error),
+          errorMessage:
+            error instanceof Error ? error.message : 'Không xóa được bài trên nền tảng.',
+        });
+      }
     }
+
+    return results;
   }
 
   private async updatePublishedOverrides(
@@ -1778,6 +1902,17 @@ interface TikTokStatusAdapter {
   cancelPublish?(ctx: AdapterContext, publishId: string): Promise<void>;
 }
 
+interface PlatformDeleteResult {
+  platformPostId: string;
+  platform: Platform;
+  socialAccountId: string;
+  socialAccountName: string;
+  externalPostId: string;
+  deleted: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
 function hasYouTubeStatusMethods(
   adapter: SocialPlatformAdapter,
 ): adapter is SocialPlatformAdapter & YouTubeStatusAdapter {
@@ -1800,6 +1935,12 @@ function jsonObject(value: unknown): Record<string, unknown> | undefined {
 }
 
 function errorCodeForBulkDelete(error: unknown): string {
+  if (isAppError(error)) return error.code;
+  if (isPlatformError(error)) return error.kind;
+  return 'UNKNOWN';
+}
+
+function deleteErrorCode(error: unknown): string {
   if (isAppError(error)) return error.code;
   if (isPlatformError(error)) return error.kind;
   return 'UNKNOWN';

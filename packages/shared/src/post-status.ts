@@ -28,6 +28,7 @@ export const PLATFORM_POST_STATUSES = [
   'PUBLISHED',
   'FAILED',
   'CANCELLED',
+  'DELETED',
 ] as const;
 
 export type PlatformPostStatus = (typeof PLATFORM_POST_STATUSES)[number];
@@ -50,13 +51,13 @@ export function deriveContentPostStatus(children: readonly PlatformPostStatus[])
   const has = (s: PlatformPostStatus): boolean => children.includes(s);
   const every = (s: PlatformPostStatus): boolean => children.every((c) => c === s);
 
-  if (every('CANCELLED')) return 'CANCELLED';
+  if (children.every((c) => c === 'CANCELLED' || c === 'DELETED')) return 'CANCELLED';
   if (every('PUBLISHED')) return 'PUBLISHED';
   if (every('FAILED')) return 'FAILED';
 
-  // Bỏ qua các bản đã hủy khi xét "tất cả xong chưa" — hủy một nền tảng
+  // Bỏ qua các bản đã hủy/xóa khi xét "tất cả xong chưa" — hủy/xóa một nền tảng
   // không được làm cả bài đăng kẹt ở trạng thái đang xử lý.
-  const active = children.filter((c) => c !== 'CANCELLED');
+  const active = children.filter((c) => c !== 'CANCELLED' && c !== 'DELETED');
   if (active.length === 0) return 'CANCELLED';
 
   const settled = active.every((c) => c === 'PUBLISHED' || c === 'FAILED');
@@ -76,6 +77,7 @@ export function deriveContentPostStatus(children: readonly PlatformPostStatus[])
 export const TERMINAL_PLATFORM_POST_STATUSES: readonly PlatformPostStatus[] = [
   'PUBLISHED',
   'CANCELLED',
+  'DELETED',
 ];
 
 export function isTerminalPlatformPostStatus(status: PlatformPostStatus): boolean {

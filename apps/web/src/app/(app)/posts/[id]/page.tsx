@@ -27,6 +27,7 @@ import {
 } from '@/lib/post-metrics';
 import type {
   ContentPostView,
+  DeletePostResult,
   MediaAssetView,
   PlatformPostView,
   PublishNetworkProof,
@@ -107,13 +108,23 @@ export default function PostDetailPage() {
     setDeleting(true);
     setError(null);
     try {
-      await postsApi.delete(workspace.id, post.id, {
+      const result = await postsApi.delete(workspace.id, post.id, {
         deleteFromPlatforms: input.platformPostIds.length > 0,
         platformPostIds: input.platformPostIds,
       });
       setDeleteTarget(null);
-      toast.success('Đã xóa bài viết.');
-      router.push('/posts');
+      const message = deleteResultMessage(result);
+      if (result.deleted) {
+        toast.success(message);
+        router.push('/posts');
+      } else {
+        await loadPost();
+        if (deleteResultFailures(result).length > 0) {
+          toast.warning(message);
+        } else {
+          toast.success(message);
+        }
+      }
     } catch (deleteError) {
       toast.error(getErrorMessage(deleteError));
     } finally {
@@ -658,7 +669,11 @@ function StatusBadge({ status }: { status: string }) {
           ? 'bg-amber-50 text-amber-700'
           : 'bg-slate-100 text-slate-600';
 
-  return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span>;
+  return (
+    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>
+      {postStatusLabel(status)}
+    </span>
+  );
 }
 
 function postStatusLabel(status: string) {
@@ -671,6 +686,8 @@ function postStatusLabel(status: string) {
     PARTIALLY_PUBLISHED: 'Đăng một phần',
     FAILED: 'Lỗi',
     CANCELLED: 'Đã hủy',
+    DELETED: 'Đã xóa',
+    PENDING: 'Đang chờ',
   };
   return labels[status] ?? status;
 }
@@ -693,6 +710,32 @@ function formatBytes(bytes: number): string {
 
 function canDeletePostStatus(status: ContentPostView['status']) {
   return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
+}
+
+function deleteResultFailures(result: DeletePostResult) {
+  return result.remoteDeleteResults?.filter((item) => !item.deleted) ?? [];
+}
+
+function deleteResultMessage(result: DeletePostResult) {
+  const failures = deleteResultFailures(result);
+  const deletedTargets = result.remoteDeleteResults?.filter((item) => item.deleted).length ?? 0;
+  if (result.deleted) {
+    return deletedTargets > 0
+      ? `Đã xóa bài viết và ${deletedTargets} bản đăng trên nền tảng.`
+      : 'Đã xóa bài viết khỏi workspace.';
+  }
+  if (failures.length > 0) {
+    const failedNames = failures
+      .map((item) => `${item.platform} / ${item.socialAccountName}`)
+      .slice(0, 2)
+      .join(', ');
+    const suffix = failures.length > 2 ? ` và ${failures.length - 2} target khác` : '';
+    const partial = deletedTargets > 0 ? `Đã xóa ${deletedTargets} target, nhưng ` : '';
+    return `${partial}chưa xóa bài khỏi workspace vì lỗi ở ${failedNames}${suffix}.`;
+  }
+  return deletedTargets > 0
+    ? `Đã xóa ${deletedTargets} bản đăng đã chọn trên nền tảng. Bài trong workspace vẫn còn.`
+    : 'Không có bản đăng trên nền tảng nào được xóa.';
 }
 
 function IconButton({

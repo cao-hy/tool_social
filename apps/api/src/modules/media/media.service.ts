@@ -551,6 +551,7 @@ export class MediaService implements OnModuleDestroy {
           mediaAssetId: { in: uniqueIds },
           platformPost: {
             workspaceId,
+            status: { not: 'DELETED' },
             contentPost: { deletedAt: null },
           },
         },
