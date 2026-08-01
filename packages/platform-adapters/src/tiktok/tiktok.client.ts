@@ -319,7 +319,7 @@ export class TikTokClient {
             'content-length': String(chunk.byteLength),
             'content-range': `bytes ${firstByte}-${lastByte}/${total}`,
           },
-          body: new Blob([chunk], { type: input.mimeType }),
+          body: chunk,
           signal: AbortSignal.timeout(600000),
         });
       } catch (error) {

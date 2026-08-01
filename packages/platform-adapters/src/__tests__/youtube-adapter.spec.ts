@@ -124,7 +124,8 @@ describe('YouTubeAdapter', () => {
           'content-length': '3',
           'content-type': 'video/mp4',
         });
-        expect(init?.body).toBeInstanceOf(Blob);
+        expect(init?.body).toBeInstanceOf(Uint8Array);
+        expect(init?.body).toEqual(new Uint8Array([1, 2, 3]));
         return jsonResponse(
           {
             id: 'video-1',

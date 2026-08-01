@@ -197,10 +197,12 @@ describe('FacebookPagesAdapter', () => {
         expect(init?.headers).toMatchObject({
           'content-type': expect.stringContaining('multipart/form-data; boundary='),
         });
-        const body = init?.body as Blob;
-        expect(body).toBeInstanceOf(Blob);
-        expect((init?.headers as Record<string, string>)['content-length']).toBe(String(body.size));
-        const text = new TextDecoder().decode(await body.arrayBuffer());
+        const body = init?.body as Uint8Array;
+        expect(body).toBeInstanceOf(Uint8Array);
+        expect((init?.headers as Record<string, string>)['content-length']).toBe(
+          String(body.byteLength),
+        );
+        const text = new TextDecoder().decode(body);
         expect(text).toContain('name="caption"');
         expect(text).toContain('hello');
         expect(text).toContain('name="published"');

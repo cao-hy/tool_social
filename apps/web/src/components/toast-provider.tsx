@@ -70,7 +70,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="fixed bottom-4 right-4 z-[80] grid w-[min(380px,calc(100vw-2rem))] gap-3">
+      <div className="fixed right-4 top-4 z-[80] grid w-[min(380px,calc(100vw-2rem))] gap-3">
         {toasts.map((toast) => (
           <ToastCard key={toast.id} toast={toast} onDismiss={() => dismiss(toast.id)} />
         ))}

@@ -131,7 +131,8 @@ describe('TikTokAdapter', () => {
           'content-length': '3',
           'content-range': 'bytes 0-2/3',
         });
-        expect(init?.body).toBeInstanceOf(Blob);
+        expect(init?.body).toBeInstanceOf(Uint8Array);
+        expect(init?.body).toEqual(new Uint8Array([1, 2, 3]));
         return new Response(null, { status: 201 });
       }
       throw new Error(`Unexpected request: ${url.toString()}`);

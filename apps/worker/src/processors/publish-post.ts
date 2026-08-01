@@ -397,7 +397,7 @@ async function capturePublishNetworkProof(
     proxyEnabled: proxyConfig.enabled,
     proxyAvailable: status.proxyAvailable,
     proxyActive: status.proxyActive,
-    countryLock: proxyConfig.countryLock,
+    countryLock: proxyConfig.enabled ? proxyConfig.countryLock : null,
     countryLockSatisfied: status.countryLockSatisfied,
   };
 }

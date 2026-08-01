@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, useRef, type ReactNode } from 'react';
 import {
   BarChart2,
   Bell,
@@ -62,10 +62,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [notificationsUpdating, setNotificationsUpdating] = useState<string | null>(null);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [isHeaderHidden, setIsHeaderHidden] = useState(false);
+  const lastScrollY = useRef(0);
 
   useEffect(() => {
     if (!auth.loading && !auth.user) router.replace('/login');
   }, [auth.loading, auth.user, router]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      if (currentScrollY > lastScrollY.current && currentScrollY > 50) {
+        setIsHeaderHidden(true);
+      } else {
+        setIsHeaderHidden(false);
+      }
+      lastScrollY.current = currentScrollY;
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
 
   useEffect(() => {
     if (!auth.activeWorkspaceId) return;
@@ -355,7 +371,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       </aside>
 
       <main className="min-w-0 bg-slate-50">
-        <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 px-5 py-3 shadow-sm backdrop-blur sm:px-8 lg:px-10">
+        <header
+          className={`sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 px-5 py-3 shadow-sm backdrop-blur sm:px-8 lg:px-10 transition-transform duration-300 ${isHeaderHidden ? '-translate-y-full' : 'translate-y-0'}`}
+        >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { EnvHttpProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { ProxyConfig } from '@socialhub/shared';
 
 const CONFIG_FILE_NAME = '.proxy-config.json';
@@ -106,14 +106,17 @@ export function applyProxyConfig(config: ProxyConfig): void {
 }
 
 export function hasOutboundProxyConfigured(): boolean {
-  return Boolean(process.env.HTTP_PROXY?.trim() || process.env.HTTPS_PROXY?.trim());
+  return Boolean(getConfiguredProxyUrl());
 }
 
 export function createProxyAwareFetch(): typeof fetch {
   return async (input, init) => {
     const config = readProxyConfig();
     if (!config.enabled || !hasOutboundProxyConfigured()) {
-      return fetch(input, init);
+      return undiciFetch(
+        input as Parameters<typeof undiciFetch>[0],
+        init as Parameters<typeof undiciFetch>[1],
+      ) as unknown as Promise<Response>;
     }
 
     return undiciFetch(
@@ -131,6 +134,7 @@ export async function checkProxyAwareNetwork(
   fetchImpl: typeof fetch = createProxyAwareFetch(),
 ): Promise<ProxyAwareNetworkStatus> {
   const proxyAvailable = hasOutboundProxyConfigured();
+  const activeCountryLock = proxyConfig.enabled ? proxyConfig.countryLock : null;
   const base = {
     checkedAt: new Date().toISOString(),
     proxyConfig,
@@ -158,7 +162,7 @@ export async function checkProxyAwareNetwork(
         checkOk: true,
         checkError: null,
         checkErrors: [],
-        countryLockSatisfied: !proxyConfig.countryLock || countryCode === proxyConfig.countryLock,
+        countryLockSatisfied: !activeCountryLock || countryCode === activeCountryLock,
       };
     } catch (error) {
       errors.push(`${provider.name}: ${formatError(error)}`);
@@ -176,7 +180,7 @@ export async function checkProxyAwareNetwork(
     checkOk: false,
     checkError: errors.at(-1) ?? 'Không gọi được provider kiểm tra IP',
     checkErrors: errors,
-    countryLockSatisfied: !proxyConfig.countryLock,
+    countryLockSatisfied: !activeCountryLock,
   };
 }
 
@@ -202,7 +206,11 @@ export function initProxyWatcher(onConfigChanged?: (config: ProxyConfig) => void
 
 export function resolveProxyConfigPath(): string {
   const explicitPath = process.env.PROXY_CONFIG_PATH?.trim();
-  if (explicitPath) return path.resolve(explicitPath);
+  if (explicitPath) {
+    return path.isAbsolute(explicitPath)
+      ? explicitPath
+      : path.join(findWorkspaceRoot(), explicitPath);
+  }
   return path.join(findWorkspaceRoot(), CONFIG_FILE_NAME);
 }
 
@@ -215,11 +223,17 @@ function readProxyConfigFromEnv(): ProxyConfig {
 
 function getProxyAgent(): Dispatcher {
   const proxyUrl = getConfiguredProxyUrl();
-  const agentKey = proxyUrl ?? 'env-http-proxy';
+  if (!proxyUrl) {
+    throw new Error('HTTP_PROXY/HTTPS_PROXY chưa được cấu hình.');
+  }
+
+  const agentKey = proxyUrl;
   if (proxyAgent && proxyAgentKey === agentKey) return proxyAgent;
 
   proxyAgentKey = agentKey;
-  proxyAgent = isSocksProxyUrl(proxyUrl) ? new Socks5ProxyAgent(proxyUrl) : new EnvHttpProxyAgent();
+  proxyAgent = isSocksProxyUrl(proxyUrl)
+    ? new Socks5ProxyAgent(proxyUrl)
+    : new ProxyAgent(proxyUrl);
   return proxyAgent;
 }
 

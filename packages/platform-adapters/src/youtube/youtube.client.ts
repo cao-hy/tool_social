@@ -447,7 +447,7 @@ export class YouTubeClient {
           'content-length': String(input.bytes.byteLength),
           'content-type': input.mimeType,
         },
-        body: new Blob([input.bytes], { type: input.mimeType }),
+        body: input.bytes,
         signal: AbortSignal.timeout(600000),
       });
     } catch (error) {

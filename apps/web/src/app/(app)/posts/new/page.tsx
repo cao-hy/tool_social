@@ -1,7 +1,7 @@
 'use client';
 
 import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -66,6 +66,7 @@ export default function NewPostPage() {
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState<'draft' | 'publish' | 'schedule' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     if (!workspace) return;
@@ -662,28 +663,44 @@ export default function NewPostPage() {
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4">
-          <h2 className="text-sm font-semibold text-slate-950">Bản xem nhanh</h2>
-          <div className="mt-3 rounded-md border border-slate-200 p-3">
-            <p className="text-sm font-semibold text-slate-900">{title || 'Untitled post'}</p>
-            <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-              {body || 'Nội dung bài đăng sẽ hiện ở đây.'}
-            </p>
-            {hashtags ? (
-              <p className="mt-3 text-sm text-brand-700">
-                {payload()
-                  .hashtags.map((item) => `#${item}`)
-                  .join(' ')}
-              </p>
-            ) : null}
-            {mediaAssets.length > 0 ? (
-              <div className="mt-3 grid gap-2">
-                {mediaAssets.map((asset) => (
-                  <MediaPreview key={asset.id} asset={asset} className="max-h-48" />
-                ))}
+        <section className="rounded-lg border border-slate-200 bg-white flex flex-col xl:max-h-[calc(100vh-24rem)] overflow-hidden">
+          <button
+            type="button"
+            className="flex items-center justify-between p-4 focus:outline-none"
+            onClick={() => setShowPreview(!showPreview)}
+          >
+            <h2 className="text-sm font-semibold text-slate-950 shrink-0">Bản xem nhanh</h2>
+            {showPreview ? (
+              <ChevronUp className="h-5 w-5 text-slate-500" />
+            ) : (
+              <ChevronDown className="h-5 w-5 text-slate-500" />
+            )}
+          </button>
+
+          {showPreview && (
+            <div className="px-4 pb-4 overflow-y-auto border-t border-slate-100">
+              <div className="mt-2 rounded-md border border-slate-200 p-3">
+                <p className="text-sm font-semibold text-slate-900">{title || 'Untitled post'}</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
+                  {body || 'Nội dung bài đăng sẽ hiện ở đây.'}
+                </p>
+                {hashtags ? (
+                  <p className="mt-3 text-sm text-brand-700">
+                    {payload()
+                      .hashtags.map((item) => `#${item}`)
+                      .join(' ')}
+                  </p>
+                ) : null}
+                {mediaAssets.length > 0 ? (
+                  <div className="mt-3 grid gap-2">
+                    {mediaAssets.map((asset) => (
+                      <MediaPreview key={asset.id} asset={asset} className="max-h-48" />
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
+            </div>
+          )}
         </section>
 
         <div className="grid gap-2">

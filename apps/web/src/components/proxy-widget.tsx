@@ -128,9 +128,11 @@ export function ProxyWidget({
   const isProxyActive = status.proxyActive;
   const isProxyMissing = isProxyEnabled && !status.proxyAvailable;
   const isNetworkUnknown = !status.checkOk;
-  const isLocked = !!status.proxyConfig.countryLock;
-  const pendingCountryLockEnabled = !!pendingConfig?.countryLock;
-  const pendingCountryLock = pendingConfig?.countryLock ?? status.countryCode ?? 'US';
+  const isActiveLocked = isProxyEnabled && !!status.proxyConfig.countryLock;
+  const savedCountryLock = status.proxyConfig.countryLock;
+  const pendingCountryLockEnabled = !!pendingConfig?.enabled && !!pendingConfig.countryLock;
+  const pendingCountryLock =
+    pendingConfig?.countryLock ?? savedCountryLock ?? status.countryCode ?? 'US';
   const selectedCountry = getCountryOption(pendingCountryLock);
   const hasPendingChanges =
     pendingConfig?.enabled !== status.proxyConfig.enabled ||
@@ -237,7 +239,9 @@ export function ProxyWidget({
               />
             </label>
             <label className="block text-sm">
-              <span className="mb-1 block text-slate-700">Quốc gia cần khóa</span>
+              <span className="mb-1 block text-slate-700">
+                {pendingConfig?.enabled ? 'Quốc gia cần khóa' : 'Quốc gia đã lưu'}
+              </span>
               <button
                 type="button"
                 onClick={() => setCountryMenuOpen((value) => !value)}
@@ -280,12 +284,14 @@ export function ProxyWidget({
               : isNetworkUnknown
                 ? `Không kiểm tra được IP hiện tại${
                     status.checkError ? `: ${status.checkError}` : ''
-                  }. Khi bật khóa quốc gia, worker sẽ từ chối publish nếu không xác minh được IP.`
-                : isLocked && !status.countryLockSatisfied
+                  }. Khi proxy và khóa quốc gia cùng bật, worker sẽ từ chối publish nếu không xác minh được IP.`
+                : isActiveLocked && !status.countryLockSatisfied
                   ? `IP hiện tại không khớp khóa ${status.proxyConfig.countryLock}; worker sẽ từ chối đăng bài.`
-                  : isLocked
+                  : isActiveLocked
                     ? `Nếu IP bị đổi khỏi ${status.proxyConfig.countryLock}, hệ thống sẽ từ chối đăng bài.`
-                    : 'Khóa quốc gia chỉ kiểm tra IP hiện tại; nó không tự đổi vị trí proxy.'}
+                    : savedCountryLock
+                      ? `Proxy đang tắt; ${savedCountryLock} chỉ là target đã lưu cho lần bật sau.`
+                      : 'Khóa quốc gia chỉ kiểm tra IP hiện tại; nó không tự đổi vị trí proxy.'}
           </div>
           {isNetworkUnknown && status.checkErrors.length > 0 ? (
             <div className="mt-2 rounded-md bg-amber-50 px-2 py-2 text-[11px] text-amber-800">

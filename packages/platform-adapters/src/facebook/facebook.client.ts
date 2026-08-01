@@ -397,7 +397,7 @@ export class FacebookGraphClient {
           'content-type': body.contentType,
           'content-length': String(body.body.byteLength),
         },
-        body: new Blob([body.body], { type: body.contentType }),
+        body: body.body,
         signal: AbortSignal.timeout(120000),
       });
     } catch (error) {

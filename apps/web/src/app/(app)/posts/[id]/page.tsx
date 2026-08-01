@@ -576,8 +576,8 @@ function YouTubeStatePanel({
 function StateRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-3">
-      <span className="text-slate-500">{label}</span>
-      <span className="text-right font-medium text-slate-900">{value}</span>
+      <span className="shrink-0 text-slate-500">{label}</span>
+      <span className="break-all text-right font-medium text-slate-900">{value}</span>
     </div>
   );
 }
@@ -1143,6 +1143,9 @@ function PublishNetworkPanel({ state }: { state: PlatformPostView['platformState
   return (
     <div className={`rounded-md border p-3 text-xs ${tone}`}>
       <p className="font-semibold uppercase">Publish network proof</p>
+      <p className="mt-1 text-xs opacity-80">
+        Snapshot lúc bài này được publish, không phải trạng thái proxy hiện tại.
+      </p>
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <StateRow label="IP publish" value={network.ip ?? '-'} />
         <StateRow label="Quốc gia" value={network.countryCode ?? '-'} />
