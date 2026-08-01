@@ -11,7 +11,12 @@ import { getErrorMessage } from '@/lib/errors';
 
 type ProxyPolicyView = {
   generatedAt: string;
-  proxyConfig: { enabled: boolean; countryLock: string | null };
+  proxyConfig: {
+    enabled: boolean;
+    countryLock: string | null;
+    proxyUrlMasked?: string | null;
+    source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
+  };
   proxyAvailable: boolean;
   summary: { total: number; proxied: number; direct: number };
   items: NetworkProxyPolicyItem[];
@@ -119,9 +124,13 @@ export default function NetworkPolicyPage() {
             detail={
               !isProxyEnabled
                 ? 'Hệ thống đang bỏ qua Proxy'
-                : policy?.proxyConfig.countryLock
-                  ? `Đang lock IP: ${policy.proxyConfig.countryLock}`
-                  : 'IP linh hoạt toàn cầu'
+                : policy?.proxyConfig.source === 'WORKSPACE'
+                  ? (policy.proxyConfig.proxyUrlMasked ?? 'Proxy riêng workspace')
+                  : policy?.proxyConfig.source === 'ENV'
+                    ? 'Đang dùng proxy fallback từ env'
+                    : policy?.proxyConfig.countryLock
+                      ? `Đang lock IP: ${policy.proxyConfig.countryLock}`
+                      : 'IP linh hoạt toàn cầu'
             }
             tone={!isProxyEnabled ? 'direct' : policy?.proxyAvailable ? 'proxy' : 'warn'}
           />
@@ -141,7 +150,7 @@ export default function NetworkPolicyPage() {
               <details
                 key={category}
                 className="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-all open:ring-1 open:ring-slate-900/5"
-                defaultOpen
+                open
               >
                 <summary className="list-none [&::-webkit-details-marker]:hidden flex cursor-pointer select-none items-center justify-between bg-white px-6 py-5 text-slate-900 transition-colors hover:bg-slate-50 group-open:border-b group-open:border-slate-100">
                   <div className="flex items-center gap-4">

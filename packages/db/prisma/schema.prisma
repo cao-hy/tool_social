@@ -287,9 +287,34 @@ model Workspace {
   replyTemplates ReplyTemplate[]
   commentTags    CommentTag[]
   backgroundJobs BackgroundJob[]
+  proxySetting   WorkspaceProxySetting?
 
   @@index([slug])
   @@index([deletedAt])
+}
+
+model WorkspaceProxySetting {
+  id          String  @id @default(cuid())
+  workspaceId String  @unique
+
+  enabled       Boolean @default(false)
+  proxyUrl      String? @db.Text
+  proxyUrlMasked String?
+  countryLock   String?
+
+  lastCheckedAt    DateTime?
+  lastCheckStatus  String?
+  lastIp           String?
+  lastCountryCode  String?
+  lastCheckError   String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([enabled])
 }
 
 model WorkspaceMember {

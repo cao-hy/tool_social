@@ -7,6 +7,7 @@ import {
   type PlatformCapabilityTable,
 } from '@socialhub/platform-adapters';
 import { PLATFORMS, type Capability, type Platform } from '@socialhub/shared';
+import { Keyring } from '@socialhub/security';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter';
@@ -19,6 +20,7 @@ import { PlatformsController } from '../modules/platforms/platforms.controller';
 import { PrismaService } from '../infrastructure/prisma/prisma.service';
 import { RedisService } from '../infrastructure/redis/redis.service';
 import { ENV } from '../infrastructure/env.provider';
+import { KEYRING } from '../infrastructure/tokens';
 import { AuditService } from '../modules/audit/audit.service';
 
 /**
@@ -38,9 +40,23 @@ describe('Health & Platforms (e2e)', () => {
       controllers: [HealthController, PlatformsController, SystemController],
       providers: [
         HealthService,
-        { provide: PrismaService, useValue: { ping: prismaPing } },
+        {
+          provide: PrismaService,
+          useValue: {
+            ping: prismaPing,
+            workspaceProxySetting: {
+              findUnique: vi.fn().mockResolvedValue(null),
+              update: vi.fn().mockResolvedValue(null),
+              upsert: vi.fn().mockResolvedValue(null),
+            },
+          },
+        },
         { provide: RedisService, useValue: { ping: redisPing } },
         { provide: ENV, useValue: { SESSION_COOKIE_NAME: 'socialhub.sid' } },
+        {
+          provide: KEYRING,
+          useValue: Keyring.fromEnv(`v1:${Keyring.generateKey()}`, 'v1'),
+        },
         { provide: AuditService, useValue: { record: vi.fn() } },
         { provide: APP_FILTER, useClass: AllExceptionsFilter },
         { provide: APP_INTERCEPTOR, useClass: ResponseInterceptor },

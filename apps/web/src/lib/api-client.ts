@@ -115,7 +115,12 @@ export const systemApi = {
       checkOk: boolean;
       checkError: string | null;
       checkErrors: string[];
-      proxyConfig: { enabled: boolean; countryLock: string | null };
+      proxyConfig: {
+        enabled: boolean;
+        countryLock: string | null;
+        proxyUrlMasked?: string | null;
+        source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
+      };
       proxyAvailable: boolean;
       proxyActive: boolean;
       countryLockSatisfied: boolean;
@@ -123,19 +128,29 @@ export const systemApi = {
   getProxyPolicy: (workspaceId: string) =>
     apiFetch<{
       generatedAt: string;
-      proxyConfig: { enabled: boolean; countryLock: string | null };
+      proxyConfig: {
+        enabled: boolean;
+        countryLock: string | null;
+        proxyUrlMasked?: string | null;
+        source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
+      };
       proxyAvailable: boolean;
       summary: { total: number; proxied: number; direct: number };
       items: NetworkProxyPolicyItem[];
     }>(`/workspaces/${workspaceId}/system/proxy-policy`),
-  toggleProxy: (workspaceId: string, input: { enabled?: boolean; countryLock?: string | null }) =>
-    apiFetch<{ enabled: boolean; countryLock: string | null }>(
-      `/workspaces/${workspaceId}/system/proxy`,
-      {
-        method: 'POST',
-        body: JSON.stringify(input),
-      },
-    ),
+  toggleProxy: (
+    workspaceId: string,
+    input: { enabled?: boolean; countryLock?: string | null; proxyUrl?: string | null },
+  ) =>
+    apiFetch<{
+      enabled: boolean;
+      countryLock: string | null;
+      proxyUrlMasked?: string | null;
+      source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
+    }>(`/workspaces/${workspaceId}/system/proxy`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 };
 
 export const workspaceApi = {

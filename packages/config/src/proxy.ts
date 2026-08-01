@@ -4,8 +4,7 @@ import { ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } f
 import type { ProxyConfig } from '@socialhub/shared';
 
 const CONFIG_FILE_NAME = '.proxy-config.json';
-let proxyAgent: Dispatcher | null = null;
-let proxyAgentKey: string | null = null;
+const proxyAgents = new Map<string, Dispatcher>();
 
 export interface ProxyAwareNetworkStatus {
   checkedAt: string;
@@ -22,6 +21,13 @@ export interface ProxyAwareNetworkStatus {
   proxyAvailable: boolean;
   proxyActive: boolean;
   countryLockSatisfied: boolean;
+}
+
+export interface WorkspaceProxySettingRecord {
+  enabled: boolean;
+  proxyUrl: string | null;
+  proxyUrlMasked: string | null;
+  countryLock: string | null;
 }
 
 interface ParsedIpLookup {
@@ -98,21 +104,22 @@ export function writeProxyConfig(config: ProxyConfig): void {
   fs.writeFileSync(configPath, JSON.stringify(normalizeProxyConfig(config), null, 2), 'utf8');
 }
 
-export function applyProxyConfig(config: ProxyConfig): void {
-  if (!config.enabled) {
-    proxyAgent = null;
-    proxyAgentKey = null;
-  }
+export function applyProxyConfig(_config: ProxyConfig): void {
+  // Backward-compatible no-op. Dynamic per-workspace proxy config is resolved
+  // per request, while undici agents are cached by proxy URL.
 }
 
-export function hasOutboundProxyConfigured(): boolean {
-  return Boolean(getConfiguredProxyUrl());
+export function hasOutboundProxyConfigured(config?: ProxyConfig): boolean {
+  return Boolean(resolveOutboundProxyUrl(config));
 }
 
-export function createProxyAwareFetch(): typeof fetch {
+export function createProxyAwareFetch(
+  configInput?: ProxyConfig | (() => ProxyConfig),
+): typeof fetch {
   return async (input, init) => {
-    const config = readProxyConfig();
-    if (!config.enabled || !hasOutboundProxyConfigured()) {
+    const config = resolveProxyConfigInput(configInput);
+    const proxyUrl = resolveOutboundProxyUrl(config);
+    if (!config.enabled || !proxyUrl) {
       return undiciFetch(
         input as Parameters<typeof undiciFetch>[0],
         init as Parameters<typeof undiciFetch>[1],
@@ -123,7 +130,7 @@ export function createProxyAwareFetch(): typeof fetch {
       input as Parameters<typeof undiciFetch>[0],
       {
         ...init,
-        dispatcher: getProxyAgent(),
+        dispatcher: getProxyAgent(proxyUrl),
       } as Parameters<typeof undiciFetch>[1],
     ) as unknown as Promise<Response>;
   };
@@ -131,15 +138,16 @@ export function createProxyAwareFetch(): typeof fetch {
 
 export async function checkProxyAwareNetwork(
   proxyConfig = readProxyConfig(),
-  fetchImpl: typeof fetch = createProxyAwareFetch(),
+  fetchImpl: typeof fetch = createProxyAwareFetch(proxyConfig),
 ): Promise<ProxyAwareNetworkStatus> {
-  const proxyAvailable = hasOutboundProxyConfigured();
+  const normalizedProxyConfig = normalizeProxyConfig(proxyConfig);
+  const proxyAvailable = hasOutboundProxyConfigured(normalizedProxyConfig);
   const activeCountryLock = proxyConfig.enabled ? proxyConfig.countryLock : null;
   const base = {
     checkedAt: new Date().toISOString(),
-    proxyConfig,
+    proxyConfig: normalizedProxyConfig,
     proxyAvailable,
-    proxyActive: proxyConfig.enabled && proxyAvailable,
+    proxyActive: normalizedProxyConfig.enabled && proxyAvailable,
   };
   const errors: string[] = [];
 
@@ -215,29 +223,27 @@ export function resolveProxyConfigPath(): string {
 }
 
 function readProxyConfigFromEnv(): ProxyConfig {
+  const proxyUrl = getConfiguredProxyUrl();
   return normalizeProxyConfig({
     enabled: parseBoolean(process.env.PROXY_ENABLED, false),
     countryLock: process.env.PROXY_COUNTRY_LOCK,
+    proxyUrl,
+    proxyUrlMasked: maskProxyUrl(proxyUrl),
+    source: proxyUrl ? 'ENV' : 'DIRECT',
   });
 }
 
-function getProxyAgent(): Dispatcher {
-  const proxyUrl = getConfiguredProxyUrl();
-  if (!proxyUrl) {
-    throw new Error('HTTP_PROXY/HTTPS_PROXY chưa được cấu hình.');
-  }
-
-  const agentKey = proxyUrl;
-  if (proxyAgent && proxyAgentKey === agentKey) return proxyAgent;
-
-  proxyAgentKey = agentKey;
-  proxyAgent = isSocksProxyUrl(proxyUrl)
+function getProxyAgent(proxyUrl: string): Dispatcher {
+  const existing = proxyAgents.get(proxyUrl);
+  if (existing) return existing;
+  const agent = isSocksProxyUrl(proxyUrl)
     ? new Socks5ProxyAgent(proxyUrl)
     : new ProxyAgent(proxyUrl);
-  return proxyAgent;
+  proxyAgents.set(proxyUrl, agent);
+  return agent;
 }
 
-function getConfiguredProxyUrl(): string | null {
+export function getConfiguredProxyUrl(): string | null {
   return (
     process.env.https_proxy?.trim() ||
     process.env.HTTPS_PROXY?.trim() ||
@@ -247,19 +253,76 @@ function getConfiguredProxyUrl(): string | null {
   );
 }
 
-function isSocksProxyUrl(value: string | null): value is string {
-  if (!value) return false;
-  return value.toLowerCase().startsWith('socks5://') || value.toLowerCase().startsWith('socks://');
+export function maskProxyUrl(value: string | null | undefined): string | null {
+  if (!value?.trim()) return null;
+  try {
+    const url = new URL(value);
+    if (url.password) url.password = '***';
+    if (url.username) url.username = url.username ? '***' : '';
+    return url.toString();
+  } catch {
+    return value.replace(/\/\/([^:@/]+):([^@/]+)@/, '//***:***@');
+  }
 }
 
-function normalizeProxyConfig(value: Partial<ProxyConfig>): ProxyConfig {
+export function publicProxyConfig(config: ProxyConfig): ProxyConfig {
+  const normalized = normalizeProxyConfig(config);
+  return {
+    enabled: normalized.enabled,
+    countryLock: normalized.countryLock,
+    proxyUrlMasked: normalized.proxyUrlMasked,
+    source: normalized.source,
+  };
+}
+
+export function proxyConfigFromWorkspaceSetting(
+  setting: WorkspaceProxySettingRecord | null | undefined,
+  decryptProxyUrl: (ciphertext: string) => string,
+): ProxyConfig {
+  if (!setting) {
+    return normalizeProxyConfig({ enabled: false, countryLock: null, source: 'DIRECT' });
+  }
+
+  const proxyUrl = setting.proxyUrl ? decryptProxyUrl(setting.proxyUrl) : null;
+  return normalizeProxyConfig({
+    enabled: setting.enabled,
+    countryLock: setting.countryLock,
+    proxyUrl,
+    proxyUrlMasked: setting.proxyUrlMasked ?? maskProxyUrl(proxyUrl),
+    source: proxyUrl ? 'WORKSPACE' : 'DIRECT',
+  });
+}
+
+export function normalizeProxyConfig(value: Partial<ProxyConfig>): ProxyConfig {
+  const proxyUrl =
+    typeof value.proxyUrl === 'string' && value.proxyUrl.trim() ? value.proxyUrl.trim() : null;
+  const source = value.source ?? (proxyUrl ? 'WORKSPACE' : 'DIRECT');
   return {
     enabled: value.enabled === true,
     countryLock:
       typeof value.countryLock === 'string' && value.countryLock.trim()
         ? value.countryLock.trim().toUpperCase()
         : null,
+    proxyUrl,
+    proxyUrlMasked: value.proxyUrlMasked ?? maskProxyUrl(proxyUrl),
+    source,
   };
+}
+
+function resolveProxyConfigInput(configInput?: ProxyConfig | (() => ProxyConfig)): ProxyConfig {
+  if (!configInput) return readProxyConfig();
+  return normalizeProxyConfig(typeof configInput === 'function' ? configInput() : configInput);
+}
+
+function resolveOutboundProxyUrl(config?: ProxyConfig): string | null {
+  const normalized = config ? normalizeProxyConfig(config) : readProxyConfig();
+  if (!normalized.enabled) return null;
+  return normalized.proxyUrl?.trim() || getConfiguredProxyUrl();
+}
+
+function isSocksProxyUrl(value: string | null): value is string {
+  if (!value) return false;
+  return value.toLowerCase().startsWith('socks5://') || value.toLowerCase().startsWith('socks://');
 }
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {

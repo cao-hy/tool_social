@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Globe, ShieldCheck } from 'lucide-react';
 import { systemApi } from '@/lib/api-client';
+import { getErrorMessage } from '@/lib/errors';
 import { PrimaryButton } from './form-controls';
 
 type NetworkStatus = {
@@ -15,7 +16,12 @@ type NetworkStatus = {
   checkOk: boolean;
   checkError: string | null;
   checkErrors: string[];
-  proxyConfig: { enabled: boolean; countryLock: string | null };
+  proxyConfig: {
+    enabled: boolean;
+    countryLock: string | null;
+    proxyUrlMasked?: string | null;
+    source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
+  };
   proxyAvailable: boolean;
   proxyActive: boolean;
   countryLockSatisfied: boolean;
@@ -49,49 +55,77 @@ export function ProxyWidget({
   const [open, setOpen] = useState(false);
   const [countryMenuOpen, setCountryMenuOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [pendingConfig, setPendingConfig] = useState<{
     enabled: boolean;
     countryLock: string | null;
+    proxyUrl?: string | null;
   } | null>(null);
+  const [proxyUrlDraft, setProxyUrlDraft] = useState('');
+  const [clearProxyUrl, setClearProxyUrl] = useState(false);
 
-  async function fetchStatus() {
-    setLoading(true);
+  async function fetchStatus(options: { syncDraft?: boolean; silent?: boolean } = {}) {
+    if (!options.silent) setLoading(true);
     try {
       const data = await systemApi.getNetworkStatus(workspaceId);
       setStatus(data);
-      if (!pendingConfig) {
+      setLoadError(null);
+      if (options.syncDraft) {
         setPendingConfig(data.proxyConfig);
+        setProxyUrlDraft('');
+        setClearProxyUrl(false);
       }
     } catch (e) {
-      console.error(e);
+      setLoadError(getErrorMessage(e));
     }
-    setLoading(false);
+    if (!options.silent) setLoading(false);
   }
 
   useEffect(() => {
-    fetchStatus();
+    void fetchStatus({ syncDraft: true });
     // Refresh periodically just in case
-    const interval = setInterval(fetchStatus, 30000);
+    const interval = setInterval(() => void fetchStatus({ silent: true }), 30000);
     return () => clearInterval(interval);
   }, [workspaceId]);
 
-  // Reset pending config when opening the dropdown
-  useEffect(() => {
-    if (open && status) {
+  function toggleOpen() {
+    setOpen((previous) => {
+      const next = !previous;
+      if (next && status) {
+        setPendingConfig(status.proxyConfig);
+        setProxyUrlDraft('');
+        setClearProxyUrl(false);
+      }
+      return next;
+    });
+  }
+
+  function resetDraftFromStatus() {
+    if (status) {
       setPendingConfig(status.proxyConfig);
+      setProxyUrlDraft('');
+      setClearProxyUrl(false);
     }
-  }, [open, status]);
+  }
 
   async function handleSaveConfig() {
     if (!pendingConfig) return;
     setLoading(true);
     try {
-      await systemApi.toggleProxy(workspaceId, pendingConfig);
-      await fetchStatus();
+      await systemApi.toggleProxy(workspaceId, {
+        enabled: pendingConfig.enabled,
+        countryLock: pendingConfig.countryLock,
+        ...(clearProxyUrl
+          ? { proxyUrl: null }
+          : proxyUrlDraft.trim()
+            ? { proxyUrl: proxyUrlDraft.trim() }
+            : {}),
+      });
+      await fetchStatus({ syncDraft: true });
       setOpen(false);
     } catch (e) {
-      console.error(e);
+      setLoadError(getErrorMessage(e));
       setLoading(false);
     }
   }
@@ -118,8 +152,15 @@ export function ProxyWidget({
 
   if (!status) {
     return (
-      <div className="flex h-10 items-center justify-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-400">
-        Đang tải mạng...
+      <div
+        className={`flex h-10 items-center justify-center rounded-md border px-3 text-sm ${
+          loadError
+            ? 'border-rose-200 bg-rose-50 text-rose-700'
+            : 'border-slate-200 bg-white text-slate-400'
+        }`}
+        title={loadError ?? undefined}
+      >
+        {loadError ? 'Không tải được mạng' : 'Đang tải mạng...'}
       </div>
     );
   }
@@ -136,7 +177,9 @@ export function ProxyWidget({
   const selectedCountry = getCountryOption(pendingCountryLock);
   const hasPendingChanges =
     pendingConfig?.enabled !== status.proxyConfig.enabled ||
-    pendingConfig?.countryLock !== status.proxyConfig.countryLock;
+    pendingConfig?.countryLock !== status.proxyConfig.countryLock ||
+    proxyUrlDraft.trim().length > 0 ||
+    clearProxyUrl;
   const buttonStateClass = isProxyActive
     ? isNetworkUnknown
       ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
@@ -155,7 +198,7 @@ export function ProxyWidget({
   return (
     <div className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggleOpen}
         className={`flex w-full items-center rounded-md border px-3 py-2 text-sm transition ${buttonStateClass} ${isCollapsed ? 'justify-center' : 'justify-between'}`}
         title={isCollapsed ? `Proxy: ${statusLabel} (${status.countryCode ?? '??'})` : undefined}
       >
@@ -189,6 +232,11 @@ export function ProxyWidget({
           className={`absolute z-50 rounded-md border border-slate-200 bg-white p-3 shadow-lg ${isCollapsed ? 'left-full top-0 ml-4 w-72 mt-0' : 'top-full mt-1 w-full'}`}
         >
           <div className="mb-2 text-xs font-semibold text-slate-500">THÔNG TIN MẠNG</div>
+          {loadError ? (
+            <div className="mb-3 rounded-md bg-rose-50 px-2 py-2 text-xs text-rose-700">
+              {loadError}
+            </div>
+          ) : null}
           <div className="mb-3 space-y-1 text-sm">
             <div className="flex justify-between gap-4">
               <span className="shrink-0 text-slate-500">IP:</span>
@@ -228,6 +276,43 @@ export function ProxyWidget({
                 className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-600"
               />
             </label>
+            <label className="block text-sm">
+              <span className="mb-1 block text-slate-700">Proxy URL workspace</span>
+              <input
+                value={proxyUrlDraft}
+                onChange={(event) => {
+                  setProxyUrlDraft(event.target.value);
+                  setClearProxyUrl(false);
+                }}
+                disabled={loading || clearProxyUrl}
+                placeholder={status.proxyConfig.proxyUrlMasked ?? 'http://user:pass@host:port'}
+                className="w-full rounded-md border border-slate-300 px-2 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:bg-slate-50"
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                {status.proxyConfig.source === 'WORKSPACE'
+                  ? `Đang dùng proxy riêng của workspace: ${status.proxyConfig.proxyUrlMasked}`
+                  : status.proxyConfig.source === 'ENV'
+                    ? 'Workspace chưa có proxy riêng; bật proxy sẽ dùng proxy fallback trong env.'
+                    : 'Chưa cấu hình proxy cho workspace này.'}
+              </span>
+            </label>
+            {status.proxyConfig.source === 'WORKSPACE' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setClearProxyUrl((value) => !value);
+                  setProxyUrlDraft('');
+                }}
+                disabled={loading}
+                className={`w-full rounded-md border px-2 py-2 text-sm font-medium ${
+                  clearProxyUrl
+                    ? 'border-rose-200 bg-rose-50 text-rose-700'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {clearProxyUrl ? 'Sẽ xóa proxy workspace khi lưu' : 'Xóa proxy workspace'}
+              </button>
+            ) : null}
             <label className="flex cursor-pointer items-center justify-between text-sm">
               <span className="text-slate-700">Bật khóa quốc gia</span>
               <input
@@ -304,14 +389,24 @@ export function ProxyWidget({
           ) : null}
           <div className="mt-4 border-t border-slate-100 pt-3">
             {hasPendingChanges ? (
-              <PrimaryButton
-                type="button"
-                className="w-full"
-                busy={loading}
-                onClick={handleSaveConfig}
-              >
-                Lưu cấu hình
-              </PrimaryButton>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={resetDraftFromStatus}
+                  disabled={loading}
+                  className="rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Hoàn tác
+                </button>
+                <PrimaryButton
+                  type="button"
+                  className="w-full"
+                  busy={loading}
+                  onClick={handleSaveConfig}
+                >
+                  Lưu cấu hình
+                </PrimaryButton>
+              </div>
             ) : (
               <div className="rounded-md bg-slate-50 px-3 py-2 text-center text-xs font-medium text-slate-500">
                 Cấu hình đã lưu.

@@ -5,13 +5,13 @@ import type { Platform } from '@socialhub/shared';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import {
   isPlatformError,
-  type AdapterRegistry,
   type SocialPlatformAdapter,
   type TokenSet,
 } from '@socialhub/platform-adapters';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
-import { ADAPTER_REGISTRY, KEYRING } from '../../infrastructure/infrastructure.module';
+import { KEYRING } from '../../infrastructure/infrastructure.module';
+import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService, type AuditContext } from '../audit/audit.service';
@@ -39,7 +39,7 @@ export class CommentsService implements OnModuleDestroy {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RedisService) private readonly redis: RedisService,
     @Inject(AuditService) private readonly audit: AuditService,
-    @Inject(ADAPTER_REGISTRY) private readonly adapters: AdapterRegistry,
+    @Inject(AdapterRegistryFactory) private readonly adapterFactory: AdapterRegistryFactory,
     @Inject(KEYRING) private readonly keyring: Keyring,
   ) {
     this.syncQueue = new Queue('sync-comments', { connection: this.redis.getClient() });
@@ -227,7 +227,10 @@ export class CommentsService implements OnModuleDestroy {
         );
       }
 
-      const adapter = this.adapters.requireCapability(comment.platform, 'editComment');
+      const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
+        comment.platform,
+        'editComment',
+      );
       if (!adapter.editComment) {
         throw AppError.capabilityUnsupported(comment.platform, 'editComment');
       }
@@ -273,7 +276,10 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = this.adapters.requireCapability(comment.platform, 'hideComment');
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
+      comment.platform,
+      'hideComment',
+    );
     if (!adapter.hideComment) {
       throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
     }
@@ -322,7 +328,10 @@ export class CommentsService implements OnModuleDestroy {
     if (input.deleteFromPlatform) {
       const usesModerationDelete = comment.platform === 'YOUTUBE' && !comment.isFromPage;
       const action = usesModerationDelete ? 'hideComment' : 'deleteComment';
-      const adapter = this.adapters.requireCapability(comment.platform, action);
+      const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
+        comment.platform,
+        action,
+      );
       this.ensureCommentActionScopes(comment, action);
       const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
 
@@ -414,7 +423,10 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = this.adapters.requireCapability(comment.platform, 'replyToComment');
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
+      comment.platform,
+      'replyToComment',
+    );
     if (!adapter.replyToComment) {
       throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
     }

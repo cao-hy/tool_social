@@ -9,13 +9,22 @@ import {
   type YouTubeVideoPlatformState,
 } from '@socialhub/platform-adapters';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { checkProxyAwareNetwork, createProxyAwareFetch, readProxyConfig } from '@socialhub/config';
+import {
+  checkProxyAwareNetwork,
+  createProxyAwareFetch,
+  getConfiguredProxyUrl,
+  maskProxyUrl,
+  normalizeProxyConfig,
+  proxyConfigFromWorkspaceSetting,
+  readProxyConfig,
+} from '@socialhub/config';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
-import type { Keyring } from '@socialhub/security';
+import { decryptToken, type Keyring } from '@socialhub/security';
 import {
   deriveContentPostStatus,
   type MediaType,
   type PlatformPostStatus,
+  type ProxyConfig,
 } from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
@@ -55,7 +64,6 @@ interface PublishNetworkProof {
   countryLockSatisfied: boolean;
 }
 
-const proxyAwareFetch = createProxyAwareFetch();
 const adapterLogger: AdapterLogger = {
   debug: (message, context) => logger.debug(context ?? {}, message),
   info: (message, context) => logger.info(context ?? {}, message),
@@ -67,6 +75,7 @@ export function createPublishPostProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapters: AdapterRegistry;
+  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
   locks: JobLockService;
   storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
 }) {
@@ -128,6 +137,7 @@ async function publishPlatformPost(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapters: AdapterRegistry;
+    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
     storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
   },
   payload: z.infer<typeof publishPostPayloadSchema>,
@@ -181,7 +191,13 @@ async function publishPlatformPost(
     data: { status: 'PROCESSING' },
   });
 
-  const adapter = input.adapters.get(platformPost.platform);
+  const proxyConfig = await loadWorkspaceProxyConfig(
+    input.prisma,
+    input.keyring,
+    payload.workspaceId,
+  );
+  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+  const adapter = adapters.get(platformPost.platform);
   if (
     platformPost.socialAccount.scopes.includes('development-fixture') &&
     !(adapter instanceof DevelopmentFixtureAdapter)
@@ -265,7 +281,7 @@ async function publishPlatformPost(
       logger: adapterLogger,
     } satisfies AdapterContext;
 
-    publishNetworkProof = await capturePublishNetworkProof(readProxyConfig());
+    publishNetworkProof = await capturePublishNetworkProof(proxyConfig);
     assertCountryLock(publishNetworkProof);
 
     const result = await adapter.publishPost(adapterContext, publishInput);
@@ -382,7 +398,7 @@ function jsonObject(
 async function capturePublishNetworkProof(
   proxyConfig = readProxyConfig(),
 ): Promise<PublishNetworkProof> {
-  const status = await checkProxyAwareNetwork(proxyConfig, proxyAwareFetch);
+  const status = await checkProxyAwareNetwork(proxyConfig, createProxyAwareFetch(proxyConfig));
   return {
     checkedAt: status.checkedAt,
     ip: status.ip,
@@ -400,6 +416,38 @@ async function capturePublishNetworkProof(
     countryLock: proxyConfig.enabled ? proxyConfig.countryLock : null,
     countryLockSatisfied: status.countryLockSatisfied,
   };
+}
+
+async function loadWorkspaceProxyConfig(
+  prisma: PrismaClientInstance,
+  keyring: Keyring,
+  workspaceId: string,
+): Promise<ProxyConfig> {
+  const setting = await prisma.workspaceProxySetting.findUnique({ where: { workspaceId } });
+  if (!setting) {
+    const envProxyUrl = getConfiguredProxyUrl();
+    return normalizeProxyConfig({
+      ...readProxyConfig(),
+      enabled: false,
+      proxyUrl: envProxyUrl,
+      proxyUrlMasked: maskProxyUrl(envProxyUrl),
+      source: envProxyUrl ? 'ENV' : 'DIRECT',
+    });
+  }
+
+  const config = proxyConfigFromWorkspaceSetting(setting, (ciphertext) =>
+    decryptToken(ciphertext, keyring),
+  );
+  if (!config.proxyUrl) {
+    const envProxyUrl = getConfiguredProxyUrl();
+    return normalizeProxyConfig({
+      ...config,
+      proxyUrl: envProxyUrl,
+      proxyUrlMasked: maskProxyUrl(envProxyUrl),
+      source: envProxyUrl ? 'ENV' : 'DIRECT',
+    });
+  }
+  return config;
 }
 
 function assertCountryLock(networkProof: PublishNetworkProof): void {

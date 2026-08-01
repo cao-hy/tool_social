@@ -14,6 +14,7 @@ import {
   TIKTOK_OAUTH_SCOPES,
 } from '@socialhub/platform-adapters';
 import { Keyring } from '@socialhub/security';
+import type { ProxyConfig } from '@socialhub/shared';
 import Redis from 'ioredis';
 import { logger } from './logger';
 import { createGenerateThumbnailProcessor } from './processors/generate-thumbnail';
@@ -64,16 +65,17 @@ async function main(): Promise<void> {
   await prisma.$connect();
   const keyring = Keyring.fromEnv(env.ENCRYPTION_KEYS, env.ENCRYPTION_ACTIVE_KEY);
   const adapters = createAdapterRegistry(env);
+  const createAdapters = (proxyConfig: ProxyConfig) => createAdapterRegistry(env, proxyConfig);
   const locks = new JobLockService(connection);
   const storage = createStorageClient(env);
 
   registry.registerWorker(
     'publish-post',
-    createPublishPostProcessor({ prisma, keyring, adapters, locks, storage }),
+    createPublishPostProcessor({ prisma, keyring, adapters, createAdapters, locks, storage }),
   );
   registry.registerWorker(
     'retry-failed-post',
-    createPublishPostProcessor({ prisma, keyring, adapters, locks, storage }),
+    createPublishPostProcessor({ prisma, keyring, adapters, createAdapters, locks, storage }),
   );
   registry.registerWorker(
     'refresh-social-token',
@@ -166,10 +168,10 @@ function createStorageClient(env: WorkerEnv): {
   };
 }
 
-function createAdapterRegistry(env: WorkerEnv): AdapterRegistry {
+function createAdapterRegistry(env: WorkerEnv, proxyConfig?: ProxyConfig): AdapterRegistry {
   return createRuntimeAdapterRegistry({
     nodeEnv: env.NODE_ENV,
-    fetch: createProxyAwareFetch(),
+    fetch: createProxyAwareFetch(proxyConfig),
     facebook: {
       appId: env.FACEBOOK_APP_ID,
       appSecret: env.FACEBOOK_APP_SECRET,

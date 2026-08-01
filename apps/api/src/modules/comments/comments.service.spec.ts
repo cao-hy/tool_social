@@ -4,6 +4,7 @@ import type { Keyring } from '@socialhub/security';
 import type { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import type { RedisService } from '../../infrastructure/redis/redis.service';
 import type { AuditService } from '../audit/audit.service';
+import type { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
 import { AppError } from '../../common/errors/app-error';
 import { CommentsService } from './comments.service';
 
@@ -32,6 +33,9 @@ describe('CommentsService', () => {
       throw AppError.capabilityUnsupported('PINTEREST', 'replyToComment');
     }),
   } as unknown as AdapterRegistry;
+  const adapterFactory = {
+    forWorkspace: vi.fn().mockResolvedValue(adapters),
+  } as unknown as AdapterRegistryFactory;
   const keyring = {} as Keyring;
 
   beforeEach(() => {
@@ -51,7 +55,7 @@ describe('CommentsService', () => {
   });
 
   it('reply nền tảng chưa hỗ trợ bị chặn trước khi tạo CommentReply', async () => {
-    const service = new CommentsService(prisma, redis, audit, adapters, keyring);
+    const service = new CommentsService(prisma, redis, audit, adapterFactory, keyring);
 
     await expect(
       service.reply(
@@ -85,7 +89,7 @@ describe('CommentsService', () => {
       notes: [],
       replies: [],
     });
-    const service = new CommentsService(prisma, redis, audit, adapters, keyring);
+    const service = new CommentsService(prisma, redis, audit, adapterFactory, keyring);
 
     await expect(
       service.reply(
@@ -105,7 +109,7 @@ describe('CommentsService', () => {
 
   it('không gán comment cho member ngoài workspace', async () => {
     memberFindFirst.mockResolvedValueOnce(null);
-    const service = new CommentsService(prisma, redis, audit, adapters, keyring);
+    const service = new CommentsService(prisma, redis, audit, adapterFactory, keyring);
 
     await expect(
       service.assign(

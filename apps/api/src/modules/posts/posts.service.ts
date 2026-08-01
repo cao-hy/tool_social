@@ -4,7 +4,6 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Prisma } from '@socialhub/db';
 import {
   type AdapterContext,
-  type AdapterRegistry,
   type PostMetrics,
   type SocialPlatformAdapter,
   type TikTokPublishPlatformState,
@@ -19,7 +18,8 @@ import type { QueuePayload } from '@socialhub/shared';
 import { Queue } from 'bullmq';
 import { AppError, isAppError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
-import { ADAPTER_REGISTRY, KEYRING } from '../../infrastructure/infrastructure.module';
+import { KEYRING } from '../../infrastructure/infrastructure.module';
+import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -45,7 +45,7 @@ export class PostsService implements OnModuleDestroy {
     @Inject(RedisService) private readonly redis: RedisService,
     @Inject(ENV) private readonly env: ApiEnv,
     @Inject(KEYRING) private readonly keyring: Keyring,
-    @Inject(ADAPTER_REGISTRY) private readonly adapters: AdapterRegistry,
+    @Inject(AdapterRegistryFactory) private readonly adapterFactory: AdapterRegistryFactory,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(MediaService) private readonly media: MediaService,
   ) {
@@ -1340,7 +1340,9 @@ export class PostsService implements OnModuleDestroy {
       throw AppError.conflict('Social account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = this.adapters.get(platformPost.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(
+      platformPost.platform,
+    );
     const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
     const ctx = {
       accessToken,
@@ -1418,7 +1420,7 @@ export class PostsService implements OnModuleDestroy {
       throw AppError.conflict('TikTok account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = this.adapters.get('TIKTOK');
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get('TIKTOK');
     if (!hasTikTokStatusMethods(adapter)) {
       throw AppError.capabilityUnsupported('TIKTOK', 'tiktok_publish_state');
     }
@@ -1462,8 +1464,9 @@ export class PostsService implements OnModuleDestroy {
     );
     if (targets.length === 0) return;
 
+    const adapters = await this.adapterFactory.forWorkspace(post.workspaceId);
     const operations = targets.map((platformPost) => {
-      const adapter = this.adapters.requireCapability(
+      const adapter = adapters.requireCapability(
         platformPost.platform as Platform,
         'editPublishedPost',
       );
@@ -1533,8 +1536,9 @@ export class PostsService implements OnModuleDestroy {
     );
     if (targets.length === 0) return;
 
+    const adapters = await this.adapterFactory.forWorkspace(post.workspaceId);
     const operations = targets.map((platformPost) => {
-      const adapter = this.adapters.requireCapability(
+      const adapter = adapters.requireCapability(
         platformPost.platform as Platform,
         'deletePublishedPost',
       );
@@ -1639,7 +1643,7 @@ export class PostsService implements OnModuleDestroy {
       throw AppError.conflict('YouTube account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = this.adapters.get('YOUTUBE');
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get('YOUTUBE');
     if (!hasYouTubeStatusMethods(adapter)) {
       throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
     }

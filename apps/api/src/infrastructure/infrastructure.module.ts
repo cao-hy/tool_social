@@ -9,9 +9,10 @@ import { Keyring } from '@socialhub/security';
 import { ENV, type ApiEnv } from './env.provider';
 import { PrismaService } from './prisma/prisma.service';
 import { RedisService } from './redis/redis.service';
+import { AdapterRegistryFactory } from './adapter-registry.factory';
+import { ADAPTER_REGISTRY, KEYRING } from './tokens';
 
-export const KEYRING = Symbol('KEYRING');
-export const ADAPTER_REGISTRY = Symbol('ADAPTER_REGISTRY');
+export { ADAPTER_REGISTRY, KEYRING } from './tokens';
 
 /**
  * Hạ tầng dùng chung: cấu hình, DB, Redis, keyring, adapter registry.
@@ -68,9 +69,10 @@ export const ADAPTER_REGISTRY = Symbol('ADAPTER_REGISTRY');
           },
         }),
     },
+    AdapterRegistryFactory,
     PrismaService,
     RedisService,
   ],
-  exports: [ENV, KEYRING, ADAPTER_REGISTRY, PrismaService, RedisService],
+  exports: [ENV, KEYRING, ADAPTER_REGISTRY, AdapterRegistryFactory, PrismaService, RedisService],
 })
 export class InfrastructureModule {}

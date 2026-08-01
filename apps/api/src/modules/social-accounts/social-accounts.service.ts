@@ -7,7 +7,6 @@ import {
   TIKTOK_OAUTH_SCOPES,
   YOUTUBE_OAUTH_SCOPES,
   isPlatformError,
-  type AdapterRegistry,
   type SocialPlatformAdapter,
   type TikTokCreatorInfo,
   type TokenSet,
@@ -25,7 +24,8 @@ import type { Keyring } from '@socialhub/security';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
-import { ADAPTER_REGISTRY, KEYRING } from '../../infrastructure/infrastructure.module';
+import { KEYRING } from '../../infrastructure/infrastructure.module';
+import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -53,7 +53,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     @Inject(RedisService) private readonly redis: RedisService,
     @Inject(ENV) private readonly env: ApiEnv,
     @Inject(KEYRING) private readonly keyring: Keyring,
-    @Inject(ADAPTER_REGISTRY) private readonly adapters: AdapterRegistry,
+    @Inject(AdapterRegistryFactory) private readonly adapterFactory: AdapterRegistryFactory,
     @Inject(AuditService) private readonly audit: AuditService,
   ) {
     this.refreshQueue = new Queue('refresh-social-token', {
@@ -105,7 +105,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     workspaceId: string,
     platform: Platform,
   ): Promise<{ authorizationUrl: string; expiresInSeconds: number; developmentFixture: boolean }> {
-    const adapter = this.adapters.get(platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(platform);
     const state = generateOAuthState();
     const pkce = generatePkcePair();
     const scopes = this.scopesFor(platform);
@@ -155,7 +155,9 @@ export class SocialAccountsService implements OnModuleDestroy {
       throw AppError.forbidden('OAuth callback không khớp phiên đăng nhập hiện tại.');
     }
 
-    const adapter = this.adapters.get(input.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(payload.workspaceId)).get(
+      input.platform,
+    );
     logger.debug(
       { requestId: input.auditContext.requestId, platform: input.platform },
       'OAuth callback: bắt đầu exchange token',
@@ -301,7 +303,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     });
     if (!account) throw AppError.notFound('social account');
 
-    const adapter = this.adapters.get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
     if (account.token && adapter.revokeToken) {
       const accessToken = decryptToken(account.token.accessToken, this.keyring);
       await adapter.revokeToken(accessToken);
@@ -338,7 +340,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (!account) throw AppError.notFound('social account');
     if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
 
-    const adapter = this.adapters.get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
     const accessToken = await this.getFreshAccessToken(account, adapter);
     const profile = await adapter.getAccountProfile({
       accessToken,
@@ -393,7 +395,7 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = this.adapters.get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
     if (!hasTikTokCreatorInfo(adapter)) {
       throw AppError.capabilityUnsupported('TIKTOK', 'queryCreatorInfo');
     }
