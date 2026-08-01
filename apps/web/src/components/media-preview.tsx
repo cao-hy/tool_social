@@ -111,19 +111,36 @@ export function mediaPreviewSources(asset: MediaAssetView & { previewUrl?: strin
 }
 
 export function mediaThumbnailSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+  let urls: Array<string | null | undefined>;
   if (asset.type === 'VIDEO' && asset.status !== 'ARCHIVED') {
-    return uniqueUrls([asset.previewUrl, asset.thumbnailUrl]);
+    urls = [asset.previewUrl, asset.thumbnailUrl];
+  } else {
+    urls = [asset.previewUrl, asset.thumbnailUrl, asset.displayUrl, asset.readUrl];
   }
-
-  return uniqueUrls([asset.previewUrl, asset.thumbnailUrl, asset.displayUrl, asset.readUrl]);
+  return uniqueUrls(urls.map((url) => appendVersion(url, asset.updatedAt)));
 }
 
 function mediaSources(asset: MediaAssetView & { previewUrl?: string }): string[] {
+  let urls: Array<string | null | undefined>;
   if (asset.type === 'VIDEO' && asset.status !== 'ARCHIVED') {
-    return uniqueUrls([asset.previewUrl, asset.displayUrl, asset.readUrl, asset.thumbnailUrl]);
+    urls = [asset.previewUrl, asset.displayUrl, asset.readUrl, asset.thumbnailUrl];
+  } else {
+    urls = [asset.previewUrl, asset.thumbnailUrl, asset.displayUrl, asset.readUrl];
   }
+  return uniqueUrls(urls.map((url) => appendVersion(url, asset.updatedAt)));
+}
 
-  return uniqueUrls([asset.previewUrl, asset.thumbnailUrl, asset.displayUrl, asset.readUrl]);
+function appendVersion(
+  url: string | null | undefined,
+  updatedAt?: string | Date,
+): string | null | undefined {
+  if (!url || !updatedAt) return url;
+  if (url.includes('X-Amz-Signature') || url.startsWith('blob:') || url.startsWith('data:'))
+    return url;
+
+  const v = typeof updatedAt === 'string' ? new Date(updatedAt).getTime() : updatedAt.getTime();
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}v=${v}`;
 }
 
 function uniqueUrls(values: Array<string | null | undefined>): string[] {

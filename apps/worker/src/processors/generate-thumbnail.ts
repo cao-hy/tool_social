@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -41,6 +42,7 @@ export function createGenerateThumbnailProcessor(input: {
 
     const thumbnailKey = buildThumbnailKey(media.workspaceId, media.id);
     const workdir = join(tmpdir(), `socialhub-thumb-${media.id}-${randomUUID()}`);
+    const videoPath = join(workdir, 'video.mp4');
     const framePath = join(workdir, 'frame.jpg');
     const startedAt = Date.now();
 
@@ -59,7 +61,7 @@ export function createGenerateThumbnailProcessor(input: {
         new GetObjectCommand({ Bucket: input.storage.bucket, Key: media.storageKey }),
       );
 
-      const thumbnailBytes = await createVideoThumbnail(object.Body, framePath);
+      const thumbnailBytes = await createVideoThumbnail(object.Body, videoPath, framePath);
       await input.storage.client.send(
         new PutObjectCommand({
           Bucket: input.storage.bucket,
@@ -104,16 +106,16 @@ export function createGenerateThumbnailProcessor(input: {
   };
 }
 
-async function pipeS3BodyToWritable(body: unknown, writable: NodeJS.WritableStream): Promise<void> {
+async function downloadS3BodyToFile(body: unknown, dest: string): Promise<void> {
   if (!body) throw new Error('Video source is empty or missing');
 
   if (body instanceof Readable) {
-    await pipeline(body, writable);
+    await pipeline(body, createWriteStream(dest));
     return;
   }
 
   if (hasByteArrayTransform(body)) {
-    writable.end(Buffer.from(await body.transformToByteArray()));
+    await writeFile(dest, Buffer.from(await body.transformToByteArray()));
     return;
   }
 
@@ -131,17 +133,23 @@ function hasByteArrayTransform(
   );
 }
 
-async function createVideoThumbnail(body: unknown, framePath: string): Promise<Buffer> {
+async function createVideoThumbnail(
+  body: unknown,
+  videoPath: string,
+  framePath: string,
+): Promise<Buffer> {
   try {
-    await runFfmpegWithInput(body, [
+    await downloadS3BodyToFile(body, videoPath);
+
+    await runFfmpeg([
       '-y',
       '-hide_banner',
       '-loglevel',
       'error',
-      '-i',
-      'pipe:0',
       '-ss',
       '1',
+      '-i',
+      videoPath,
       '-frames:v',
       '1',
       framePath,
@@ -158,12 +166,11 @@ async function createVideoThumbnail(body: unknown, framePath: string): Promise<B
   }
 }
 
-function runFfmpegWithInput(body: unknown, args: string[]): Promise<void> {
+function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     let settled = false;
-    let pipeError: unknown = null;
     const timeout = setTimeout(() => {
       if (settled) return;
       child.kill('SIGKILL');
@@ -187,27 +194,9 @@ function runFfmpegWithInput(body: unknown, args: string[]): Promise<void> {
         resolve();
         return;
       }
-      const message =
-        pipeError instanceof Error && !isBrokenPipeError(pipeError)
-          ? pipeError.message
-          : stderr.trim() || `ffmpeg exited with code ${code}`;
-      reject(new Error(message));
-    });
-    void pipeS3BodyToWritable(body, child.stdin).catch((error: unknown) => {
-      pipeError = error;
-      if (!isBrokenPipeError(error)) {
-        child.stdin.destroy(error instanceof Error ? error : undefined);
-      }
+      reject(new Error(stderr.trim() || `ffmpeg exited with code ${code}`));
     });
   });
-}
-
-function isBrokenPipeError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    ('code' in error || 'errno' in error) &&
-    String((error as NodeJS.ErrnoException).code ?? '') === 'EPIPE'
-  );
 }
 
 async function createFallbackVideoThumbnail(): Promise<Buffer> {

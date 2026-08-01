@@ -1,7 +1,7 @@
 'use client';
 
 import { hasPermission } from '@socialhub/shared';
-import { ChevronLeft, ChevronRight, Clock, Database, FileText, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, Database, FileText, RefreshCw, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Field,
@@ -83,6 +83,7 @@ export default function SettingsPage() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
   const [regeneratingMediaId, setRegeneratingMediaId] = useState<string | null>(null);
+  const [previewMedia, setPreviewMedia] = useState<MediaLibraryItem | null>(null);
 
   const canViewMedia = workspace ? hasPermission(workspace.role, 'media:view') : false;
   const canUploadMedia = workspace ? hasPermission(workspace.role, 'media:upload') : false;
@@ -271,8 +272,34 @@ export default function SettingsPage() {
     setError(null);
     try {
       await mediaApi.regenerateThumbnail(workspace.id, media.id);
+
+      let finalStatus = 'PROCESSING';
+      let attempts = 0;
+      while (finalStatus === 'PROCESSING' && attempts < 15) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const res = await mediaApi.list(workspace.id, {
+          q: media.originalFileName ?? media.id,
+          limit: 5,
+        });
+        const updatedMedia = res.items.find((m) => m.id === media.id);
+        if (updatedMedia) {
+          finalStatus = updatedMedia.status;
+          if (finalStatus === 'READY') {
+            toast.success('Tạo ảnh thumbnail thành công!');
+            break;
+          } else if (finalStatus === 'FAILED') {
+            toast.error('Tạo ảnh thumbnail thất bại (lỗi xử lý video).');
+            break;
+          }
+        }
+        attempts++;
+      }
+
+      if (finalStatus === 'PROCESSING') {
+        toast.info('Đang tạo ảnh thumbnail ở nền, vui lòng tải lại trang sau ít phút.');
+      }
+
       await loadStoragePage(mediaCursorStack.at(-1));
-      toast.success('Đã đưa video vào queue tạo lại thumbnail.');
     } catch (regenerateError) {
       toast.error(getErrorMessage(regenerateError));
     } finally {
@@ -616,20 +643,51 @@ export default function SettingsPage() {
                     onChange={() => handleToggleMedia(media.id)}
                     className="h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
-                  <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                  <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50">
                     {source ? (
-                      <FallbackImage
-                        alt={media.originalFileName ?? 'media'}
-                        className="h-full w-full object-cover"
-                        sources={mediaThumbnailSources(media)}
-                      />
+                      <button
+                        type="button"
+                        onClick={() => setPreviewMedia(media)}
+                        className="relative h-full w-full block group"
+                      >
+                        <FallbackImage
+                          alt={media.originalFileName ?? 'media'}
+                          className="h-full w-full object-cover transition-opacity group-hover:opacity-80"
+                          sources={mediaThumbnailSources(media)}
+                        />
+                        {media.type === 'VIDEO' && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/20 group-hover:bg-black/30 transition-colors">
+                            <div className="rounded-full bg-slate-900/80 p-1.5 text-white shadow-sm">
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="14"
+                                height="14"
+                                viewBox="0 0 24 24"
+                                fill="currentColor"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              >
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                              </svg>
+                            </div>
+                          </div>
+                        )}
+                      </button>
                     ) : (
                       <span className="text-xs font-semibold text-slate-500">{media.type}</span>
                     )}
                   </div>
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-slate-950">
-                      {media.originalFileName ?? media.id}
+                      <button
+                        type="button"
+                        onClick={() => setPreviewMedia(media)}
+                        className="hover:underline hover:text-brand-600 truncate max-w-full text-left"
+                      >
+                        {media.originalFileName ?? media.id}
+                      </button>
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
                       {media.status === 'ARCHIVED'
@@ -750,6 +808,56 @@ export default function SettingsPage() {
           </div>
         </section>
       ) : null}
+
+      {previewMedia && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-6"
+          onClick={() => setPreviewMedia(null)}
+        >
+          <div
+            className="relative w-full max-w-4xl rounded-lg bg-black shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="absolute top-4 right-4 z-10 flex gap-2">
+              <a
+                href={previewMedia.readUrl ?? previewMedia.displayUrl ?? undefined}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="rounded-full bg-slate-900/60 p-2 text-white hover:bg-slate-900 transition"
+                title="Mở trong tab mới"
+              >
+                Mở
+              </a>
+              <button
+                type="button"
+                onClick={() => setPreviewMedia(null)}
+                className="rounded-full bg-slate-900/60 p-2 text-white hover:bg-slate-900 transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex items-center justify-center min-h-[300px] max-h-[80vh] overflow-hidden">
+              {previewMedia.type === 'VIDEO' ? (
+                <video
+                  src={previewMedia.readUrl ?? previewMedia.displayUrl ?? undefined}
+                  controls
+                  className="max-h-[80vh] max-w-full"
+                  autoPlay
+                />
+              ) : (
+                <img
+                  src={previewMedia.readUrl ?? previewMedia.displayUrl ?? undefined}
+                  alt={previewMedia.originalFileName ?? 'media'}
+                  className="max-h-[80vh] max-w-full object-contain"
+                />
+              )}
+            </div>
+            <div className="p-4 text-center text-sm font-medium text-slate-300">
+              {previewMedia.originalFileName ?? previewMedia.id}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
