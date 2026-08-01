@@ -13,7 +13,7 @@ import {
   type TokenSet,
 } from '@socialhub/platform-adapters';
 import type { Platform } from '@socialhub/shared';
-import { buildJobId } from '@socialhub/shared';
+import { buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import {
   decryptToken,
   encryptToken,
@@ -46,6 +46,7 @@ interface OAuthStatePayload {
 export class SocialAccountsService implements OnModuleDestroy {
   private readonly refreshQueue: Queue;
   private readonly publishQueue: Queue;
+  private readonly retryQueue: Queue;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -61,10 +62,17 @@ export class SocialAccountsService implements OnModuleDestroy {
     this.publishQueue = new Queue('publish-post', {
       connection: this.redis.getClient(),
     });
+    this.retryQueue = new Queue('retry-failed-post', {
+      connection: this.redis.getClient(),
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
-    await Promise.all([this.refreshQueue.close(), this.publishQueue.close()]);
+    await Promise.all([
+      this.refreshQueue.close(),
+      this.publishQueue.close(),
+      this.retryQueue.close(),
+    ]);
   }
 
   async list(workspaceId: string) {
@@ -543,9 +551,9 @@ export class SocialAccountsService implements OnModuleDestroy {
       socialAccountId,
       workspaceId,
     };
+    const jobId = buildJobId('refresh-social-token', payload);
     await this.refreshQueue.add('refresh-social-token', payload, {
-      jobId: buildJobId('refresh-social-token', payload),
-      delay: 50 * 60 * 1000,
+      ...buildQueueJobOptions('refresh-social-token', jobId, { delay: 50 * 60 * 1000 }),
     });
   }
 
@@ -567,14 +575,24 @@ export class SocialAccountsService implements OnModuleDestroy {
         .getJob(buildJobId('refresh-social-token', { socialAccountId, workspaceId }))
         .then((job) => job?.remove()),
       ...platformPosts.map((platformPost) => {
-        const payload = {
+        const publishPayload = {
           platformPostId: platformPost.id,
           workspaceId,
           correlationId: 'disconnect',
         };
-        return this.publishQueue
-          .getJob(buildJobId('publish-post', payload))
-          .then((job) => job?.remove());
+        const retryPayload = {
+          platformPostId: platformPost.id,
+          workspaceId,
+          requestedByUserId: 'disconnect',
+        };
+        return Promise.all([
+          this.publishQueue
+            .getJob(buildJobId('publish-post', publishPayload))
+            .then((job) => job?.remove()),
+          this.retryQueue
+            .getJob(buildJobId('retry-failed-post', retryPayload))
+            .then((job) => job?.remove()),
+        ]);
       }),
     ]);
   }

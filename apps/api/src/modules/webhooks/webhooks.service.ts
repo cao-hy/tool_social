@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import type { Prisma } from '@socialhub/db';
-import { buildJobId, platformSchema, type Platform } from '@socialhub/shared';
+import { buildJobId, buildQueueJobOptions, platformSchema, type Platform } from '@socialhub/shared';
 import type { AdapterRegistry } from '@socialhub/platform-adapters';
 import { Queue } from 'bullmq';
 import type { FastifyRequest } from 'fastify';
@@ -78,7 +78,7 @@ export class WebhooksService implements OnModuleDestroy {
       await this.processQueue.add(
         'process-webhook',
         { webhookEventId: webhookEvent.id },
-        { jobId },
+        buildQueueJobOptions('process-webhook', jobId),
       );
       return { accepted: true, duplicate: false, webhookEventId: webhookEvent.id, jobId };
     } catch (error) {

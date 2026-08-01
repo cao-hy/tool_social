@@ -389,6 +389,21 @@ export const postsApi = {
       method: 'DELETE',
     });
   },
+  bulkDelete: (workspaceId: string, input: { postIds: string[]; deleteFromPlatforms?: boolean }) =>
+    apiFetch<{
+      requested: number;
+      deleted: number;
+      failed: number;
+      results: Array<{
+        postId: string;
+        deleted: boolean;
+        errorCode?: string;
+        errorMessage?: string;
+      }>;
+    }>(`/workspaces/${workspaceId}/posts/bulk-delete`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   refreshPlatformState: (workspaceId: string, postId: string, platformPostId: string) =>
     apiFetch<{ post: ContentPostView; platformState: PlatformPostState }>(
       `/workspaces/${workspaceId}/posts/${postId}/platform-posts/${platformPostId}/refresh-state`,

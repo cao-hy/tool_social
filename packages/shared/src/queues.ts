@@ -69,6 +69,15 @@ export interface QueuePayloads {
 
 export type QueuePayload<Q extends QueueName> = QueuePayloads[Q];
 
+export interface QueueJobOptions {
+  jobId: string;
+  attempts: number;
+  backoff?: { type: 'exponential'; delay: number };
+  removeOnComplete: { age: number; count: number };
+  removeOnFail: { age: number };
+  delay?: number;
+}
+
 /**
  * Khóa idempotency (dùng làm BullMQ jobId) — chặn job trùng ngay ở tầng queue.
  * Đây là lớp phòng thủ thứ nhất chống rủi ro R9 (double post); lớp thứ hai là
@@ -109,6 +118,26 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
 
 function jobId(queue: QueueName, ...parts: string[]): string {
   return [queue, ...parts.map(encodeJobIdPart)].join('-');
+}
+
+export function buildQueueJobOptions<Q extends QueueName>(
+  queue: Q,
+  jobId: string,
+  extra: Pick<QueueJobOptions, 'delay'> = {},
+): QueueJobOptions {
+  const settings = QUEUE_SETTINGS[queue];
+
+  return {
+    jobId,
+    attempts: settings.attempts,
+    backoff:
+      settings.backoffDelayMs > 0
+        ? { type: 'exponential', delay: settings.backoffDelayMs }
+        : undefined,
+    removeOnComplete: { age: 3600, count: 1000 },
+    removeOnFail: { age: 7 * 24 * 3600 },
+    ...extra,
+  };
 }
 
 function encodeJobIdPart(part: string): string {

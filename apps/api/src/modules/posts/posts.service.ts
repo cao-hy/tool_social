@@ -13,10 +13,11 @@ import {
   type TokenSet,
 } from '@socialhub/platform-adapters';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
-import { deriveContentPostStatus, buildJobId } from '@socialhub/shared';
+import { deriveContentPostStatus, buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import type { MediaType, Platform, PlatformPostStatus } from '@socialhub/shared';
+import type { QueuePayload } from '@socialhub/shared';
 import { Queue } from 'bullmq';
-import { AppError } from '../../common/errors/app-error';
+import { AppError, isAppError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
 import { ADAPTER_REGISTRY, KEYRING } from '../../infrastructure/infrastructure.module';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
@@ -24,6 +25,7 @@ import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService, type AuditContext } from '../audit/audit.service';
 import type {
+  BulkDeletePostsInput,
   CreatePostInput,
   ListPostsQuery,
   PublishPostInputDto,
@@ -34,6 +36,7 @@ import type {
 @Injectable()
 export class PostsService implements OnModuleDestroy {
   private readonly publishQueue: Queue;
+  private readonly retryQueue: Queue;
   private readonly publicS3: S3Client;
 
   constructor(
@@ -45,6 +48,9 @@ export class PostsService implements OnModuleDestroy {
     @Inject(AuditService) private readonly audit: AuditService,
   ) {
     this.publishQueue = new Queue('publish-post', {
+      connection: this.redis.getClient(),
+    });
+    this.retryQueue = new Queue('retry-failed-post', {
       connection: this.redis.getClient(),
     });
     this.publicS3 = new S3Client({
@@ -59,7 +65,7 @@ export class PostsService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.publishQueue.close();
+    await Promise.all([this.publishQueue.close(), this.retryQueue.close()]);
   }
 
   async list(workspaceId: string, query: ListPostsQuery) {
@@ -350,6 +356,67 @@ export class PostsService implements OnModuleDestroy {
     return { deleted: true };
   }
 
+  async bulkDeletePosts(
+    workspaceId: string,
+    actorUserId: string,
+    input: BulkDeletePostsInput,
+    auditContext: AuditContext,
+  ) {
+    const uniquePostIds = [...new Set(input.postIds)];
+    const results: Array<{
+      postId: string;
+      deleted: boolean;
+      errorCode?: string;
+      errorMessage?: string;
+    }> = [];
+
+    for (const postId of uniquePostIds) {
+      try {
+        await this.deletePost(
+          workspaceId,
+          postId,
+          actorUserId,
+          { deleteFromPlatforms: input.deleteFromPlatforms },
+          auditContext,
+        );
+        results.push({ postId, deleted: true });
+      } catch (error) {
+        results.push({
+          postId,
+          deleted: false,
+          errorCode: errorCodeForBulkDelete(error),
+          errorMessage:
+            error instanceof Error ? error.message : 'Lỗi không xác định khi xóa bài viết.',
+        });
+      }
+    }
+
+    const deleted = results.filter((item) => item.deleted).length;
+    const failed = results.length - deleted;
+
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'POST_DELETED',
+      resourceType: 'ContentPost',
+      metadata: {
+        action: 'bulk_delete',
+        requested: uniquePostIds.length,
+        deleted,
+        failed,
+        deleteFromPlatforms: input.deleteFromPlatforms,
+      },
+    });
+
+    return {
+      requested: uniquePostIds.length,
+      deleted,
+      failed,
+      results,
+    };
+  }
+
   async publishNow(
     workspaceId: string,
     postId: string,
@@ -357,6 +424,7 @@ export class PostsService implements OnModuleDestroy {
     input: PublishPostInputDto,
     auditContext: AuditContext,
   ) {
+    await this.removeScheduledJobs(postId, workspaceId, auditContext.requestId);
     const queued = await this.prepareForPublishing(workspaceId, postId, input.socialAccountIds);
     await this.enqueuePlatformPosts(queued.id, workspaceId, auditContext.requestId);
 
@@ -383,6 +451,8 @@ export class PostsService implements OnModuleDestroy {
     if (input.scheduledAt <= new Date()) {
       throw AppError.validation('Thời gian lên lịch phải nằm trong tương lai.');
     }
+
+    await this.removeScheduledJobs(postId, workspaceId, auditContext.requestId);
 
     const scheduled = await this.prisma.$transaction(async (tx) => {
       const post = await tx.contentPost.findFirst({
@@ -459,9 +529,7 @@ export class PostsService implements OnModuleDestroy {
     ]);
 
     await Promise.all(
-      failed.map((item) =>
-        this.enqueuePlatformPost(item.id, workspaceId, auditContext.requestId, true),
-      ),
+      failed.map((item) => this.enqueueRetryPlatformPost(item.id, workspaceId, actorUserId)),
     );
 
     await this.audit.record({
@@ -717,10 +785,14 @@ export class PostsService implements OnModuleDestroy {
     if (runAt) {
       const delay = Math.max(0, runAt.getTime() - Date.now());
       for (const platformPost of post.platformPosts) {
-        const payload = { platformPostId: platformPost.id, workspaceId, correlationId };
+        const payload: QueuePayload<'publish-post'> = {
+          platformPostId: platformPost.id,
+          workspaceId,
+          correlationId,
+        };
+        const jobId = buildJobId('publish-post', payload);
         await this.publishQueue.add('publish-post', payload, {
-          jobId: buildJobId('publish-post', payload),
-          delay,
+          ...buildQueueJobOptions('publish-post', jobId, { delay }),
         });
       }
       await this.prisma.postSchedule.updateMany({
@@ -742,9 +814,7 @@ export class PostsService implements OnModuleDestroy {
       where: { contentPostId, workspaceId, status: 'QUEUED' },
     });
     await Promise.all(
-      platformPosts.map((item) =>
-        this.enqueuePlatformPost(item.id, workspaceId, correlationId, false),
-      ),
+      platformPosts.map((item) => this.enqueuePlatformPost(item.id, workspaceId, correlationId)),
     );
   }
 
@@ -752,12 +822,32 @@ export class PostsService implements OnModuleDestroy {
     platformPostId: string,
     workspaceId: string,
     correlationId = 'manual',
-    retry: boolean,
   ): Promise<void> {
-    const payload = { platformPostId, workspaceId, correlationId };
-    await this.publishQueue.add(retry ? 'retry-failed-post' : 'publish-post', payload, {
-      jobId: buildJobId('publish-post', payload),
-    });
+    const payload: QueuePayload<'publish-post'> = { platformPostId, workspaceId, correlationId };
+    const jobId = buildJobId('publish-post', payload);
+    await this.publishQueue.add(
+      'publish-post',
+      payload,
+      buildQueueJobOptions('publish-post', jobId),
+    );
+  }
+
+  private async enqueueRetryPlatformPost(
+    platformPostId: string,
+    workspaceId: string,
+    requestedByUserId: string,
+  ): Promise<void> {
+    const payload: QueuePayload<'retry-failed-post'> = {
+      platformPostId,
+      workspaceId,
+      requestedByUserId,
+    };
+    const jobId = buildJobId('retry-failed-post', payload);
+    await this.retryQueue.add(
+      'retry-failed-post',
+      payload,
+      buildQueueJobOptions('retry-failed-post', jobId),
+    );
   }
 
   private async removeScheduledJobs(
@@ -945,13 +1035,18 @@ export class PostsService implements OnModuleDestroy {
   > {
     if (platformPosts.length === 0) return [];
 
-    const jobIds = platformPosts.map((platformPost) =>
+    const jobIds = platformPosts.flatMap((platformPost) => [
       buildJobId('publish-post', {
         platformPostId: platformPost.id,
         workspaceId,
         correlationId: 'lookup',
       }),
-    );
+      buildJobId('retry-failed-post', {
+        platformPostId: platformPost.id,
+        workspaceId,
+        requestedByUserId: 'lookup',
+      }),
+    ]);
 
     return this.prisma.backgroundJob.findMany({
       where: {
@@ -1652,6 +1747,12 @@ function hasTikTokStatusMethods(
 function jsonObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
+}
+
+function errorCodeForBulkDelete(error: unknown): string {
+  if (isAppError(error)) return error.code;
+  if (isPlatformError(error)) return error.kind;
+  return 'UNKNOWN';
 }
 
 function assertYouTubeReadyForPublic(state: YouTubeVideoPlatformState): void {

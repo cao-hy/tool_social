@@ -65,6 +65,11 @@ export const deletePostQuerySchema = z.object({
     .optional(),
 });
 
+export const bulkDeletePostsSchema = z.object({
+  postIds: z.array(z.string().min(1)).min(1).max(100),
+  deleteFromPlatforms: z.boolean().default(false),
+});
+
 export const listPostsQuerySchema = z.object({
   status: z
     .enum([
@@ -95,3 +100,4 @@ export type PublishPostInputDto = z.infer<typeof publishPostSchema>;
 export type SchedulePostInput = z.infer<typeof schedulePostSchema>;
 export type ListPostsQuery = z.infer<typeof listPostsQuerySchema>;
 export type DeletePostQuery = z.infer<typeof deletePostQuerySchema>;
+export type BulkDeletePostsInput = z.infer<typeof bulkDeletePostsSchema>;

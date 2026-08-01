@@ -9,7 +9,12 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
-import { buildJobId, type MediaType, type QueuePayload } from '@socialhub/shared';
+import {
+  buildJobId,
+  buildQueueJobOptions,
+  type MediaType,
+  type QueuePayload,
+} from '@socialhub/shared';
 import { Queue } from 'bullmq';
 import { fileTypeFromBuffer } from 'file-type';
 import sharp from 'sharp';
@@ -515,9 +520,12 @@ export class MediaService implements OnModuleDestroy {
 
   private async enqueueThumbnail(workspaceId: string, mediaAssetId: string): Promise<void> {
     const payload: QueuePayload<'generate-thumbnail'> = { workspaceId, mediaAssetId };
-    await this.thumbnailQueue.add('generate-thumbnail', payload, {
-      jobId: buildJobId('generate-thumbnail', payload),
-    });
+    const jobId = buildJobId('generate-thumbnail', payload);
+    await this.thumbnailQueue.add(
+      'generate-thumbnail',
+      payload,
+      buildQueueJobOptions('generate-thumbnail', jobId),
+    );
   }
 
   private async diskUsage() {

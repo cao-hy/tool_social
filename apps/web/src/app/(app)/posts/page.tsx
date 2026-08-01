@@ -21,6 +21,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Field,
   InlineError,
+  PrimaryButton,
   SecondaryButton,
   SelectInput,
   TextInput,
@@ -65,6 +66,15 @@ const DELETABLE_POST_STATUSES = [
   'CANCELLED',
 ] as const;
 
+type BulkDeleteProgressStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'ERROR';
+
+interface BulkDeleteProgressItem {
+  postId: string;
+  title: string;
+  status: BulkDeleteProgressStatus;
+  errorMessage?: string;
+}
+
 export default function PostsPage() {
   const auth = useAuth();
   const toast = useToast();
@@ -89,6 +99,10 @@ export default function PostsPage() {
   const [retrying, setRetrying] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
+  const [selectedPostIds, setSelectedPostIds] = useState<string[]>([]);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<BulkDeleteProgressItem[]>([]);
   const [previewPost, setPreviewPost] = useState<ContentPostView | null>(null);
   const [duplicating, setDuplicating] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -117,6 +131,18 @@ export default function PostsPage() {
       sortBy,
       status,
     ],
+  );
+  const selectedPosts = useMemo(
+    () => posts.filter((post) => selectedPostIds.includes(post.id)),
+    [posts, selectedPostIds],
+  );
+  const deletablePosts = useMemo(
+    () => posts.filter((post) => canDeletePostStatus(post.status)),
+    [posts],
+  );
+  const selectedDeletablePosts = useMemo(
+    () => selectedPosts.filter((post) => canDeletePostStatus(post.status)),
+    [selectedPosts],
   );
 
   async function loadPosts(cursor?: string) {
@@ -154,6 +180,11 @@ export default function PostsPage() {
   }, [workspace, activeFilters]);
 
   useEffect(() => {
+    const visiblePostIds = new Set(posts.map((post) => post.id));
+    setSelectedPostIds((current) => current.filter((postId) => visiblePostIds.has(postId)));
+  }, [posts]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has('created')) {
       toast.success('Đã lưu draft.');
@@ -182,6 +213,10 @@ export default function PostsPage() {
   }
 
   function openDeleteDialog(post: ContentPostView) {
+    if (!workspace || !hasPermission(workspace.role, 'post:delete')) {
+      toast.warning('Bạn không có quyền xóa bài viết.');
+      return;
+    }
     if (!canDeletePostStatus(post.status)) {
       toast.warning('Bài này không ở trạng thái có thể xóa.');
       return;
@@ -210,6 +245,113 @@ export default function PostsPage() {
       toast.error(getErrorMessage(deleteError));
     } finally {
       setDeleting(null);
+    }
+  }
+
+  function togglePostSelection(post: ContentPostView) {
+    if (!canDeletePostStatus(post.status)) return;
+    setSelectedPostIds((current) =>
+      current.includes(post.id)
+        ? current.filter((postId) => postId !== post.id)
+        : [...current, post.id],
+    );
+  }
+
+  function toggleAllVisiblePosts() {
+    const deletableIds = deletablePosts.map((post) => post.id);
+    const allSelected = deletableIds.every((postId) => selectedPostIds.includes(postId));
+    setSelectedPostIds((current) =>
+      allSelected
+        ? current.filter((postId) => !deletableIds.includes(postId))
+        : [...new Set([...current, ...deletableIds])],
+    );
+  }
+
+  async function bulkDeletePosts(input: {
+    deleteFromServer: boolean;
+    deleteFromPlatforms: boolean;
+  }) {
+    if (!workspace) return;
+    if (!hasPermission(workspace.role, 'post:delete')) {
+      toast.warning('Bạn không có quyền xóa bài viết.');
+      return;
+    }
+    if (!input.deleteFromServer) {
+      toast.warning('Hiện tại cần chọn xóa khỏi server/workspace để hoàn tất bulk delete.');
+      return;
+    }
+    const targets = [...selectedDeletablePosts];
+    if (targets.length === 0) {
+      toast.warning('Chọn ít nhất một bài có thể xóa.');
+      return;
+    }
+
+    setBulkDeleting(true);
+    setError(null);
+    setBulkDeleteProgress(
+      targets.map((post) => ({
+        postId: post.id,
+        title: post.title ?? post.body ?? post.id,
+        status: 'PENDING',
+      })),
+    );
+
+    let deleted = 0;
+    let failed = 0;
+    const failedPostIds = new Set<string>();
+    try {
+      for (const post of targets) {
+        setBulkDeleteProgress((current) =>
+          current.map((item) =>
+            item.postId === post.id
+              ? { ...item, status: 'RUNNING', errorMessage: undefined }
+              : item,
+          ),
+        );
+
+        try {
+          const platformPostIds = input.deleteFromPlatforms
+            ? post.platformPosts
+                .filter((item) => item.status === 'PUBLISHED' && item.externalPostId)
+                .map((item) => item.id)
+            : [];
+          await postsApi.delete(workspace.id, post.id, {
+            deleteFromPlatforms: input.deleteFromPlatforms,
+            platformPostIds,
+          });
+          deleted += 1;
+          setBulkDeleteProgress((current) =>
+            current.map((item) => (item.postId === post.id ? { ...item, status: 'DONE' } : item)),
+          );
+        } catch (deleteError) {
+          failed += 1;
+          failedPostIds.add(post.id);
+          setBulkDeleteProgress((current) =>
+            current.map((item) =>
+              item.postId === post.id
+                ? {
+                    ...item,
+                    status: 'ERROR',
+                    errorMessage: getErrorMessage(deleteError),
+                  }
+                : item,
+            ),
+          );
+        }
+      }
+
+      setSelectedPostIds((current) => current.filter((postId) => failedPostIds.has(postId)));
+      await loadPosts(cursorStack.at(-1));
+      if (failed > 0) {
+        toast.warning(`Đã xóa ${deleted}/${targets.length} bài. ${failed} bài lỗi.`);
+      } else {
+        setSelectedPostIds([]);
+        toast.success(`Đã xóa ${deleted} bài viết.`);
+      }
+    } catch (bulkDeleteError) {
+      toast.error(getErrorMessage(bulkDeleteError));
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -276,6 +418,7 @@ export default function PostsPage() {
   }
 
   const canRetry = hasPermission(workspace.role, 'post:publish');
+  const canDelete = hasPermission(workspace.role, 'post:delete');
   const canCreate = hasPermission(workspace.role, 'post:create');
   const activeAdvancedFilterCount = [
     platform,
@@ -472,16 +615,51 @@ export default function PostsPage() {
       <InlineError message={error} />
 
       <section className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <p className="text-sm font-medium text-slate-700">
-            {loading ? 'Đang tải...' : `Hiển thị ${posts.length} bài`}
-          </p>
-          <p className="text-xs text-slate-500">Trang {cursorStack.length + 1}</p>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <p className="text-sm font-medium text-slate-700">
+              {loading ? 'Đang tải...' : `Hiển thị ${posts.length} bài`}
+            </p>
+            {selectedDeletablePosts.length > 0 ? (
+              <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
+                Đã chọn {selectedDeletablePosts.length}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedDeletablePosts.length > 0 ? (
+              <SecondaryButton
+                className="h-9 gap-2 border-red-200 text-red-700 hover:bg-red-50"
+                disabled={!canDelete || bulkDeleting}
+                onClick={() => {
+                  setBulkDeleteProgress([]);
+                  setBulkDeleteOpen(true);
+                }}
+                type="button"
+              >
+                <Trash2 className="h-4 w-4" />
+                Xóa đã chọn
+              </SecondaryButton>
+            ) : null}
+            <p className="text-xs text-slate-500">Trang {cursorStack.length + 1}</p>
+          </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[920px] table-fixed text-left text-sm">
+          <table className="w-full min-w-[980px] table-fixed text-left text-sm">
             <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase text-slate-500">
               <tr>
+                <th className="w-12 px-4 py-3">
+                  <input
+                    aria-label="Chọn tất cả bài có thể xóa"
+                    checked={
+                      deletablePosts.length > 0 &&
+                      deletablePosts.every((post) => selectedPostIds.includes(post.id))
+                    }
+                    disabled={!canDelete || deletablePosts.length === 0}
+                    type="checkbox"
+                    onChange={toggleAllVisiblePosts}
+                  />
+                </th>
                 <th className="w-28 px-4 py-3">Bài đăng</th>
                 <th className="w-36 px-4 py-3">Nền tảng</th>
                 <th className="w-40 px-4 py-3">Trạng thái</th>
@@ -496,6 +674,15 @@ export default function PostsPage() {
                   key={post.id}
                   className="border-l-2 border-transparent align-middle transition hover:border-brand-300 hover:bg-slate-50"
                 >
+                  <td className="px-4 py-3">
+                    <input
+                      aria-label={`Chọn bài ${post.title ?? post.id}`}
+                      checked={selectedPostIds.includes(post.id)}
+                      disabled={!canDelete || !canDeletePostStatus(post.status)}
+                      type="checkbox"
+                      onChange={() => togglePostSelection(post)}
+                    />
+                  </td>
                   <td className="px-4 py-3">
                     <PostThumbnail post={post} onPreview={() => setPreviewPost(post)} />
                     <MediaSummary media={post.media} compact />
@@ -525,6 +712,7 @@ export default function PostsPage() {
                         <Eye className="h-4 w-4" />
                       </IconLink>
                       <RowActions
+                        canDelete={canDelete}
                         canRetry={canRetry}
                         deleting={deleting === post.id}
                         duplicating={duplicating === post.id}
@@ -601,6 +789,18 @@ export default function PostsPage() {
         post={deleteTarget}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={(input) => void deletePost(input)}
+      />
+      <BulkDeletePostsDialog
+        busy={bulkDeleting}
+        open={bulkDeleteOpen}
+        posts={selectedDeletablePosts}
+        progress={bulkDeleteProgress}
+        onCancel={() => {
+          if (bulkDeleting) return;
+          setBulkDeleteOpen(false);
+          setBulkDeleteProgress([]);
+        }}
+        onConfirm={(input) => void bulkDeletePosts(input)}
       />
       <MediaPreviewDialog post={previewPost} onClose={() => setPreviewPost(null)} />
     </div>
@@ -793,6 +993,189 @@ function MediaPreviewDialog({
   );
 }
 
+function BulkDeletePostsDialog({
+  busy,
+  open,
+  posts,
+  progress,
+  onCancel,
+  onConfirm,
+}: {
+  busy: boolean;
+  open: boolean;
+  posts: ContentPostView[];
+  progress: BulkDeleteProgressItem[];
+  onCancel: () => void;
+  onConfirm: (input: { deleteFromServer: boolean; deleteFromPlatforms: boolean }) => void;
+}) {
+  const [deleteFromServer, setDeleteFromServer] = useState(true);
+  const [deleteFromPlatforms, setDeleteFromPlatforms] = useState(false);
+  const remoteTargetCount = posts.reduce(
+    (sum, post) =>
+      sum +
+      post.platformPosts.filter((item) => item.status === 'PUBLISHED' && item.externalPostId)
+        .length,
+    0,
+  );
+  const completedCount = progress.filter(
+    (item) => item.status === 'DONE' || item.status === 'ERROR',
+  ).length;
+  const successCount = progress.filter((item) => item.status === 'DONE').length;
+  const errorCount = progress.filter((item) => item.status === 'ERROR').length;
+  const totalCount = progress.length || posts.length;
+  const percent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const confirmDisabled = busy || progress.length > 0 || posts.length === 0 || !deleteFromServer;
+
+  useEffect(() => {
+    if (open) {
+      setDeleteFromServer(true);
+      setDeleteFromPlatforms(false);
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+      <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white shadow-xl">
+        <div className="border-b border-slate-200 px-5 py-4">
+          <h2 className="text-lg font-semibold text-slate-950">Xóa nhiều bài viết</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Chọn phạm vi xóa rồi theo dõi tiến trình từng bài trong danh sách bên dưới.
+          </p>
+        </div>
+
+        <div className="space-y-3 px-5 py-4">
+          <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
+            <input
+              checked={deleteFromServer}
+              className="mt-1"
+              disabled={busy}
+              type="checkbox"
+              onChange={(event) => setDeleteFromServer(event.target.checked)}
+            />
+            <span>
+              <span className="block font-semibold text-slate-950">Xóa ở server / workspace</span>
+              <span className="block text-slate-500">
+                Xóa mềm khỏi danh sách quản lý, hủy lịch và dọn job publish đang chờ.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 rounded-md border border-slate-200 px-3 py-3 text-sm">
+            <input
+              checked={deleteFromPlatforms}
+              className="mt-1"
+              disabled={busy || remoteTargetCount === 0}
+              type="checkbox"
+              onChange={(event) => setDeleteFromPlatforms(event.target.checked)}
+            />
+            <span>
+              <span className="block font-semibold text-slate-950">
+                Xóa cả trên nền tảng ({remoteTargetCount} bản đã publish)
+              </span>
+              <span className="block text-slate-500">
+                Chỉ áp dụng với nền tảng có API xóa bài. Nếu nền tảng từ chối, bài đó sẽ báo lỗi.
+              </span>
+            </span>
+          </label>
+
+          {progress.length > 0 ? (
+            <div className="rounded-md border border-slate-200 px-3 py-3">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="font-semibold text-slate-900">
+                  Tiến trình {completedCount}/{totalCount}
+                </span>
+                <span className="text-xs text-slate-500">
+                  {successCount} xong · {errorCount} lỗi
+                </span>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-brand-600 transition-all"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="max-h-48 overflow-auto rounded-md border border-slate-200">
+            {(progress.length > 0 ? progress : posts.map(postToPendingProgress)).map((item) => (
+              <div
+                key={item.postId}
+                className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 last:border-b-0"
+              >
+                <span className="min-w-0 truncate text-sm font-medium text-slate-800">
+                  {item.title}
+                </span>
+                <BulkDeleteProgressBadge status={item.status} />
+                {item.errorMessage ? (
+                  <p className="min-w-0 flex-1 truncate text-right text-xs text-red-700">
+                    {item.errorMessage}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+          {!deleteFromServer ? (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Bulk delete hiện cần bật xóa ở server/workspace. Xóa riêng trên social sẽ làm thành
+              một thao tác riêng để tránh lệch dữ liệu.
+            </p>
+          ) : null}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+          <SecondaryButton disabled={busy} onClick={onCancel} type="button">
+            {progress.length > 0 && !busy ? 'Đóng' : 'Hủy'}
+          </SecondaryButton>
+          <PrimaryButton
+            busy={busy}
+            disabled={confirmDisabled}
+            onClick={() => onConfirm({ deleteFromServer, deleteFromPlatforms })}
+            type="button"
+          >
+            Xóa {posts.length} bài
+          </PrimaryButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function postToPendingProgress(post: ContentPostView): BulkDeleteProgressItem {
+  return {
+    postId: post.id,
+    title: post.title ?? post.body ?? post.id,
+    status: 'PENDING',
+  };
+}
+
+function BulkDeleteProgressBadge({ status }: { status: BulkDeleteProgressStatus }) {
+  const tone =
+    status === 'DONE'
+      ? 'bg-emerald-50 text-emerald-700'
+      : status === 'ERROR'
+        ? 'bg-red-50 text-red-700'
+        : status === 'RUNNING'
+          ? 'bg-amber-50 text-amber-700'
+          : 'bg-slate-100 text-slate-500';
+  const label =
+    status === 'DONE'
+      ? 'Xong'
+      : status === 'ERROR'
+        ? 'Lỗi'
+        : status === 'RUNNING'
+          ? 'Đang xóa'
+          : 'Chờ';
+
+  return (
+    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>
+      {label}
+    </span>
+  );
+}
+
 function PostResultSummary({ post }: { post: ContentPostView }) {
   const published = post.platformPosts.filter((item) => item.status === 'PUBLISHED').length;
   const failed = post.platformPosts.filter((item) => item.status === 'FAILED').length;
@@ -850,6 +1233,7 @@ function PlatformErrors({ post }: { post: ContentPostView }) {
 }
 
 function RowActions({
+  canDelete,
   canRetry,
   deleting,
   duplicating,
@@ -860,6 +1244,7 @@ function RowActions({
   onDuplicate,
   onRetry,
 }: {
+  canDelete: boolean;
   canRetry: boolean;
   deleting: boolean;
   duplicating: boolean;
@@ -882,7 +1267,7 @@ function RowActions({
       </IconButton>
       <IconButton
         className="h-9 w-9"
-        disabled={deleting || !canDeletePostStatus(post.status)}
+        disabled={!canDelete || deleting || !canDeletePostStatus(post.status)}
         label="Xóa"
         onClick={onDelete}
       >

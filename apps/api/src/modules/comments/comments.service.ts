@@ -1,6 +1,6 @@
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import type { Prisma } from '@socialhub/db';
-import { buildJobId } from '@socialhub/shared';
+import { buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import {
@@ -631,7 +631,11 @@ export class CommentsService implements OnModuleDestroy {
       since: input.since?.toISOString(),
     };
     const jobId = `${buildJobId('sync-comments', payload)}-${requestId}`;
-    await this.syncQueue.add('sync-comments', { ...payload, correlationId: requestId }, { jobId });
+    await this.syncQueue.add(
+      'sync-comments',
+      { ...payload, correlationId: requestId },
+      buildQueueJobOptions('sync-comments', jobId),
+    );
     return { queued: true, jobId };
   }
 

@@ -1,4 +1,4 @@
-import { QUEUE_SETTINGS, type QueueName } from '@socialhub/shared';
+import { buildQueueJobOptions, QUEUE_SETTINGS, type QueueName } from '@socialhub/shared';
 import type { JobsOptions, WorkerOptions } from 'bullmq';
 
 /**
@@ -11,18 +11,7 @@ import type { JobsOptions, WorkerOptions } from 'bullmq';
  * Redis không mất khả năng điều tra sự cố.
  */
 export function buildJobOptions(queue: QueueName, jobId: string): JobsOptions {
-  const settings = QUEUE_SETTINGS[queue];
-
-  return {
-    jobId,
-    attempts: settings.attempts,
-    backoff:
-      settings.backoffDelayMs > 0
-        ? { type: 'exponential', delay: settings.backoffDelayMs }
-        : undefined,
-    removeOnComplete: { age: 3600, count: 1000 },
-    removeOnFail: { age: 7 * 24 * 3600 },
-  };
+  return buildQueueJobOptions(queue, jobId);
 }
 
 export function buildWorkerOptions(

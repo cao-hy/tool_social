@@ -23,11 +23,19 @@ import { decideOnError } from '../queue/error-policy';
 import { JobLockService } from '../queue/job-lock';
 import { getFreshAccessToken } from './token-refresh';
 
-const publishPostPayloadSchema = z.object({
-  platformPostId: z.string().min(1),
-  workspaceId: z.string().min(1),
-  correlationId: z.string().min(1),
-});
+const publishPostPayloadSchema = z
+  .object({
+    platformPostId: z.string().min(1),
+    workspaceId: z.string().min(1),
+    correlationId: z.string().min(1).optional(),
+    requestedByUserId: z.string().min(1).optional(),
+  })
+  .transform((payload) => ({
+    ...payload,
+    correlationId:
+      payload.correlationId ??
+      `retry:${payload.requestedByUserId ?? 'unknown'}:${payload.platformPostId}`,
+  }));
 
 interface PublishNetworkProof {
   checkedAt: string;

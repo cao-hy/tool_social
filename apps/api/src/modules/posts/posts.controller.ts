@@ -22,11 +22,13 @@ import { zodPipe } from '../../common/pipes/zod-validation.pipe';
 import { getRequestId } from '../../common/request-context';
 import {
   createPostSchema,
+  bulkDeletePostsSchema,
   deletePostQuerySchema,
   listPostsQuerySchema,
   publishPostSchema,
   schedulePostSchema,
   updatePostSchema,
+  type BulkDeletePostsInput,
   type CreatePostInput,
   type DeletePostQuery,
   type ListPostsQuery,
@@ -58,6 +60,21 @@ export class PostsController {
     @Req() request: FastifyRequest & AuthenticatedRequest,
   ): Promise<unknown> {
     return this.posts.create(
+      workspaceId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Post('bulk-delete')
+  @RequirePermissions('post:delete')
+  bulkDelete(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(bulkDeletePostsSchema)) body: BulkDeletePostsInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ): Promise<unknown> {
+    return this.posts.bulkDeletePosts(
       workspaceId,
       requireUser(request).id,
       body,
