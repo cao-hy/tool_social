@@ -10,8 +10,13 @@ export class AuditLogsService {
       id: string;
       action: string;
       actorUserId: string | null;
+      actorIp: string | null;
+      actorUserAgent: string | null;
+      requestId: string | null;
       resourceType: string | null;
       resourceId: string | null;
+      before: unknown;
+      after: unknown;
       metadata: unknown;
       createdAt: Date;
     }>;
@@ -27,8 +32,13 @@ export class AuditLogsService {
         id: log.id,
         action: log.action,
         actorUserId: log.actorUserId,
+        actorIp: log.actorIp,
+        actorUserAgent: log.actorUserAgent,
+        requestId: log.requestId,
         resourceType: log.resourceType,
         resourceId: log.resourceId,
+        before: log.before,
+        after: log.after,
         metadata: log.metadata,
         createdAt: log.createdAt,
       })),

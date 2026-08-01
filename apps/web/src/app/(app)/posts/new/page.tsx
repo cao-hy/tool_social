@@ -1,6 +1,7 @@
 'use client';
 
 import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -23,7 +24,17 @@ import {
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
 import { validatePostComposer } from '@/lib/post-validation';
-import type { MediaAssetView, SocialAccountView, StorageUsageView } from '@/lib/types';
+import {
+  buildSchedulePreview,
+  zonedDateTimeLocalToUtcIso,
+  type SchedulePreview,
+} from '@/lib/schedule-time';
+import type {
+  MediaAssetView,
+  MediaLibraryItem,
+  SocialAccountView,
+  StorageUsageView,
+} from '@/lib/types';
 
 export default function NewPostPage() {
   const auth = useAuth();
@@ -43,6 +54,14 @@ export default function NewPostPage() {
   const [mediaAssets, setMediaAssets] = useState<Array<MediaAssetView & { previewUrl?: string }>>(
     [],
   );
+  const [mediaMode, setMediaMode] = useState<'upload' | 'library'>('upload');
+  const [libraryItems, setLibraryItems] = useState<MediaLibraryItem[]>([]);
+  const [libraryCursorStack, setLibraryCursorStack] = useState<string[]>([]);
+  const [libraryNextCursor, setLibraryNextCursor] = useState<string | null>(null);
+  const [libraryQuery, setLibraryQuery] = useState('');
+  const [libraryType, setLibraryType] = useState('');
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
   const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(null);
   const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState<'draft' | 'publish' | 'schedule' | null>(null);
@@ -59,6 +78,7 @@ export default function NewPostPage() {
       .usage(workspace.id)
       .then((usage) => setStorageUsage(usage))
       .catch(() => setStorageUsage(null));
+    void loadMediaLibrary();
   }, [workspace]);
 
   const groupedAccounts = useMemo(() => {
@@ -75,6 +95,15 @@ export default function NewPostPage() {
     () => accounts.filter((account) => selectedIds.includes(account.id)),
     [accounts, selectedIds],
   );
+
+  const schedulePreview = useMemo(() => {
+    if (!workspace || !scheduledAt) return null;
+    try {
+      return buildSchedulePreview(scheduledAt, workspace.timezone);
+    } catch {
+      return null;
+    }
+  }, [scheduledAt, workspace]);
 
   if (!workspace) {
     return <p className="text-sm text-slate-600">Tài khoản này chưa thuộc workspace nào.</p>;
@@ -169,7 +198,7 @@ export default function NewPostPage() {
     try {
       const post = await postsApi.create(workspace.id, {
         ...payload(),
-        scheduledAt: new Date(scheduledAt).toISOString(),
+        scheduledAt: zonedDateTimeLocalToUtcIso(scheduledAt, workspace.timezone),
       });
       router.push(`/calendar?scheduled=${post.id}`);
     } catch (scheduleError) {
@@ -290,10 +319,9 @@ export default function NewPostPage() {
       }
       setMediaAssets((current) => [...current, ...uploaded].slice(0, 10));
       if (workspace) {
-        mediaApi
-          .usage(workspace.id)
-          .then((usage) => setStorageUsage(usage))
-          .catch(() => undefined);
+        void refreshStorageUsage();
+        setLibraryCursorStack([]);
+        void loadMediaLibrary();
       }
       toast.success(`Đã upload ${uploaded.length} media.`);
       if (processingIds.length > 0) {
@@ -352,6 +380,65 @@ export default function NewPostPage() {
 
   function sleep(ms: number) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function refreshStorageUsage() {
+    if (!workspace) return;
+    try {
+      setStorageUsage(await mediaApi.usage(workspace.id));
+    } catch {
+      setStorageUsage(null);
+    }
+  }
+
+  async function loadMediaLibrary(cursor?: string) {
+    if (!workspace) return;
+    setLibraryLoading(true);
+    setLibraryError(null);
+    try {
+      const response = await mediaApi.list(workspace.id, {
+        limit: 12,
+        cursor,
+        q: libraryQuery.trim() || undefined,
+        type: libraryType || undefined,
+        status: 'READY',
+      });
+      setLibraryItems(response.items);
+      setLibraryNextCursor(response.nextCursor);
+    } catch (loadError) {
+      setLibraryError(getErrorMessage(loadError));
+    } finally {
+      setLibraryLoading(false);
+    }
+  }
+
+  function refreshMediaLibrary() {
+    setLibraryCursorStack([]);
+    void loadMediaLibrary();
+  }
+
+  function goToPreviousMediaPage() {
+    const previousStack = libraryCursorStack.slice(0, -1);
+    setLibraryCursorStack(previousStack);
+    void loadMediaLibrary(previousStack.at(-1));
+  }
+
+  function goToNextMediaPage() {
+    if (!libraryNextCursor) return;
+    setLibraryCursorStack((current) => [...current, libraryNextCursor]);
+    void loadMediaLibrary(libraryNextCursor);
+  }
+
+  function addMediaFromLibrary(asset: MediaLibraryItem) {
+    if (mediaAssets.some((item) => item.id === asset.id)) {
+      toast.info('Media này đã có trong draft.');
+      return;
+    }
+    if (mediaAssets.length >= 10) {
+      toast.warning('Mỗi draft hiện tối đa 10 media.');
+      return;
+    }
+    setMediaAssets((current) => [...current, asset]);
   }
 
   function removeMedia(mediaAssetId: string) {
@@ -429,23 +516,67 @@ export default function NewPostPage() {
               value={scheduledAt}
               onChange={(event) => setScheduledAt(event.target.value)}
             />
-            {scheduledAt ? (
-              <p className="mt-1 text-xs text-slate-500">
-                Bấm "Lên lịch" để lưu bài vào Calendar. "Lưu draft" sẽ không tự lên lịch.
-              </p>
-            ) : null}
+            {schedulePreview ? <ScheduleTimePreview preview={schedulePreview} /> : null}
           </Field>
 
           <Field label="Media">
             <StorageHint usage={storageUsage} uploading={uploading} />
-            <input
-              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
-              className="mt-3 block w-full text-sm text-slate-700 file:mr-3 file:h-10 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:text-sm file:font-medium file:text-slate-700"
-              disabled={uploading}
-              multiple
-              type="file"
-              onChange={(event) => void uploadMedia(event.target.files)}
-            />
+            <div className="mt-3 inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
+              <button
+                className={`h-9 rounded px-3 text-sm font-semibold transition ${
+                  mediaMode === 'upload'
+                    ? 'bg-white text-slate-950 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-950'
+                }`}
+                type="button"
+                onClick={() => setMediaMode('upload')}
+              >
+                Upload mới
+              </button>
+              <button
+                className={`h-9 rounded px-3 text-sm font-semibold transition ${
+                  mediaMode === 'library'
+                    ? 'bg-white text-slate-950 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-950'
+                }`}
+                type="button"
+                onClick={() => {
+                  setMediaMode('library');
+                  if (libraryItems.length === 0) void loadMediaLibrary();
+                }}
+              >
+                Chọn từ server
+              </button>
+            </div>
+
+            {mediaMode === 'upload' ? (
+              <input
+                accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm"
+                className="mt-3 block w-full text-sm text-slate-700 file:mr-3 file:h-10 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:text-sm file:font-medium file:text-slate-700"
+                disabled={uploading}
+                multiple
+                type="file"
+                onChange={(event) => void uploadMedia(event.target.files)}
+              />
+            ) : (
+              <MediaLibraryPicker
+                items={libraryItems}
+                loading={libraryLoading}
+                hasNext={libraryNextCursor !== null}
+                hasPrevious={libraryCursorStack.length > 0}
+                error={libraryError}
+                page={libraryCursorStack.length + 1}
+                query={libraryQuery}
+                selectedIds={mediaAssets.map((asset) => asset.id)}
+                type={libraryType}
+                onAdd={addMediaFromLibrary}
+                onNext={goToNextMediaPage}
+                onPrevious={goToPreviousMediaPage}
+                onQueryChange={setLibraryQuery}
+                onRefresh={refreshMediaLibrary}
+                onTypeChange={setLibraryType}
+              />
+            )}
           </Field>
           {uploading ? <p className="text-sm text-slate-600">Đang upload media...</p> : null}
           {mediaAssets.length > 0 ? (
@@ -584,6 +715,41 @@ export default function NewPostPage() {
   );
 }
 
+function ScheduleTimePreview({ preview }: { preview: SchedulePreview }) {
+  return (
+    <div
+      className={`mt-3 rounded-md border px-3 py-3 ${
+        preview.isPast
+          ? 'border-red-200 bg-red-50 text-red-800'
+          : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+      }`}
+    >
+      <div className="grid gap-3 text-sm md:grid-cols-3">
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-75">Workspace</p>
+          <p className="mt-1 font-semibold">{preview.workspaceText}</p>
+          <p className="mt-0.5 text-xs opacity-80">{preview.workspaceTimezone}</p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-75">Giờ máy bạn</p>
+          <p className="mt-1 font-semibold">{preview.localText}</p>
+          <p className="mt-0.5 text-xs opacity-80">{preview.localTimezone}</p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase opacity-75">UTC lưu queue</p>
+          <p className="mt-1 font-semibold">{preview.utcText}</p>
+          <p className="mt-0.5 text-xs opacity-80">{preview.relativeText}</p>
+        </div>
+      </div>
+      <p className="mt-3 text-xs opacity-80">
+        {preview.isPast
+          ? 'Thời gian này đã qua theo UTC, API sẽ từ chối lên lịch.'
+          : 'Bấm "Lên lịch" để lưu bài vào Calendar theo giờ workspace phía trên.'}
+      </p>
+    </div>
+  );
+}
+
 function StorageHint({ usage, uploading }: { usage: StorageUsageView | null; uploading: boolean }) {
   if (!usage) {
     return (
@@ -637,10 +803,152 @@ function StorageHint({ usage, uploading }: { usage: StorageUsageView | null; upl
   );
 }
 
+function MediaLibraryPicker({
+  items,
+  loading,
+  hasNext,
+  hasPrevious,
+  error,
+  page,
+  query,
+  selectedIds,
+  type,
+  onAdd,
+  onNext,
+  onPrevious,
+  onQueryChange,
+  onRefresh,
+  onTypeChange,
+}: {
+  items: MediaLibraryItem[];
+  loading: boolean;
+  hasNext: boolean;
+  hasPrevious: boolean;
+  error: string | null;
+  page: number;
+  query: string;
+  selectedIds: string[];
+  type: string;
+  onAdd: (asset: MediaLibraryItem) => void;
+  onNext: () => void;
+  onPrevious: () => void;
+  onQueryChange: (value: string) => void;
+  onRefresh: () => void;
+  onTypeChange: (value: string) => void;
+}) {
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px_auto]">
+        <TextInput
+          placeholder="Tìm theo tên file..."
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+        />
+        <select
+          className="h-11 rounded-md border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+          value={type}
+          onChange={(event) => onTypeChange(event.target.value)}
+        >
+          <option value="">Tất cả media</option>
+          <option value="IMAGE">Ảnh</option>
+          <option value="VIDEO">Video</option>
+        </select>
+        <SecondaryButton disabled={loading} onClick={onRefresh} type="button">
+          {loading ? 'Đang tải...' : 'Tìm'}
+        </SecondaryButton>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+        <p className="text-sm font-semibold text-slate-700">Trang {page}</p>
+        <div className="flex items-center gap-2">
+          <SecondaryButton disabled={loading || !hasPrevious} onClick={onPrevious} type="button">
+            <ChevronLeft className="mr-1 h-4 w-4" />
+            Trước
+          </SecondaryButton>
+          <SecondaryButton disabled={loading || !hasNext} onClick={onNext} type="button">
+            Sau
+            <ChevronRight className="ml-1 h-4 w-4" />
+          </SecondaryButton>
+        </div>
+      </div>
+
+      {error ? (
+        <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      ) : null}
+
+      {items.length > 0 ? (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {items.map((asset) => {
+            const selected = selectedIds.includes(asset.id);
+            return (
+              <article
+                key={asset.id}
+                className={`overflow-hidden rounded-md border bg-white ${
+                  selected ? 'border-brand-300 ring-2 ring-brand-100' : 'border-slate-200'
+                }`}
+              >
+                <MediaPreview asset={asset} />
+                <div className="space-y-2 p-3">
+                  <div>
+                    <p className="truncate text-sm font-semibold text-slate-950">
+                      {asset.originalFileName ?? asset.id}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {asset.type} · {formatBytes(asset.sizeBytes ?? 0)}
+                    </p>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Đã dùng: {asset.usage.total} ·{' '}
+                    {asset.createdAt ? formatDate(asset.createdAt) : '-'}
+                  </p>
+                  <SecondaryButton
+                    className="w-full"
+                    disabled={selected}
+                    onClick={() => onAdd(asset)}
+                    type="button"
+                  >
+                    {selected ? 'Đã thêm vào draft' : 'Dùng media này'}
+                  </SecondaryButton>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-6 text-center text-sm text-slate-500">
+          {loading ? 'Đang tải thư viện media...' : 'Chưa có media READY nào để dùng lại.'}
+        </p>
+      )}
+
+      {items.length > 0 ? (
+        <div className="mt-3 flex items-center justify-center gap-3">
+          <SecondaryButton disabled={loading || !hasPrevious} onClick={onPrevious} type="button">
+            <ChevronLeft className="mr-1 h-4 w-4" />
+            Trước
+          </SecondaryButton>
+          <span className="min-w-20 text-center text-sm font-semibold text-slate-600">
+            Trang {page}
+          </span>
+          <SecondaryButton disabled={loading || !hasNext} onClick={onNext} type="button">
+            Sau
+            <ChevronRight className="ml-1 h-4 w-4" />
+          </SecondaryButton>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** index;
   return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+function formatDate(value: string): string {
+  return new Date(value).toLocaleDateString();
 }

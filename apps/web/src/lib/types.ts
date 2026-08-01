@@ -44,8 +44,13 @@ export interface AuditLogItem {
   id: string;
   action: string;
   actorUserId: string | null;
+  actorIp: string | null;
+  actorUserAgent: string | null;
+  requestId: string | null;
   resourceType: string | null;
   resourceId: string | null;
+  before: unknown;
+  after: unknown;
   metadata: unknown;
   createdAt: string;
 }

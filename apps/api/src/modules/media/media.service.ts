@@ -344,11 +344,11 @@ export class MediaService implements OnModuleDestroy {
   async delete(workspaceId: string, mediaAssetId: string) {
     const media = await this.prisma.mediaAsset.findFirst({
       where: { id: mediaAssetId, workspaceId, deletedAt: null },
-      include: { _count: { select: { posts: true, platformPosts: true } } },
     });
     if (!media) throw AppError.notFound('media asset');
 
-    const usageCount = media._count.posts + media._count.platformPosts;
+    const usage = await this.activeUsage(media.id, workspaceId);
+    const usageCount = usage.contentPosts + usage.platformPosts;
     if (usageCount > 0) {
       throw AppError.conflict('Media đang được bài viết sử dụng. Gỡ khỏi bài viết trước khi xóa.');
     }
@@ -362,12 +362,66 @@ export class MediaService implements OnModuleDestroy {
         : Promise.resolve(),
     ]);
 
-    await this.prisma.mediaAsset.update({
-      where: { id: media.id },
-      data: { deletedAt: new Date() },
-    });
+    await this.prisma.mediaAsset.delete({ where: { id: media.id } });
 
     return { deleted: true };
+  }
+
+  async deleteUnused(workspaceId: string, mediaAssetIds: string[]) {
+    const uniqueIds = [...new Set(mediaAssetIds)].filter(Boolean);
+    if (uniqueIds.length === 0) {
+      return { deleted: 0, skipped: 0 };
+    }
+
+    const [contentRefs, platformRefs, mediaAssets] = await Promise.all([
+      this.prisma.contentPostMedia.findMany({
+        where: {
+          mediaAssetId: { in: uniqueIds },
+          contentPost: { workspaceId, deletedAt: null },
+        },
+        select: { mediaAssetId: true },
+      }),
+      this.prisma.platformPostMedia.findMany({
+        where: {
+          mediaAssetId: { in: uniqueIds },
+          platformPost: {
+            workspaceId,
+            contentPost: { deletedAt: null },
+          },
+        },
+        select: { mediaAssetId: true },
+      }),
+      this.prisma.mediaAsset.findMany({
+        where: { id: { in: uniqueIds }, workspaceId, deletedAt: null },
+        select: { id: true, storageKey: true, thumbnailKey: true },
+      }),
+    ]);
+
+    const activeMediaIds = new Set([
+      ...contentRefs.map((item) => item.mediaAssetId),
+      ...platformRefs.map((item) => item.mediaAssetId),
+    ]);
+    const deletableMedia = mediaAssets.filter((media) => !activeMediaIds.has(media.id));
+
+    for (const media of deletableMedia) {
+      const keys = [...new Set([media.storageKey, media.thumbnailKey].filter(Boolean))] as string[];
+      await Promise.all(
+        keys.map((key) =>
+          this.s3.send(new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: key })),
+        ),
+      );
+    }
+
+    if (deletableMedia.length > 0) {
+      await this.prisma.mediaAsset.deleteMany({
+        where: { id: { in: deletableMedia.map((media) => media.id) }, workspaceId },
+      });
+    }
+
+    return {
+      deleted: deletableMedia.length,
+      skipped: uniqueIds.length - deletableMedia.length,
+    };
   }
 
   async archive(workspaceId: string, mediaAssetId: string) {
@@ -563,17 +617,40 @@ export class MediaService implements OnModuleDestroy {
     uploadedBy: { name: string | null; email: string } | null;
     _count: { posts: number; platformPosts: number };
   }) {
+    const usage = await this.activeUsage(media.id, media.workspaceId);
     return {
       ...(await this.toMediaView(media)),
       updatedAt: media.updatedAt,
       uploadedByName: media.uploadedBy?.name ?? null,
       uploadedByEmail: media.uploadedBy?.email ?? null,
       usage: {
-        contentPosts: media._count.posts,
-        platformPosts: media._count.platformPosts,
-        total: media._count.posts + media._count.platformPosts,
+        contentPosts: usage.contentPosts,
+        platformPosts: usage.platformPosts,
+        total: usage.contentPosts + usage.platformPosts,
       },
     };
+  }
+
+  private async activeUsage(mediaAssetId: string, workspaceId: string) {
+    const [contentPosts, platformPosts] = await Promise.all([
+      this.prisma.contentPostMedia.count({
+        where: {
+          mediaAssetId,
+          contentPost: { workspaceId, deletedAt: null },
+        },
+      }),
+      this.prisma.platformPostMedia.count({
+        where: {
+          mediaAssetId,
+          platformPost: {
+            workspaceId,
+            contentPost: { deletedAt: null },
+          },
+        },
+      }),
+    ]);
+
+    return { contentPosts, platformPosts };
   }
 
   private async toMediaView(media: {

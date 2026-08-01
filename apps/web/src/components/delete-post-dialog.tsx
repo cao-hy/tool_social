@@ -55,7 +55,9 @@ export function DeletePostDialog({
             <input checked disabled className="mt-1" type="checkbox" />
             <span>
               <span className="block font-semibold text-slate-950">Server / workspace</span>
-              <span className="block text-slate-500">Ẩn bài khỏi web quản lý.</span>
+              <span className="block text-slate-500">
+                Xóa khỏi web quản lý và xóa media không còn được bài nào dùng.
+              </span>
             </span>
           </label>
 

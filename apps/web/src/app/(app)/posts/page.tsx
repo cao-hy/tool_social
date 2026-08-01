@@ -1057,7 +1057,7 @@ function BulkDeletePostsDialog({
             <span>
               <span className="block font-semibold text-slate-950">Xóa ở server / workspace</span>
               <span className="block text-slate-500">
-                Xóa mềm khỏi danh sách quản lý, hủy lịch và dọn job publish đang chờ.
+                Xóa khỏi danh sách quản lý, hủy lịch, dọn job publish và xóa media không còn dùng.
               </span>
             </span>
           </label>

@@ -24,6 +24,7 @@ import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService, type AuditContext } from '../audit/audit.service';
+import { MediaService } from '../media/media.service';
 import type {
   BulkDeletePostsInput,
   CreatePostInput,
@@ -46,6 +47,7 @@ export class PostsService implements OnModuleDestroy {
     @Inject(KEYRING) private readonly keyring: Keyring,
     @Inject(ADAPTER_REGISTRY) private readonly adapters: AdapterRegistry,
     @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(MediaService) private readonly media: MediaService,
   ) {
     this.publishQueue = new Queue('publish-post', {
       connection: this.redis.getClient(),
@@ -282,6 +284,7 @@ export class PostsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const post = await this.findPost(workspaceId, postId);
+    const candidateMediaAssetIds = this.mediaAssetIdsFromPost(post);
     const deletePublished = ['PUBLISHED', 'PARTIALLY_PUBLISHED'].includes(post.status);
     if (
       ![
@@ -343,6 +346,12 @@ export class PostsService implements OnModuleDestroy {
       }),
     ]);
 
+    const mediaCleanup = await this.deleteUnusedPostMedia(
+      workspaceId,
+      candidateMediaAssetIds,
+      auditContext.requestId ?? 'manual',
+    );
+
     await this.audit.record({
       ...auditContext,
       actorUserId,
@@ -350,10 +359,10 @@ export class PostsService implements OnModuleDestroy {
       action: 'POST_DELETED',
       resourceType: 'ContentPost',
       resourceId: postId,
-      metadata: { previousStatus: post.status },
+      metadata: { previousStatus: post.status, mediaCleanup },
     });
 
-    return { deleted: true };
+    return { deleted: true, mediaCleanup };
   }
 
   async bulkDeletePosts(
@@ -991,6 +1000,43 @@ export class PostsService implements OnModuleDestroy {
       select: { timezone: true },
     });
     return workspace?.timezone ?? 'UTC';
+  }
+
+  private mediaAssetIdsFromPost(post: Awaited<ReturnType<typeof this.findPost>>): string[] {
+    return [
+      ...new Set([
+        ...post.media.map((item) => item.mediaAssetId),
+        ...post.platformPosts.flatMap((platformPost) =>
+          platformPost.media.map((item) => item.mediaAssetId),
+        ),
+      ]),
+    ];
+  }
+
+  private async deleteUnusedPostMedia(
+    workspaceId: string,
+    mediaAssetIds: string[],
+    requestId: string,
+  ): Promise<{ deleted: number; skipped: number; error?: string }> {
+    if (mediaAssetIds.length === 0) {
+      return { deleted: 0, skipped: 0 };
+    }
+
+    try {
+      return await this.media.deleteUnused(workspaceId, mediaAssetIds);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown media cleanup error';
+      logger.warn(
+        {
+          err: error,
+          requestId,
+          workspaceId,
+          mediaAssetIds,
+        },
+        'Không dọn được media không còn dùng sau khi xóa post',
+      );
+      return { deleted: 0, skipped: mediaAssetIds.length, error: message };
+    }
   }
 
   private async findPost(workspaceId: string, postId: string) {
