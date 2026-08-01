@@ -36,6 +36,13 @@ export const instagramMediaContainerResponseSchema = z.object({
   id: z.string(),
 });
 
+export const instagramContainerStatusSchema = z.object({
+  id: z.string().optional(),
+  status_code: z.enum(['ERROR', 'EXPIRED', 'FINISHED', 'IN_PROGRESS', 'PUBLISHED']).optional(),
+  status: z.string().optional(),
+});
+export type InstagramContainerStatus = z.infer<typeof instagramContainerStatusSchema>;
+
 export const instagramPublishResponseSchema = z.object({
   id: z.string(),
 });

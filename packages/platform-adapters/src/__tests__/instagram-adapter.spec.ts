@@ -56,6 +56,78 @@ describe('InstagramAdapter', () => {
     expect(error.platformCode).toBe('100');
   });
 
+  it('ưu tiên error_user_msg của Meta thay vì message chung Invalid parameter', () => {
+    const error = normalizeInstagramError({
+      status: 400,
+      payload: {
+        error: {
+          message: 'Invalid parameter',
+          error_user_title: 'Media rejected',
+          error_user_msg: 'Video codec is not supported.',
+          code: 100,
+          error_subcode: 2207009,
+        },
+      },
+    });
+
+    expect(error.kind).toBe('VALIDATION');
+    expect(error.message).toContain('Video codec is not supported');
+    expect(error.platformCode).toBe('100:2207009');
+  });
+
+  it('publish video Instagram như Reels và chờ container FINISHED trước media_publish', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/ig-user-1/media') && init?.method === 'POST') {
+        const body = new URLSearchParams(String(init.body));
+        expect(body.get('video_url')).toBe('https://cdn.test/video.mp4');
+        expect(body.get('media_type')).toBe('REELS');
+        return jsonResponse({ id: 'container-1' });
+      }
+      if (url.pathname.endsWith('/container-1') && init?.method !== 'POST') {
+        expect(url.searchParams.get('fields')).toBe('status_code,status');
+        return jsonResponse({ id: 'container-1', status_code: 'FINISHED' });
+      }
+      if (url.pathname.endsWith('/ig-user-1/media_publish') && init?.method === 'POST') {
+        const body = new URLSearchParams(String(init.body));
+        expect(body.get('creation_id')).toBe('container-1');
+        return jsonResponse({ id: 'media-1' });
+      }
+      if (url.pathname.endsWith('/media-1')) {
+        return jsonResponse({ id: 'media-1', permalink: 'https://instagram.com/reel/media-1' });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await createAdapter().publishPost(
+      {
+        accessToken: 'page-token',
+        externalAccountId: 'ig-user-1',
+        correlationId: 'corr-1',
+      },
+      {
+        caption: 'hello',
+        media: [
+          {
+            type: 'VIDEO',
+            url: 'https://cdn.test/video.mp4',
+            mimeType: 'video/mp4',
+            sizeBytes: 100,
+          },
+        ],
+      },
+    );
+
+    expect(result.externalPostId).toBe('media-1');
+    expect(fetchMock.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual([
+      '/v24.0/ig-user-1/media',
+      '/v24.0/container-1',
+      '/v24.0/ig-user-1/media_publish',
+      '/v24.0/media-1',
+    ]);
+  });
+
   it('xóa media Instagram bằng DELETE /{ig_media_id}', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ success: true }));
     vi.stubGlobal('fetch', fetchMock);

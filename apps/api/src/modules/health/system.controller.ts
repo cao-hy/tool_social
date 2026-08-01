@@ -198,18 +198,16 @@ export class SystemController {
     workspaceId: string,
     status: Awaited<ReturnType<typeof checkProxyAwareNetwork>>,
   ) {
-    await this.prisma.workspaceProxySetting
-      .update({
-        where: { workspaceId },
-        data: {
-          lastCheckedAt: new Date(status.checkedAt),
-          lastCheckStatus: status.checkOk ? 'OK' : 'FAILED',
-          lastIp: status.ip,
-          lastCountryCode: status.countryCode,
-          lastCheckError: status.checkError,
-        },
-      })
-      .catch(() => undefined);
+    await this.prisma.workspaceProxySetting.updateMany({
+      where: { workspaceId },
+      data: {
+        lastCheckedAt: new Date(status.checkedAt),
+        lastCheckStatus: status.checkOk ? 'OK' : 'FAILED',
+        lastIp: status.ip,
+        lastCountryCode: status.countryCode,
+        lastCheckError: status.checkError,
+      },
+    });
   }
 }
 

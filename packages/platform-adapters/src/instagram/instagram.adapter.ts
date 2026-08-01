@@ -5,7 +5,7 @@ import {
   type Paginated,
 } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
-import { capabilityUnsupported } from '../core/platform-error';
+import { capabilityUnsupported, createPlatformError } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
@@ -22,7 +22,11 @@ import type {
 } from '../core/types';
 import { InstagramGraphClient, type InstagramGraphClientConfig } from './instagram.client';
 import { mapInstagramProfile, mapInstagramToken, selectInstagramAccount } from './instagram.mapper';
-import type { InstagramComment, InstagramMedia } from './instagram.schemas';
+import type {
+  InstagramComment,
+  InstagramContainerStatus,
+  InstagramMedia,
+} from './instagram.schemas';
 import { validateInstagramPost } from './instagram.validator';
 import { parseMetaWebhookEvents, verifyMetaWebhookSignature } from '../meta/webhook';
 
@@ -96,6 +100,7 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     if (input.media.length === 1) {
       const media = input.media[0];
       if (!media) throw new Error('Media không hợp lệ');
+      const mediaType = media.type === 'VIDEO' ? (options.mediaType ?? 'REELS') : options.mediaType;
 
       const creationId = await this.client.createMediaContainer({
         igAccountId: ctx.externalAccountId,
@@ -103,12 +108,12 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         imageUrl: media.type === 'IMAGE' ? media.url : undefined,
         videoUrl: media.type === 'VIDEO' ? media.url : undefined,
         caption: message,
-        mediaType:
-          options.mediaType === 'REELS' || options.mediaType === 'STORIES'
-            ? options.mediaType
-            : undefined,
-        shareToFeed: options.mediaType === 'REELS' ? options.shareToFeed : undefined,
+        mediaType: mediaType === 'REELS' || mediaType === 'STORIES' ? mediaType : undefined,
+        shareToFeed: mediaType === 'REELS' ? options.shareToFeed : undefined,
       });
+      if (media.type === 'VIDEO') {
+        await this.waitUntilContainerReady(ctx, creationId, 'video');
+      }
 
       const postId = await this.client.publishMedia({
         igAccountId: ctx.externalAccountId,
@@ -133,13 +138,19 @@ export class InstagramAdapter implements SocialPlatformAdapter {
       // B1: Tạo container cho từng ảnh/video (is_carousel_item = true)
       const childrenIds = await Promise.all(
         input.media.map(async (media) => {
-          return this.client.createMediaContainer({
+          const childId = await this.client.createMediaContainer({
             igAccountId: ctx.externalAccountId,
             accessToken: ctx.accessToken,
             imageUrl: media.type === 'IMAGE' ? media.url : undefined,
             videoUrl: media.type === 'VIDEO' ? media.url : undefined,
             isCarouselItem: true,
           });
+          await this.waitUntilContainerReady(
+            ctx,
+            childId,
+            media.type === 'VIDEO' ? 'video' : 'image',
+          );
+          return childId;
         }),
       );
 
@@ -151,6 +162,7 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         children: childrenIds,
         caption: message,
       });
+      await this.waitUntilContainerReady(ctx, carouselCreationId, 'carousel');
 
       // B3: Publish carousel container
       const postId = await this.client.publishMedia({
@@ -172,6 +184,50 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     }
 
     throw new Error('Cần ít nhất một ảnh hoặc video để đăng lên Instagram.');
+  }
+
+  private async waitUntilContainerReady(
+    ctx: AdapterContext,
+    containerId: string,
+    mediaKind: 'image' | 'video' | 'carousel',
+  ): Promise<void> {
+    const attempts = mediaKind === 'video' ? 8 : 5;
+    const delaysMs =
+      mediaKind === 'video'
+        ? [2000, 3000, 5000, 8000, 13000, 21000, 30000]
+        : [1000, 1500, 2500, 4000];
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const status = await this.client.getContainerStatus({
+        containerId,
+        accessToken: ctx.accessToken,
+      });
+      ctx.logger?.debug('Instagram container status', {
+        correlationId: ctx.correlationId,
+        containerId,
+        attempt,
+        statusCode: status.status_code,
+        status: status.status,
+      });
+
+      if (status.status_code === 'FINISHED' || status.status_code === 'PUBLISHED') return;
+      if (status.status_code === 'ERROR' || status.status_code === 'EXPIRED') {
+        throw instagramContainerError(containerId, status);
+      }
+
+      const delayMs = delaysMs[Math.min(attempt - 1, delaysMs.length - 1)] ?? 5000;
+      await sleep(delayMs);
+    }
+
+    throw createPlatformError(
+      'VALIDATION',
+      'INSTAGRAM',
+      'Instagram media container chưa xử lý xong. Hãy thử publish lại sau vài phút hoặc kiểm tra định dạng media.',
+      {
+        platformCode: 'CONTAINER_NOT_READY',
+        raw: { containerId, mediaKind },
+      },
+    );
   }
 
   async getPosts(
@@ -410,6 +466,24 @@ function instagramPublishOptions(options: Record<string, unknown> | undefined): 
     mediaType,
     shareToFeed: options?.shareToFeed === true,
   };
+}
+
+function instagramContainerError(containerId: string, status: InstagramContainerStatus) {
+  return createPlatformError(
+    'VALIDATION',
+    'INSTAGRAM',
+    status.status
+      ? `Instagram từ chối media container: ${status.status}`
+      : 'Instagram từ chối media container. Hãy kiểm tra định dạng, tỷ lệ khung hình, codec hoặc URL media public.',
+    {
+      platformCode: status.status_code ?? 'CONTAINER_ERROR',
+      raw: { containerId, status },
+    },
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readEnum<const T extends string>(

@@ -10,6 +10,7 @@ import {
   instagramPagesResponseSchema,
   instagramTokenResponseSchema,
   instagramMediaContainerResponseSchema,
+  instagramContainerStatusSchema,
   instagramMediaPageSchema,
   instagramMediaSchema,
   instagramPublishResponseSchema,
@@ -20,6 +21,7 @@ import {
   type InstagramProfile,
   type InstagramTokenResponse,
   type InstagramMedia,
+  type InstagramContainerStatus,
   type InstagramMediaPage,
   type InstagramCommentsPage,
   type InstagramInsightsResponse,
@@ -147,6 +149,20 @@ export class InstagramGraphClient {
       instagramMediaContainerResponseSchema,
     );
     return response.id;
+  }
+
+  async getContainerStatus(input: {
+    containerId: string;
+    accessToken: string;
+  }): Promise<InstagramContainerStatus> {
+    return this.get(
+      `/${input.containerId}`,
+      {
+        fields: 'status_code,status',
+        access_token: input.accessToken,
+      },
+      instagramContainerStatusSchema,
+    );
   }
 
   async publishMedia(input: {

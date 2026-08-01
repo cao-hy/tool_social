@@ -8,9 +8,12 @@ import {
 const instagramErrorPayloadSchema = z.object({
   error: z.object({
     message: z.string().optional(),
+    error_user_title: z.string().optional(),
+    error_user_msg: z.string().optional(),
     type: z.string().optional(),
     code: z.union([z.string(), z.number()]).optional(),
     error_subcode: z.union([z.string(), z.number()]).optional(),
+    error_data: z.unknown().optional(),
   }),
 });
 
@@ -30,7 +33,10 @@ export function normalizeInstagramError(input: {
   const subcode =
     graphError?.error_subcode === undefined ? undefined : String(graphError.error_subcode);
   const platformCode = [code, subcode].filter(Boolean).join(':') || undefined;
-  const rawMessage = graphError?.message ?? `Instagram Graph API trả về lỗi HTTP ${input.status}.`;
+  const rawMessage =
+    [graphError?.error_user_title, graphError?.error_user_msg].filter(Boolean).join(': ') ||
+    graphError?.message ||
+    `Instagram Graph API trả về lỗi HTTP ${input.status}.`;
   const message = instagramPermissionMessage(rawMessage) ?? rawMessage;
 
   const kind = mapInstagramErrorKind(input.status, code, rawMessage);
