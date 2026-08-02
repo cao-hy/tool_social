@@ -110,7 +110,7 @@ export class AnalyticsService implements OnModuleDestroy {
       summary: summarize(platformPosts),
       byPlatform: buildPlatformBreakdown(platformPosts),
       timeSeries: buildTimeSeries(snapshots),
-      topPosts: buildTopPosts(platformPosts),
+      posts: buildAllPosts(platformPosts),
       followerGrowth: buildFollowerGrowth(accountSnapshots),
     };
   }
@@ -390,7 +390,7 @@ function hasFollowerValue(snapshot: {
   return snapshot.followers !== null;
 }
 
-function buildTopPosts(
+function buildAllPosts(
   platformPosts: Array<{
     id: string;
     platform: Platform;
@@ -417,9 +417,7 @@ function buildTopPosts(
         score,
       };
     })
-    .filter((post) => post.score !== null)
     .sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
-    .slice(0, 10)
     .map(({ score: _score, ...post }) => post);
 }
 

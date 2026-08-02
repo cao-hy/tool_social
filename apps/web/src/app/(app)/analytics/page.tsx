@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { BarChart3, RefreshCw } from 'lucide-react';
+import { RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { analyticsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
@@ -27,6 +27,8 @@ const METRICS: Array<{ key: AnalyticsMetricKey; label: string; percent?: boolean
   { key: 'engagementRate', label: 'Eng. rate', percent: true },
 ];
 
+const ITEMS_PER_PAGE = 10;
+
 export default function AnalyticsPage() {
   const { activeWorkspace } = useAuth();
   const toast = useToast();
@@ -46,6 +48,8 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [tablePlatformFilter, setTablePlatformFilter] = useState<string>('ALL');
 
   const load = useCallback(async () => {
     if (!activeWorkspace) return;
@@ -67,6 +71,8 @@ export default function AnalyticsPage() {
       setError(getErrorMessage(loadError));
     } finally {
       setLoading(false);
+      setCurrentPage(1); // Reset page on load
+      setTablePlatformFilter('ALL');
     }
   }, [activeWorkspace, filters.account, filters.from, filters.platform, filters.to]);
 
@@ -78,6 +84,17 @@ export default function AnalyticsPage() {
     () => Array.from(new Set(accounts.map((account) => account.platform))).sort(),
     [accounts],
   );
+
+  const tablePlatforms = useMemo(() => {
+    if (!dashboard) return [];
+    return Array.from(new Set(dashboard.posts.map((p) => p.platform))).sort();
+  }, [dashboard]);
+
+  const filteredPosts = useMemo(() => {
+    if (!dashboard) return [];
+    if (tablePlatformFilter === 'ALL') return dashboard.posts;
+    return dashboard.posts.filter((p) => p.platform === tablePlatformFilter);
+  }, [dashboard, tablePlatformFilter]);
 
   async function syncMetrics() {
     if (!activeWorkspace) return;
@@ -138,9 +155,11 @@ export default function AnalyticsPage() {
           <select
             className="h-11 rounded-lg border border-slate-300 px-3 font-normal text-slate-950"
             value={filters.platform}
-            onChange={(event) =>
-              setFilters((current) => ({ ...current, platform: event.target.value, account: '' }))
-            }
+            onChange={(event) => {
+              setFilters((current) => ({ ...current, platform: event.target.value, account: '' }));
+              setCurrentPage(1);
+              setTablePlatformFilter('ALL');
+            }}
           >
             <option value="">Tất cả</option>
             {platforms.map((platform) => (
@@ -327,40 +346,121 @@ export default function AnalyticsPage() {
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white">
-              <div className="border-b border-slate-200 p-5">
-                <h2 className="text-lg font-semibold text-slate-950">Top posts</h2>
+            <div className="rounded-lg border border-slate-200 bg-white xl:col-span-2">
+              <div className="border-b border-slate-200 p-5 flex items-center justify-between gap-4 flex-wrap">
+                <h2 className="text-lg font-semibold text-slate-950">Hiệu suất từng bài đăng</h2>
+                {tablePlatforms.length > 0 && (
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTablePlatformFilter('ALL');
+                        setCurrentPage(1);
+                      }}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-full border transition ${tablePlatformFilter === 'ALL' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                    >
+                      Tất cả
+                    </button>
+                    {tablePlatforms.map((plat) => (
+                      <button
+                        key={plat}
+                        type="button"
+                        onClick={() => {
+                          setTablePlatformFilter(plat);
+                          setCurrentPage(1);
+                        }}
+                        className={`px-3 py-1.5 text-xs font-semibold rounded-full border transition ${tablePlatformFilter === plat ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+                      >
+                        {plat}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div className="divide-y divide-slate-100">
-                {dashboard.topPosts.map((post) => (
-                  <article key={post.id} className="grid gap-3 p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold uppercase text-slate-500">
-                          {post.platform} · {post.accountName}
-                        </p>
-                        <Link
-                          className="mt-1 block truncate font-semibold text-slate-950 hover:text-brand-700"
-                          href={`/posts/${post.postId}`}
-                        >
-                          {post.title}
-                        </Link>
-                      </div>
-                      <BarChart3 className="h-5 w-5 shrink-0 text-brand-600" />
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <MiniMetric label="Views" metric={post.metrics.views} />
-                      <MiniMetric label="Eng." metric={post.metrics.engagement} />
-                      <MiniMetric label="Comments" metric={post.metrics.comments} />
-                    </div>
-                  </article>
-                ))}
-                {dashboard.topPosts.length === 0 ? (
-                  <p className="p-5 text-sm text-slate-600">
-                    Chưa có top post vì metrics chưa sync.
-                  </p>
-                ) : null}
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                    <tr>
+                      <th className="px-5 py-3">Bài viết</th>
+                      <th className="px-5 py-3">Nền tảng</th>
+                      <th className="px-5 py-3">Lượt xem</th>
+                      <th className="px-5 py-3">Tương tác</th>
+                      <th className="px-5 py-3">Bình luận</th>
+                      <th className="px-5 py-3">Chia sẻ</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredPosts
+                      .slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE)
+                      .map((post) => (
+                        <tr key={post.id}>
+                          <td className="px-5 py-4">
+                            <div className="max-w-[280px]">
+                              <Link
+                                className="block truncate font-semibold text-slate-950 hover:text-brand-700"
+                                href={`/posts/${post.postId}`}
+                              >
+                                {post.title}
+                              </Link>
+                              {post.publishedAt ? (
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {new Date(post.publishedAt).toLocaleString('vi-VN')}
+                                </p>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <p className="font-semibold text-slate-950">{post.platform}</p>
+                            <p className="text-xs text-slate-500">{post.accountName}</p>
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.views} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.engagement} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.comments} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.shares} />
+                          </td>
+                        </tr>
+                      ))}
+                    {filteredPosts.length === 0 ? (
+                      <tr>
+                        <td className="px-5 py-8 text-slate-600 text-center" colSpan={6}>
+                          Không có bài viết nào phù hợp.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
               </div>
+              {filteredPosts.length > ITEMS_PER_PAGE && (
+                <div className="flex items-center justify-between border-t border-slate-200 px-5 py-3">
+                  <span className="text-sm text-slate-600">
+                    Trang {currentPage} / {Math.ceil(filteredPosts.length / ITEMS_PER_PAGE)} (Tổng
+                    số {filteredPosts.length} bài)
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage((p) => p - 1)}
+                    >
+                      <ChevronLeft className="h-4 w-4" /> Prev
+                    </button>
+                    <button
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      disabled={currentPage >= Math.ceil(filteredPosts.length / ITEMS_PER_PAGE)}
+                      onClick={() => setCurrentPage((p) => p + 1)}
+                    >
+                      Next <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         </>

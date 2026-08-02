@@ -127,7 +127,7 @@ export interface AnalyticsDashboardView {
     platform: Platform;
     metrics: AnalyticsMetricBag;
   }>;
-  topPosts: Array<{
+  posts: Array<{
     id: string;
     postId: string;
     platform: Platform;
