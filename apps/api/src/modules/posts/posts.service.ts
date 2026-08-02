@@ -1083,6 +1083,9 @@ export class PostsService implements OnModuleDestroy {
         ...post.platformPosts.flatMap((platformPost) =>
           platformPost.media.map((item) => item.mediaAssetId),
         ),
+        ...post.platformPosts.flatMap((platformPost) =>
+          mediaAssetIdsFromOptions(platformPost.options),
+        ),
       ]),
     ];
   }
@@ -1944,6 +1947,14 @@ function hasTikTokStatusMethods(
 function jsonObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   return value as Record<string, unknown>;
+}
+
+function mediaAssetIdsFromOptions(options: unknown): string[] {
+  const object = jsonObject(options);
+  const thumbnailMediaAssetId = object?.thumbnailMediaAssetId;
+  return typeof thumbnailMediaAssetId === 'string' && thumbnailMediaAssetId.trim()
+    ? [thumbnailMediaAssetId.trim()]
+    : [];
 }
 
 function errorCodeForBulkDelete(error: unknown): string {

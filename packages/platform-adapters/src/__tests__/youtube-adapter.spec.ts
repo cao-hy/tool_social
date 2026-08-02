@@ -171,6 +171,76 @@ describe('YouTubeAdapter', () => {
     });
   });
 
+  it('gửi custom thumbnail lên YouTube khi publish input có thumbnail', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/upload/youtube/v3/videos' && init?.method === 'POST') {
+        return new Response(null, {
+          status: 200,
+          headers: { location: 'https://upload.youtube.test/session-thumb' },
+        });
+      }
+      if (url.href === 'https://upload.youtube.test/session-thumb') {
+        return jsonResponse(
+          {
+            id: 'video-thumb-1',
+            status: { uploadStatus: 'uploaded', privacyStatus: 'public' },
+          },
+          { status: 201 },
+        );
+      }
+      if (url.pathname === '/upload/youtube/v3/thumbnails/set' && init?.method === 'POST') {
+        expect(url.searchParams.get('videoId')).toBe('video-thumb-1');
+        expect(url.searchParams.get('uploadType')).toBe('media');
+        expect(init.headers).toMatchObject({
+          authorization: 'Bearer youtube-access',
+          'content-length': '4',
+          'content-type': 'image/webp',
+        });
+        expect(init.body).toEqual(new Uint8Array([9, 8, 7, 6]));
+        return jsonResponse({ items: [] });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new YouTubeAdapter({
+      clientId: 'youtube-client',
+      clientSecret: 'youtube-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'youtube-access',
+          externalAccountId: 'channel-1',
+          correlationId: 'test',
+        },
+        {
+          title: 'Demo video',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+          thumbnail: {
+            type: 'IMAGE',
+            url: 'workspaces/ws/media-thumbnails/video.webp',
+            bytes: new Uint8Array([9, 8, 7, 6]),
+            mimeType: 'image/webp',
+            sizeBytes: 4,
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      externalPostId: 'video-thumb-1',
+    });
+  });
+
   it('chặn bài YouTube thiếu title hoặc không đúng 1 video', () => {
     const adapter = new YouTubeAdapter({
       clientId: 'youtube-client',

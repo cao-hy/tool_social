@@ -1,6 +1,6 @@
 import { PLATFORM_LABELS } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
-import { ChevronDown, RefreshCw } from 'lucide-react';
+import { ChevronDown, RefreshCw, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Field, SelectInput, TextInput } from '@/components/form-controls';
 import { socialAccountsApi } from '@/lib/api-client';
@@ -21,6 +21,7 @@ import type {
 interface PlatformComposerPanelsProps {
   accounts: SocialAccountView[];
   mediaAssets: MediaAssetView[];
+  coverMediaAssets?: MediaAssetView[];
   drafts: Record<string, PlatformOverrideDraft>;
   disabled?: boolean;
   mediaLocked?: boolean;
@@ -29,17 +30,20 @@ interface PlatformComposerPanelsProps {
     hashtags?: string;
   };
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }
 
 export function PlatformComposerPanels({
   accounts,
   mediaAssets,
+  coverMediaAssets = [],
   drafts,
   disabled = false,
   mediaLocked = false,
   workspaceId,
   common,
   onChange,
+  onUploadCoverMedia,
 }: PlatformComposerPanelsProps) {
   const [expandedAccountIds, setExpandedAccountIds] = useState<string[]>([]);
   const [creatorInfoByAccountId, setCreatorInfoByAccountId] = useState<
@@ -276,6 +280,7 @@ export function PlatformComposerPanels({
                       account={account}
                       disabled={disabled}
                       draft={draft}
+                      coverMediaAssets={coverMediaAssets}
                       mediaLocked={mediaLocked}
                       mediaAssets={mediaAssets}
                       pinterestBoards={pinterestBoardsByAccountId[account.id] ?? []}
@@ -311,6 +316,7 @@ export function PlatformComposerPanels({
                       onRefreshPinterestBoards={() => loadPinterestBoards(account.id)}
                       onRefreshTikTokCreatorInfo={() => loadTikTokCreatorInfo(account.id)}
                       onChange={onChange}
+                      onUploadCoverMedia={onUploadCoverMedia}
                     />
                   ) : (
                     <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
@@ -383,6 +389,7 @@ function PlatformFields({
   account,
   disabled,
   draft,
+  coverMediaAssets,
   mediaLocked,
   mediaAssets,
   pinterestBoards,
@@ -398,10 +405,12 @@ function PlatformFields({
   onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
   onChange,
+  onUploadCoverMedia,
 }: {
   account: SocialAccountView;
   disabled: boolean;
   draft: PlatformOverrideDraft;
+  coverMediaAssets: MediaAssetView[];
   mediaLocked: boolean;
   mediaAssets: MediaAssetView[];
   pinterestBoards: PinterestBoardView[];
@@ -417,8 +426,10 @@ function PlatformFields({
   onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }) {
   const resolvedMedia = resolveMedia(draft, mediaAssets);
+  const availableCoverMediaAssets = uniqueMediaAssets([...mediaAssets, ...coverMediaAssets]);
 
   return (
     <div className="mt-4 space-y-4">
@@ -472,6 +483,7 @@ function PlatformFields({
 
       <PlatformOptions
         account={account}
+        availableMediaAssets={availableCoverMediaAssets}
         disabled={disabled}
         draft={draft}
         mediaAssets={resolvedMedia}
@@ -488,6 +500,7 @@ function PlatformFields({
         onRefreshPinterestBoards={onRefreshPinterestBoards}
         onRefreshTikTokCreatorInfo={onRefreshTikTokCreatorInfo}
         onChange={onChange}
+        onUploadCoverMedia={onUploadCoverMedia}
       />
       <MediaSelector
         account={account}
@@ -502,6 +515,7 @@ function PlatformFields({
 
 function PlatformOptions({
   account,
+  availableMediaAssets,
   disabled,
   draft,
   mediaAssets,
@@ -518,8 +532,10 @@ function PlatformOptions({
   onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
   onChange,
+  onUploadCoverMedia,
 }: {
   account: SocialAccountView;
+  availableMediaAssets: MediaAssetView[];
   disabled: boolean;
   draft: PlatformOverrideDraft;
   mediaAssets: MediaAssetView[];
@@ -536,6 +552,7 @@ function PlatformOptions({
   onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }) {
   if (account.platform === 'FACEBOOK') {
     return (
@@ -602,72 +619,30 @@ function PlatformOptions({
         boardsLoading={pinterestBoardsLoading}
         disabled={disabled}
         draft={draft}
+        availableMediaAssets={availableMediaAssets}
+        mediaAssets={mediaAssets}
         sections={pinterestSections}
         sectionsError={pinterestSectionsError}
         sectionsLoading={pinterestSectionsLoading}
         onChange={onChange}
         onLoadSections={onLoadPinterestSections}
         onRefreshBoards={onRefreshPinterestBoards}
+        onUploadCoverMedia={onUploadCoverMedia}
       />
     );
   }
 
   if (account.platform === 'YOUTUBE') {
     return (
-      <div className="grid gap-3 md:grid-cols-2">
-        <Field label="Privacy">
-          <SelectInput
-            disabled={disabled}
-            value={draft.youtubePrivacyStatus}
-            onChange={(event) =>
-              onChange(account.id, {
-                youtubePrivacyStatus: event.target
-                  .value as PlatformOverrideDraft['youtubePrivacyStatus'],
-              })
-            }
-          >
-            <option value="public">Public</option>
-            <option value="unlisted">Unlisted</option>
-            <option value="private">Private</option>
-          </SelectInput>
-        </Field>
-        <Field label="Danh mục YouTube">
-          <SelectInput
-            disabled={disabled}
-            value={draft.youtubeCategoryId}
-            onChange={(event) => onChange(account.id, { youtubeCategoryId: event.target.value })}
-          >
-            {YOUTUBE_CATEGORIES.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.id} - {category.label}
-              </option>
-            ))}
-          </SelectInput>
-          <p className="mt-1 text-xs text-slate-500">
-            Category ID là mã danh mục video của YouTube Data API. Mặc định 22 là People & Blogs.
-          </p>
-        </Field>
-        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
-          <input
-            checked={draft.youtubeMadeForKids}
-            disabled={disabled}
-            type="checkbox"
-            onChange={(event) => onChange(account.id, { youtubeMadeForKids: event.target.checked })}
-          />
-          Made for kids
-        </label>
-        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
-          <input
-            checked={draft.youtubeContainsSyntheticMedia}
-            disabled={disabled}
-            type="checkbox"
-            onChange={(event) =>
-              onChange(account.id, { youtubeContainsSyntheticMedia: event.target.checked })
-            }
-          />
-          Có synthetic media
-        </label>
-      </div>
+      <YouTubeOptionsPanel
+        account={account}
+        availableMediaAssets={availableMediaAssets}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={mediaAssets}
+        onChange={onChange}
+        onUploadCoverMedia={onUploadCoverMedia}
+      />
     );
   }
 
@@ -692,30 +667,36 @@ function PlatformOptions({
 
 function PinterestOptionsPanel({
   account,
+  availableMediaAssets,
   boards,
   boardsError,
   boardsLoading,
   disabled,
   draft,
+  mediaAssets,
   sections,
   sectionsError,
   sectionsLoading,
   onChange,
   onLoadSections,
   onRefreshBoards,
+  onUploadCoverMedia,
 }: {
   account: SocialAccountView;
+  availableMediaAssets: MediaAssetView[];
   boards: PinterestBoardView[];
   boardsError?: string;
   boardsLoading: boolean;
   disabled: boolean;
   draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
   sections: PinterestBoardSectionView[];
   sectionsError?: string;
   sectionsLoading: boolean;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
   onLoadSections: (boardId: string) => void;
   onRefreshBoards: () => void;
+  onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }) {
   return (
     <div className="space-y-3 rounded-md border border-red-100 bg-red-50/50 p-3">
@@ -812,6 +793,17 @@ function PinterestOptionsPanel({
         </Field>
       </div>
 
+      <CoverThumbnailSelector
+        account={account}
+        availableMediaAssets={availableMediaAssets}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={mediaAssets}
+        platformLabel="Pinterest video cover"
+        onChange={onChange}
+        onUploadCoverMedia={onUploadCoverMedia}
+      />
+
       <button
         className="inline-flex h-9 items-center gap-2 rounded-md border border-red-200 bg-white px-3 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-60"
         disabled={disabled || boardsLoading}
@@ -823,6 +815,256 @@ function PinterestOptionsPanel({
       </button>
     </div>
   );
+}
+
+function YouTubeOptionsPanel({
+  account,
+  availableMediaAssets,
+  disabled,
+  draft,
+  mediaAssets,
+  onChange,
+  onUploadCoverMedia,
+}: {
+  account: SocialAccountView;
+  availableMediaAssets: MediaAssetView[];
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
+}) {
+  return (
+    <div className="space-y-3 rounded-md border border-rose-100 bg-rose-50/50 p-3">
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Privacy">
+          <SelectInput
+            disabled={disabled}
+            value={draft.youtubePrivacyStatus}
+            onChange={(event) =>
+              onChange(account.id, {
+                youtubePrivacyStatus: event.target
+                  .value as PlatformOverrideDraft['youtubePrivacyStatus'],
+              })
+            }
+          >
+            <option value="public">Public</option>
+            <option value="unlisted">Unlisted</option>
+            <option value="private">Private</option>
+          </SelectInput>
+        </Field>
+        <Field label="Danh mục YouTube">
+          <SelectInput
+            disabled={disabled}
+            value={draft.youtubeCategoryId}
+            onChange={(event) => onChange(account.id, { youtubeCategoryId: event.target.value })}
+          >
+            {YOUTUBE_CATEGORIES.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.id} - {category.label}
+              </option>
+            ))}
+          </SelectInput>
+          <p className="mt-1 text-xs text-slate-500">
+            Category ID là mã danh mục video của YouTube Data API. Mặc định 22 là People & Blogs.
+          </p>
+        </Field>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.youtubeMadeForKids}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) => onChange(account.id, { youtubeMadeForKids: event.target.checked })}
+          />
+          Made for kids
+        </label>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.youtubeContainsSyntheticMedia}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange(account.id, { youtubeContainsSyntheticMedia: event.target.checked })
+            }
+          />
+          Có synthetic media
+        </label>
+      </div>
+
+      <CoverThumbnailSelector
+        account={account}
+        availableMediaAssets={availableMediaAssets}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={mediaAssets}
+        platformLabel="YouTube thumbnail"
+        onChange={onChange}
+        onUploadCoverMedia={onUploadCoverMedia}
+      />
+    </div>
+  );
+}
+
+function CoverThumbnailSelector({
+  account,
+  availableMediaAssets,
+  disabled,
+  draft,
+  mediaAssets,
+  platformLabel,
+  onChange,
+  onUploadCoverMedia,
+}: {
+  account: SocialAccountView;
+  availableMediaAssets: MediaAssetView[];
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
+  platformLabel: string;
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
+}) {
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const videos = mediaAssets.filter((asset) => asset.type === 'VIDEO');
+  const imageOptions = availableMediaAssets.filter(
+    (asset) => asset.type === 'IMAGE' && asset.status === 'READY',
+  );
+  const generatedReady = videos.some((asset) => asset.thumbnailUrl);
+  const shouldShow = videos.length > 0 || draft.thumbnailMode !== 'AUTO';
+
+  if (!shouldShow) return null;
+
+  const selectedImage = imageOptions.find((asset) => asset.id === draft.thumbnailMediaAssetId);
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-900">{platformLabel}</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Dùng thumbnail tự tạo từ video, hoặc chọn một ảnh đã upload làm cover riêng.
+          </p>
+        </div>
+        {selectedImage ? (
+          <div className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1">
+            <MediaThumb asset={selectedImage} />
+            <span className="max-w-40 truncate text-xs font-medium text-slate-700">
+              {selectedImage.originalFileName ?? selectedImage.id}
+            </span>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Field label="Nguồn thumbnail">
+          <SelectInput
+            disabled={disabled}
+            value={draft.thumbnailMode}
+            onChange={(event) => {
+              const thumbnailMode = event.target.value as PlatformOverrideDraft['thumbnailMode'];
+              onChange(account.id, {
+                thumbnailMode,
+                thumbnailMediaAssetId:
+                  thumbnailMode === 'MEDIA_ASSET' ? draft.thumbnailMediaAssetId : '',
+              });
+            }}
+          >
+            <option value="AUTO">Nền tảng tự chọn</option>
+            <option disabled={!generatedReady} value="GENERATED">
+              Thumbnail tự tạo từ video
+            </option>
+            <option disabled={imageOptions.length === 0} value="MEDIA_ASSET">
+              Chọn ảnh đã upload
+            </option>
+          </SelectInput>
+          {!generatedReady && videos.length > 0 ? (
+            <p className="mt-1 text-xs text-amber-700">
+              Video chưa có thumbnail sẵn. Chờ job tạo thumbnail xong rồi làm mới trang.
+            </p>
+          ) : null}
+        </Field>
+
+        <Field label="Ảnh cover upload riêng">
+          <SelectInput
+            disabled={disabled || draft.thumbnailMode !== 'MEDIA_ASSET'}
+            value={draft.thumbnailMediaAssetId}
+            onChange={(event) =>
+              onChange(account.id, { thumbnailMediaAssetId: event.target.value })
+            }
+          >
+            <option value="">
+              {imageOptions.length === 0 ? 'Chưa có ảnh đã upload' : 'Chọn ảnh cover'}
+            </option>
+            {imageOptions.map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {asset.originalFileName ?? asset.id}
+              </option>
+            ))}
+          </SelectInput>
+          <p className="mt-1 text-xs text-slate-500">
+            Ảnh này chỉ dùng làm cover/thumbnail, không tự trở thành media publish nếu target đã
+            chọn media riêng.
+          </p>
+        </Field>
+      </div>
+
+      {onUploadCoverMedia ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60">
+            <Upload className="h-4 w-4" />
+            {uploadingCover ? 'Đang upload...' : 'Upload ảnh cover'}
+            <input
+              accept="image/jpeg,image/png,image/webp"
+              className="sr-only"
+              disabled={disabled || uploadingCover}
+              type="file"
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (!file) return;
+                setUploadingCover(true);
+                setUploadError(null);
+                try {
+                  const asset = await onUploadCoverMedia(file);
+                  onChange(account.id, {
+                    thumbnailMode: 'MEDIA_ASSET',
+                    thumbnailMediaAssetId: asset.id,
+                  });
+                } catch (error) {
+                  setUploadError(getErrorMessage(error));
+                } finally {
+                  setUploadingCover(false);
+                }
+              }}
+            />
+          </label>
+          <span className="text-xs text-slate-500">
+            JPG/PNG/WebP. File này chỉ làm thumbnail/cover.
+          </span>
+        </div>
+      ) : null}
+
+      {uploadError ? (
+        <p className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {uploadError}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function MediaThumb({ asset }: { asset: MediaAssetView }) {
+  const source = asset.thumbnailUrl ?? asset.displayUrl ?? asset.readUrl;
+  if (!source) {
+    return (
+      <div className="flex h-9 w-12 items-center justify-center rounded bg-slate-200 text-[10px] font-semibold text-slate-500">
+        IMG
+      </div>
+    );
+  }
+
+  return <img alt="" className="h-9 w-12 rounded object-cover" src={source} />;
 }
 
 function TikTokOptionsPanel({
@@ -1316,7 +1558,9 @@ function platformChecklist(platform: Platform, media: MediaAssetView[]): string[
   const videoCount = media.filter((asset) => asset.type === 'VIDEO').length;
 
   if (platform === 'FACEBOOK') {
-    if (imageCount > 0 && videoCount > 0) return ['Không trộn ảnh và video trong một post'];
+    if (imageCount > 0 && videoCount > 0) {
+      return ['Facebook adapter: chọn nhiều ảnh hoặc 1 video, chưa hỗ trợ mixed media'];
+    }
     if (videoCount > 1) return ['Chỉ hỗ trợ 1 video'];
   }
 
@@ -1345,7 +1589,7 @@ function platformChecklist(platform: Platform, media: MediaAssetView[]): string[
       return ['Video: cần đúng 1 video'];
     }
     if (imageCount > 0 && videoCount > 0) {
-      return ['Không trộn ảnh và video'];
+      return ['TikTok: chọn 1 video hoặc 1-35 ảnh'];
     }
     if (imageCount > 35) {
       return ['Ảnh: tối đa 35 ảnh'];
@@ -1367,6 +1611,15 @@ function resolveMedia(
 ): MediaAssetView[] {
   if (!draft.customized || draft.mediaAssetIds.length === 0) return mediaAssets;
   return mediaAssets.filter((asset) => draft.mediaAssetIds.includes(asset.id));
+}
+
+function uniqueMediaAssets(mediaAssets: MediaAssetView[]): MediaAssetView[] {
+  const seen = new Set<string>();
+  return mediaAssets.filter((asset) => {
+    if (seen.has(asset.id)) return false;
+    seen.add(asset.id);
+    return true;
+  });
 }
 
 function commonTextSummary(common: PlatformComposerPanelsProps['common']): string {

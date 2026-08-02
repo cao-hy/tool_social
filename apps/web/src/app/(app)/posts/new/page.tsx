@@ -75,6 +75,9 @@ export default function NewPostPage() {
   const [mediaAssets, setMediaAssets] = useState<Array<MediaAssetView & { previewUrl?: string }>>(
     [],
   );
+  const [coverMediaAssets, setCoverMediaAssets] = useState<
+    Array<MediaAssetView & { previewUrl?: string }>
+  >([]);
   const [mediaMode, setMediaMode] = useState<'upload' | 'library'>('upload');
   const [libraryItems, setLibraryItems] = useState<MediaLibraryItem[]>([]);
   const [libraryCursorStack, setLibraryCursorStack] = useState<string[]>([]);
@@ -387,6 +390,49 @@ export default function NewPostPage() {
     }
   }
 
+  async function uploadCoverMedia(file: File): Promise<MediaAssetView> {
+    if (!workspace) throw new Error('Chưa chọn workspace.');
+    if (!file.type.startsWith('image/')) {
+      throw new Error('Cover/thumbnail phải là file ảnh.');
+    }
+    if (file.size > MAX_MEDIA_UPLOAD_BYTES) {
+      throw new Error(
+        `${file.name} vượt giới hạn ${formatBytes(MAX_MEDIA_UPLOAD_BYTES)}. Nén file trước khi upload.`,
+      );
+    }
+
+    const uploadId = createUploadProgressId(file);
+    upsertUploadProgress({
+      id: uploadId,
+      fileName: file.name,
+      loadedBytes: 0,
+      totalBytes: file.size,
+      stage: 'creating',
+      via: null,
+    });
+
+    try {
+      const confirmed = shouldUseMultipartUpload(file)
+        ? await uploadMultipartFile(workspace.id, file, uploadId)
+        : await uploadSmallFile(workspace.id, file, uploadId);
+      const asset = { ...confirmed, previewUrl: URL.createObjectURL(file) };
+      setCoverMediaAssets((current) => uniqueMediaAssets([...current, asset]));
+      updateUploadProgress(uploadId, {
+        loadedBytes: file.size,
+        stage: 'done',
+        totalBytes: file.size,
+      });
+      void refreshStorageUsage();
+      setLibraryCursorStack([]);
+      void loadMediaLibrary();
+      toast.success('Đã upload ảnh cover.');
+      return confirmed;
+    } catch (uploadError) {
+      updateUploadProgress(uploadId, { stage: 'failed' });
+      throw uploadError;
+    }
+  }
+
   function upsertUploadProgress(next: UploadProgressItem) {
     setUploadProgress((current) => {
       const existing = current.findIndex((item) => item.id === next.id);
@@ -614,6 +660,10 @@ export default function NewPostPage() {
           {
             ...draft,
             mediaAssetIds: draft.mediaAssetIds.filter((id) => id !== mediaAssetId),
+            thumbnailMediaAssetId:
+              draft.thumbnailMediaAssetId === mediaAssetId ? '' : draft.thumbnailMediaAssetId,
+            thumbnailMode:
+              draft.thumbnailMediaAssetId === mediaAssetId ? 'AUTO' : draft.thumbnailMode,
           },
         ]),
       ),
@@ -777,11 +827,13 @@ export default function NewPostPage() {
 
         <PlatformComposerPanels
           accounts={selectedAccounts}
+          coverMediaAssets={coverMediaAssets}
           common={{ title, body, linkUrl, hashtags }}
           drafts={platformOverrides}
           mediaAssets={mediaAssets}
           workspaceId={workspace.id}
           onChange={updateOverride}
+          onUploadCoverMedia={uploadCoverMedia}
         />
       </section>
 
@@ -1320,6 +1372,15 @@ function sumLoadedParts(loadedByPart: Map<number, number>): number {
   let total = 0;
   for (const loadedBytes of loadedByPart.values()) total += loadedBytes;
   return total;
+}
+
+function uniqueMediaAssets<T extends MediaAssetView>(mediaAssets: T[]): T[] {
+  const seen = new Set<string>();
+  return mediaAssets.filter((asset) => {
+    if (seen.has(asset.id)) return false;
+    seen.add(asset.id);
+    return true;
+  });
 }
 
 function shouldUseApiUploadFallback(uploadUrl: string): boolean {

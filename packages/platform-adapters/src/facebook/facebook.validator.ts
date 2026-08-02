@@ -11,7 +11,8 @@ export function validateFacebookPost(input: PublishPostInput): ValidationResult 
   if (images.length > 0 && videos.length > 0) {
     issues.push({
       field: 'media',
-      message: 'Facebook không hỗ trợ trộn ảnh và video trong cùng một bài publish của hệ thống.',
+      message:
+        'Facebook adapter hiện hỗ trợ multi-photo hoặc 1 video riêng; mixed media trong cùng một bài chưa được triển khai an toàn.',
     });
   }
 

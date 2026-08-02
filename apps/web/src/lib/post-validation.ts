@@ -5,13 +5,13 @@ export interface PostComposerValidationInput {
   body?: string;
   linkUrl?: string;
   selectedAccounts: SocialAccountView[];
-  mediaAssets: Pick<MediaAssetView, 'type' | 'status' | 'readUrl'>[];
+  mediaAssets: Pick<MediaAssetView, 'type' | 'status' | 'readUrl' | 'thumbnailUrl'>[];
   platformOverrides?: Array<{
     socialAccountId: string;
     title?: string;
     caption?: string;
     linkUrl?: string;
-    mediaAssets?: Pick<MediaAssetView, 'type' | 'status' | 'readUrl'>[];
+    mediaAssets?: Pick<MediaAssetView, 'type' | 'status' | 'readUrl' | 'thumbnailUrl'>[];
     options?: Record<string, unknown>;
   }>;
   requireTargets: boolean;
@@ -61,10 +61,22 @@ export function validatePostComposer(input: PostComposerValidationInput): string
 
     const imageCount = resolvedMedia.filter((asset) => asset.type === 'IMAGE').length;
     const videoCount = resolvedMedia.filter((asset) => asset.type === 'VIDEO').length;
+    const thumbnailMode = override?.options?.thumbnailMode;
+
+    if (thumbnailMode === 'MEDIA_ASSET' && !override?.options?.thumbnailMediaAssetId) {
+      return `${prefix}cần chọn ảnh cover/thumbnail đã upload.`;
+    }
+
+    if (
+      thumbnailMode === 'GENERATED' &&
+      !resolvedMedia.some((asset) => asset.type === 'VIDEO' && asset.thumbnailUrl)
+    ) {
+      return `${prefix}thumbnail tự tạo từ video chưa sẵn sàng.`;
+    }
 
     if (account.platform === 'FACEBOOK') {
       if (imageCount > 0 && videoCount > 0) {
-        return `${prefix}chưa hỗ trợ trộn ảnh và video trong cùng một bài publish.`;
+        return `${prefix}adapter Facebook hiện hỗ trợ multi-photo hoặc 1 video riêng, chưa hỗ trợ mixed media trong cùng một bài.`;
       }
 
       if (videoCount > 1) {
@@ -97,7 +109,7 @@ export function validatePostComposer(input: PostComposerValidationInput): string
       }
 
       if (imageCount > 0 && videoCount > 0) {
-        return `${prefix}không trộn ảnh và video trong cùng một TikTok post.`;
+        return `${prefix}TikTok yêu cầu chọn một trong hai loại: 1 video, hoặc 1-35 ảnh photo post.`;
       }
 
       if (imageCount > 35) {

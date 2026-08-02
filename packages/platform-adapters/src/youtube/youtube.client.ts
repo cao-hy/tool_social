@@ -38,6 +38,13 @@ export interface YouTubeUploadVideoInput {
   containsSyntheticMedia?: boolean;
 }
 
+export interface YouTubeSetThumbnailInput {
+  accessToken: string;
+  videoId: string;
+  bytes: Uint8Array;
+  mimeType: string;
+}
+
 export class YouTubeClient {
   private readonly authBaseUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
   private readonly tokenUrl = 'https://oauth2.googleapis.com/token';
@@ -166,6 +173,36 @@ export class YouTubeClient {
       bytes: input.bytes,
       mimeType: input.mimeType,
     });
+  }
+
+  async setThumbnail(input: YouTubeSetThumbnailInput): Promise<void> {
+    const url = new URL(`${this.uploadBaseUrl}/thumbnails/set`);
+    url.searchParams.set('videoId', input.videoId);
+    url.searchParams.set('uploadType', 'media');
+
+    let response: Response;
+    try {
+      response = await this.fetch(url, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${input.accessToken}`,
+          'content-length': String(input.bytes.byteLength),
+          'content-type': input.mimeType,
+        },
+        body: input.bytes,
+        signal: AbortSignal.timeout(120000),
+      });
+    } catch (error) {
+      throw youtubeNetworkError(error);
+    }
+
+    if (!response.ok) {
+      throw normalizeYouTubeError({
+        status: response.status,
+        payload: await parseJson(response),
+        retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
+      });
+    }
   }
 
   async getVideoStatus(accessToken: string, videoId: string): Promise<YouTubeVideoResponse> {

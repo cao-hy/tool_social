@@ -6,6 +6,7 @@ import {
   WORKSPACE_ROLES,
   type WorkspaceRole,
 } from '@socialhub/shared';
+import { Info } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   Field,
@@ -119,6 +120,34 @@ export default function TeamPage() {
         <h1 className="text-2xl font-semibold text-slate-950">Team</h1>
         <p className="mt-1 text-sm text-slate-600">{workspace.name}</p>
       </header>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Info className="h-5 w-5 text-indigo-600" />
+          <h2 className="text-lg font-semibold text-slate-950">Giải thích vai trò</h2>
+        </div>
+        <ul className="text-sm text-slate-600 space-y-2 list-disc list-outside ml-4">
+          <li>
+            <strong>OWNER:</strong> Toàn quyền quản trị, là người sở hữu workspace.
+          </li>
+          <li>
+            <strong>ADMIN:</strong> Quản trị viên, có thể mời/xóa thành viên và quản lý toàn bộ nội
+            dung.
+          </li>
+          <li>
+            <strong>EDITOR:</strong> Người chỉnh sửa, có thể tạo, sửa, xóa, đăng bài viết và quản lý
+            media.
+          </li>
+          <li>
+            <strong>ANALYST:</strong> Chuyên viên phân tích, có quyền xem dữ liệu và báo cáo chi
+            tiết.
+          </li>
+          <li>
+            <strong>VIEWER:</strong> Khách xem, chỉ có quyền xem thông tin cơ bản, không được thay
+            đổi gì.
+          </li>
+        </ul>
+      </section>
 
       {canInvite ? (
         <section className="rounded-lg border border-slate-200 bg-white p-5">

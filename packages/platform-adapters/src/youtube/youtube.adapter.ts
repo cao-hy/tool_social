@@ -129,6 +129,15 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
       containsSyntheticMedia: options.containsSyntheticMedia,
     });
 
+    if (input.thumbnail?.bytes?.length) {
+      await this.client.setThumbnail({
+        accessToken: ctx.accessToken,
+        videoId: result.id,
+        bytes: input.thumbnail.bytes,
+        mimeType: input.thumbnail.mimeType,
+      });
+    }
+
     return {
       externalPostId: result.id,
       externalUrl: `https://www.youtube.com/watch?v=${result.id}`,

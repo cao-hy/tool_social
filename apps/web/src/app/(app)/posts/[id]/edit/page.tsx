@@ -180,6 +180,29 @@ export default function EditPostPage() {
     });
   }
 
+  function toggleMediaAsset(mediaAssetId: string) {
+    const removing = mediaAssetIds.includes(mediaAssetId);
+    setMediaAssetIds((current) =>
+      removing ? current.filter((id) => id !== mediaAssetId) : [...current, mediaAssetId],
+    );
+    if (!removing) return;
+    setPlatformOverrides((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([accountId, draft]) => [
+          accountId,
+          {
+            ...draft,
+            mediaAssetIds: draft.mediaAssetIds.filter((id) => id !== mediaAssetId),
+            thumbnailMediaAssetId:
+              draft.thumbnailMediaAssetId === mediaAssetId ? '' : draft.thumbnailMediaAssetId,
+            thumbnailMode:
+              draft.thumbnailMediaAssetId === mediaAssetId ? 'AUTO' : draft.thumbnailMode,
+          },
+        ]),
+      ),
+    );
+  }
+
   async function save() {
     if (!workspace || !post) return;
     const selectedMedia = post.media.filter((asset) => mediaAssetIds.includes(asset.id));
@@ -405,13 +428,7 @@ export default function EditPostPage() {
                             className="mt-1"
                             disabled={!canEditTargets}
                             type="checkbox"
-                            onChange={() =>
-                              setMediaAssetIds((current) =>
-                                current.includes(asset.id)
-                                  ? current.filter((id) => id !== asset.id)
-                                  : [...current, asset.id],
-                              )
-                            }
+                            onChange={() => toggleMediaAsset(asset.id)}
                           />
                           <span className="min-w-0">
                             <span className="block truncate font-medium text-slate-900">

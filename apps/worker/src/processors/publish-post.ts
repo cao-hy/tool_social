@@ -4,11 +4,12 @@ import {
   isPlatformError,
   type AdapterContext,
   type AdapterLogger,
+  type MediaInput,
   type SocialPlatformAdapter,
   type TikTokPublishPlatformState,
   type YouTubeVideoPlatformState,
 } from '@socialhub/platform-adapters';
-import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import {
   checkProxyAwareNetwork,
   createProxyAwareFetch,
@@ -27,6 +28,7 @@ import {
   type PlatformPostStatus,
   type ProxyConfig,
 } from '@socialhub/shared';
+import sharp from 'sharp';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { decideOnError } from '../queue/error-policy';
@@ -230,11 +232,19 @@ async function publishPlatformPost(
     });
     const sourceMedia =
       platformPost.media.length > 0 ? platformPost.media : platformPost.contentPost.media;
+    const options = jsonObject(platformPost.options);
     const media = await Promise.all(
       sourceMedia
         .filter((item) => item.mediaAsset.status === 'READY')
         .map((item) => mediaInputFromAsset(input.storage, item.mediaAsset)),
     );
+    const thumbnail = await thumbnailInputFromOptions({
+      storage: input.storage,
+      prisma: input.prisma,
+      workspaceId: payload.workspaceId,
+      options,
+      sourceMedia,
+    });
     logger.info(
       {
         correlationId: payload.correlationId,
@@ -248,6 +258,14 @@ async function publishPlatformPost(
           sizeBytes: item.sizeBytes,
           byteLength: item.bytes?.byteLength ?? 0,
         })),
+        thumbnail: thumbnail
+          ? {
+              type: thumbnail.type,
+              mimeType: thumbnail.mimeType,
+              sizeBytes: thumbnail.sizeBytes,
+              byteLength: thumbnail.bytes?.byteLength ?? 0,
+            }
+          : undefined,
       },
       'Chuẩn bị media trước khi gọi platform publish',
     );
@@ -259,7 +277,8 @@ async function publishPlatformPost(
       linkUrl: platformPost.linkUrl ?? platformPost.contentPost.linkUrl ?? undefined,
       hashtags: platformPost.contentPost.hashtags,
       media,
-      options: jsonObject(platformPost.options),
+      thumbnail,
+      options,
     };
 
     const validation = adapter.validatePost(publishInput);
@@ -533,6 +552,98 @@ function hasTikTokStatusMethods(
   return adapter.platform === 'TIKTOK' && 'getPublishPlatformState' in adapter;
 }
 
+type MediaAssetForInput = {
+  id: string;
+  workspaceId: string;
+  type: unknown;
+  status: unknown;
+  storageKey: string;
+  thumbnailKey: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  width: number | null;
+  height: number | null;
+  durationSec: number | null;
+};
+
+async function thumbnailInputFromOptions(input: {
+  storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
+  prisma: PrismaClientInstance;
+  workspaceId: string;
+  options: Record<string, unknown> | undefined;
+  sourceMedia: Array<{ mediaAsset: MediaAssetForInput }>;
+}): Promise<MediaInput | undefined> {
+  const mode = input.options?.thumbnailMode;
+  if (mode === 'GENERATED') {
+    const video = input.sourceMedia.find(
+      (item) => item.mediaAsset.type === 'VIDEO' && item.mediaAsset.thumbnailKey,
+    )?.mediaAsset;
+    if (!video?.thumbnailKey) return undefined;
+    return generatedThumbnailInputFromKey(input.storage, video.thumbnailKey);
+  }
+
+  if (mode === 'MEDIA_ASSET') {
+    const mediaAssetId =
+      typeof input.options?.thumbnailMediaAssetId === 'string'
+        ? input.options.thumbnailMediaAssetId
+        : '';
+    if (!mediaAssetId) return undefined;
+
+    const localAsset = input.sourceMedia.find(
+      (item) => item.mediaAsset.id === mediaAssetId,
+    )?.mediaAsset;
+    const mediaAsset =
+      localAsset ??
+      (await input.prisma.mediaAsset.findFirst({
+        where: {
+          id: mediaAssetId,
+          workspaceId: input.workspaceId,
+          type: 'IMAGE',
+          status: 'READY',
+          deletedAt: null,
+        },
+      }));
+
+    if (!mediaAsset || mediaAsset.type !== 'IMAGE' || mediaAsset.status !== 'READY') {
+      return undefined;
+    }
+    return mediaInputFromAsset(input.storage, mediaAsset);
+  }
+
+  return undefined;
+}
+
+async function generatedThumbnailInputFromKey(
+  storage: { client: S3Client; bucket: string; publicBaseUrl?: string },
+  key: string,
+): Promise<MediaInput> {
+  const sourceBytes = await readObjectBytes(storage.client, storage.bucket, key);
+  const bytes = new Uint8Array(
+    await sharp(Buffer.from(sourceBytes)).jpeg({ quality: 90, mozjpeg: true }).toBuffer(),
+  );
+  const jpegKey = platformCoverKey(key);
+  await storage.client.send(
+    new PutObjectCommand({
+      Bucket: storage.bucket,
+      Key: jpegKey,
+      Body: bytes,
+      ContentType: 'image/jpeg',
+      ContentLength: bytes.byteLength,
+    }),
+  );
+  return {
+    type: 'IMAGE',
+    url: publicMediaUrl(storage.publicBaseUrl, storage.bucket, jpegKey),
+    bytes,
+    mimeType: 'image/jpeg',
+    sizeBytes: bytes.byteLength,
+  };
+}
+
+function platformCoverKey(thumbnailKey: string): string {
+  return thumbnailKey.replace(/\.[a-z0-9]+$/i, '-platform-cover.jpg');
+}
+
 async function readObjectBytes(client: S3Client, bucket: string, key: string): Promise<Uint8Array> {
   const object = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   return new Uint8Array((await object.Body?.transformToByteArray()) ?? []);
@@ -549,7 +660,7 @@ async function mediaInputFromAsset(
     height: number | null;
     durationSec: number | null;
   },
-) {
+): Promise<MediaInput> {
   return {
     type: mediaAsset.type as MediaType,
     url: publicMediaUrl(storage.publicBaseUrl, storage.bucket, mediaAsset.storageKey),

@@ -15,6 +15,8 @@ export interface PlatformOverrideDraft {
   pinterestAltText: string;
   pinterestDominantColor: string;
   pinterestAiDisclosure: 'NONE' | 'GENERATIVE_AI';
+  thumbnailMode: 'AUTO' | 'GENERATED' | 'MEDIA_ASSET';
+  thumbnailMediaAssetId: string;
   youtubePrivacyStatus: 'public' | 'unlisted' | 'private';
   youtubeCategoryId: string;
   youtubeMadeForKids: boolean;
@@ -50,6 +52,8 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   pinterestAltText: '',
   pinterestDominantColor: '',
   pinterestAiDisclosure: 'NONE',
+  thumbnailMode: 'AUTO',
+  thumbnailMediaAssetId: '',
   youtubePrivacyStatus: 'public',
   youtubeCategoryId: '22',
   youtubeMadeForKids: false,
@@ -179,6 +183,8 @@ export function platformOverrideFromOptions(input: {
       Array.isArray(options.aiDisclosures) && options.aiDisclosures.length > 0
         ? 'GENERATIVE_AI'
         : 'NONE',
+    thumbnailMode: readEnum(options.thumbnailMode, ['AUTO', 'GENERATED', 'MEDIA_ASSET'], 'AUTO'),
+    thumbnailMediaAssetId: readString(options.thumbnailMediaAssetId),
     youtubePrivacyStatus: readEnum(
       options.privacyStatus,
       ['public', 'unlisted', 'private'],
@@ -232,6 +238,11 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
         dominantColor: draft.pinterestDominantColor.trim() || undefined,
         aiDisclosures:
           draft.pinterestAiDisclosure === 'GENERATIVE_AI' ? ['GENERATIVE_AI'] : undefined,
+        thumbnailMode: draft.thumbnailMode === 'AUTO' ? undefined : draft.thumbnailMode,
+        thumbnailMediaAssetId:
+          draft.thumbnailMode === 'MEDIA_ASSET'
+            ? draft.thumbnailMediaAssetId.trim() || undefined
+            : undefined,
       });
     case 'YOUTUBE':
       return compactOptions({
@@ -239,6 +250,11 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
         categoryId: draft.youtubeCategoryId.trim() || '22',
         selfDeclaredMadeForKids: draft.youtubeMadeForKids,
         containsSyntheticMedia: draft.youtubeContainsSyntheticMedia,
+        thumbnailMode: draft.thumbnailMode === 'AUTO' ? undefined : draft.thumbnailMode,
+        thumbnailMediaAssetId:
+          draft.thumbnailMode === 'MEDIA_ASSET'
+            ? draft.thumbnailMediaAssetId.trim() || undefined
+            : undefined,
       });
     case 'TIKTOK': {
       const directPost = draft.tiktokPostMode === 'DIRECT_POST';
