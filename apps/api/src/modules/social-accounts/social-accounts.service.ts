@@ -42,7 +42,7 @@ interface OAuthStatePayload {
   createdAt: string;
 }
 
-interface PinterestBoardSummary {
+export interface PinterestBoardSummary {
   id: string;
   name: string;
   description?: string | null;
@@ -50,7 +50,7 @@ interface PinterestBoardSummary {
   ownerUsername?: string | null;
 }
 
-interface PinterestBoardSectionSummary {
+export interface PinterestBoardSectionSummary {
   id: string;
   name: string;
 }
