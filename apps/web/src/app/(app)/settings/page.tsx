@@ -1,11 +1,21 @@
 'use client';
 
 import { hasPermission } from '@socialhub/shared';
-import { ChevronLeft, ChevronRight, Clock, Database, FileText, RefreshCw, X } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Database,
+  FileText,
+  Lock,
+  RefreshCw,
+  X,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   Field,
   InlineError,
+  PasswordInput,
   PrimaryButton,
   SecondaryButton,
   SelectInput,
@@ -13,7 +23,7 @@ import {
 } from '@/components/form-controls';
 import { FallbackImage, mediaThumbnailSources } from '@/components/media-preview';
 import { useToast } from '@/components/toast-provider';
-import { mediaApi, systemApi, workspaceApi } from '@/lib/api-client';
+import { authApi, mediaApi, systemApi, workspaceApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import type { AuditLogItem, MediaLibraryItem, StorageUsageView } from '@/lib/types';
@@ -76,7 +86,7 @@ export default function SettingsPage() {
   const [mediaQuery, setMediaQuery] = useState('');
   const [mediaType, setMediaType] = useState('');
   const [mediaStatus, setMediaStatus] = useState('');
-  const [activeSection, setActiveSection] = useState<'storage' | 'audit'>('storage');
+  const [activeSection, setActiveSection] = useState<'storage' | 'audit' | 'security'>('storage');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [mediaLoading, setMediaLoading] = useState(false);
@@ -85,6 +95,12 @@ export default function SettingsPage() {
   const [renamingMediaId, setRenamingMediaId] = useState<string | null>(null);
   const [regeneratingMediaId, setRegeneratingMediaId] = useState<string | null>(null);
   const [previewMedia, setPreviewMedia] = useState<MediaLibraryItem | null>(null);
+
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordSubmitting, setPasswordSubmitting] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const canViewMedia = workspace ? hasPermission(workspace.role, 'media:view') : false;
   const canUploadMedia = workspace ? hasPermission(workspace.role, 'media:upload') : false;
@@ -234,6 +250,29 @@ export default function SettingsPage() {
       toast.error(getErrorMessage(saveError));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPasswordError(null);
+
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Mật khẩu xác nhận không khớp.');
+      return;
+    }
+
+    setPasswordSubmitting(true);
+    try {
+      await authApi.changePassword({ currentPassword, newPassword });
+      toast.success('Đổi mật khẩu thành công. Các thiết bị khác đã bị đăng xuất.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      setPasswordError(getErrorMessage(err));
+    } finally {
+      setPasswordSubmitting(false);
     }
   }
 
@@ -493,7 +532,7 @@ export default function SettingsPage() {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-2">
-        <div className="grid gap-2 md:grid-cols-2">
+        <div className="grid gap-2 md:grid-cols-3">
           <button
             className={`flex items-center justify-between rounded-md px-4 py-3 text-left transition ${
               activeSection === 'storage'
@@ -538,8 +577,69 @@ export default function SettingsPage() {
             </span>
             <FileText className="h-5 w-5" />
           </button>
+          <button
+            className={`flex items-center justify-between rounded-md px-4 py-3 text-left transition ${
+              activeSection === 'security'
+                ? 'bg-slate-950 text-white shadow-sm'
+                : 'bg-slate-50 text-slate-700 hover:bg-slate-100'
+            }`}
+            type="button"
+            onClick={() => setActiveSection('security')}
+          >
+            <span>
+              <span className="block text-sm font-semibold">Bảo mật</span>
+              <span
+                className={`mt-0.5 block text-xs ${
+                  activeSection === 'security' ? 'text-slate-300' : 'text-slate-500'
+                }`}
+              >
+                Đổi mật khẩu tài khoản
+              </span>
+            </span>
+            <Lock className="h-5 w-5" />
+          </button>
         </div>
       </section>
+
+      {activeSection === 'security' && (
+        <section className="rounded-lg border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-semibold text-slate-950">Đổi mật khẩu</h2>
+          <form className="mt-4 grid gap-4 md:grid-cols-3" onSubmit={handleChangePassword}>
+            <Field label="Mật khẩu hiện tại">
+              <PasswordInput
+                name="currentPassword"
+                required
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+              />
+            </Field>
+            <Field label="Mật khẩu mới">
+              <PasswordInput
+                minLength={6}
+                name="newPassword"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+            </Field>
+            <Field label="Xác nhận mật khẩu mới">
+              <PasswordInput
+                minLength={6}
+                name="confirmPassword"
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+            </Field>
+            <div className="md:col-span-3 flex flex-col items-end gap-2">
+              {passwordError && <p className="text-sm text-red-600">{passwordError}</p>}
+              <PrimaryButton busy={passwordSubmitting} type="submit">
+                Đổi mật khẩu
+              </PrimaryButton>
+            </div>
+          </form>
+        </section>
+      )}
 
       {activeSection === 'storage' && canViewMedia ? (
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">

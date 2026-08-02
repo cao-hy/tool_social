@@ -68,7 +68,6 @@ export function DeletePostDialog({
   const selectedSomeRemoteTargets =
     selectedPlatformPostIds.length > 0 &&
     selectedPlatformPostIds.length < selectableRemoteTargets.length;
-  const remoteDeleteBlocked = remoteTargets.length > 0 && selectedPlatformPostIds.length === 0;
 
   useEffect(() => {
     setSelectedPlatformPostIds(selectableRemoteTargets.map((item) => item.id));
@@ -116,12 +115,13 @@ export function DeletePostDialog({
           {unsupportedRemoteTargets.length > 0 ? (
             <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               {unsupportedRemoteTargets.length} target không thể xóa qua API nên đã được bỏ chọn.
+              Nếu tiếp tục, hệ thống chỉ xóa dữ liệu server/workspace; bài đã đăng trên nền tảng đó
+              vẫn có thể còn tồn tại.
             </p>
           ) : null}
-          {remoteDeleteBlocked ? (
-            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              Không thể xóa bài khỏi workspace vì bài còn bản đã publish nhưng không có target nào
-              có thể xóa qua API.
+          {remoteTargets.length > 0 && selectedPlatformPostIds.length === 0 ? (
+            <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+              Bạn đang chọn xóa server/workspace. Hệ thống sẽ không gọi API xóa bài trên social.
             </p>
           ) : null}
 
@@ -171,7 +171,6 @@ export function DeletePostDialog({
           </SecondaryButton>
           <PrimaryButton
             busy={busy}
-            disabled={remoteDeleteBlocked}
             onClick={() => onConfirm({ platformPostIds: selectedPlatformPostIds })}
             type="button"
           >

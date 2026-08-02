@@ -11,6 +11,7 @@ import type {
   LoginInput,
   RegisterInput,
   ResetPasswordInput,
+  ChangePasswordInput,
 } from './auth.schemas';
 
 export interface SessionCookie {
@@ -45,7 +46,16 @@ export class AuthService {
   async register(input: RegisterInput, auditContext: AuditContext) {
     try {
       const passwordHash = await hashPassword(input.password);
-      const workspaceName = input.workspaceName ?? `${input.name ?? input.email}'s Workspace`;
+
+      let defaultNamePart = input.email.split('@')[0];
+      if (input.name && input.name.trim() !== '') {
+        const nameParts = input.name.trim().split(/\s+/);
+        const targetName = nameParts[nameParts.length - 1];
+        if (targetName) {
+          defaultNamePart = targetName.charAt(0).toUpperCase() + targetName.slice(1);
+        }
+      }
+      const workspaceName = input.workspaceName ?? `${defaultNamePart}'s Workspace`;
 
       const created = await this.prisma.$transaction(async (tx) => {
         const existing = await tx.user.findUnique({ where: { email: input.email } });
@@ -221,6 +231,51 @@ export class AuthService {
         action: 'PASSWORD_CHANGED',
         resourceType: 'User',
         resourceId: reset.userId,
+      });
+
+      return { changed: true };
+    } catch (error) {
+      if (error instanceof PasswordPolicyError) throw AppError.validation(error.message);
+      throw error;
+    }
+  }
+
+  async changePassword(
+    userId: string,
+    input: ChangePasswordInput,
+    currentToken: string | null,
+    auditContext: AuditContext,
+  ) {
+    try {
+      const user = await this.prisma.user.findUnique({ where: { id: userId } });
+      if (!user) throw AppError.unauthenticated('User không tồn tại.');
+
+      const valid = await verifyPassword(input.currentPassword, user.passwordHash ?? null);
+      if (!valid) throw AppError.validation('Mật khẩu hiện tại không đúng.');
+
+      const passwordHash = await hashPassword(input.newPassword);
+
+      const currentTokenHash = currentToken ? hashToken(currentToken) : undefined;
+
+      await this.prisma.$transaction([
+        this.prisma.user.update({
+          where: { id: userId },
+          data: { passwordHash },
+        }),
+        this.prisma.session.deleteMany({
+          where: {
+            userId,
+            ...(currentTokenHash ? { sessionToken: { not: currentTokenHash } } : {}),
+          },
+        }),
+      ]);
+
+      await this.audit.record({
+        ...auditContext,
+        actorUserId: userId,
+        action: 'PASSWORD_CHANGED',
+        resourceType: 'User',
+        resourceId: userId,
       });
 
       return { changed: true };

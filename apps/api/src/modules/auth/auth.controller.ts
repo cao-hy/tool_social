@@ -22,6 +22,7 @@ import {
   loginSchema,
   registerSchema,
   resetPasswordSchema,
+  changePasswordSchema,
 } from './auth.schemas';
 
 @Controller('auth')
@@ -85,6 +86,22 @@ export class AuthController {
     @Req() request: FastifyRequest,
   ) {
     return this.auth.resetPassword(body as never, this.auditContext(request));
+  }
+
+  @Post('change-password')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async changePassword(
+    @Body(zodPipe(changePasswordSchema)) body: unknown,
+    @Headers('cookie') cookieHeader: string | undefined,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.auth.changePassword(
+      requireUser(request).id,
+      body as never,
+      this.auth.readSessionToken(cookieHeader),
+      this.auditContext(request),
+    );
   }
 
   private auditContext(request: FastifyRequest) {

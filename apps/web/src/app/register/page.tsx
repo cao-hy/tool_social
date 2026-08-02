@@ -28,6 +28,28 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [conflictEmail, setConflictEmail] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [isWorkspaceTouched, setIsWorkspaceTouched] = useState(false);
+
+  useEffect(() => {
+    if (isWorkspaceTouched) return;
+
+    let derived = '';
+    if (name.trim() !== '') {
+      const nameParts = name.trim().split(/\s+/);
+      const targetName = nameParts.at(-1) ?? '';
+      const defaultNamePart = targetName.charAt(0).toUpperCase() + targetName.slice(1);
+      derived = `${defaultNamePart}'s Workspace`;
+    } else if (email.trim() !== '') {
+      const defaultNamePart = email.split('@')[0];
+      if (defaultNamePart) {
+        derived = `${defaultNamePart}'s Workspace`;
+      }
+    }
+    setWorkspaceName(derived);
+  }, [name, email, isWorkspaceTouched]);
 
   useEffect(() => {
     if (!auth.loading && auth.user) router.replace(getSafeNextPath());
@@ -91,13 +113,34 @@ export default function RegisterPage() {
     >
       <form className="space-y-4" onSubmit={handleSubmit}>
         <Field label="Tên">
-          <TextInput autoComplete="name" name="name" placeholder="Nguyễn An" />
+          <TextInput
+            autoComplete="name"
+            name="name"
+            placeholder="Nguyễn An"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
         </Field>
         <Field label="Email">
-          <TextInput autoComplete="email" name="email" required type="email" />
+          <TextInput
+            autoComplete="email"
+            name="email"
+            required
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
         </Field>
         <Field label="Workspace">
-          <TextInput name="workspaceName" placeholder="Marketing team" />
+          <TextInput
+            name="workspaceName"
+            placeholder="Marketing team"
+            value={workspaceName}
+            onChange={(e) => {
+              setWorkspaceName(e.target.value);
+              setIsWorkspaceTouched(true);
+            }}
+          />
         </Field>
         <Field label="Mật khẩu">
           <PasswordInput autoComplete="new-password" minLength={6} name="password" required />

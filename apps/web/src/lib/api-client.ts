@@ -99,6 +99,11 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  changePassword: (input: { currentPassword: string; newPassword: string }) =>
+    apiFetch<{ changed: true }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   resetPassword: (input: { token: string; password: string }) =>
     apiFetch<{ changed: true }>('/auth/reset-password', {
       method: 'POST',
@@ -495,7 +500,7 @@ export const postsApi = {
     if (options?.deleteFromPlatforms !== undefined) {
       params.set('deleteFromPlatforms', String(options.deleteFromPlatforms));
     }
-    if (options?.platformPostIds) {
+    if (options?.platformPostIds && options.platformPostIds.length > 0) {
       params.set('platformPostIds', options.platformPostIds.join(','));
     }
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
