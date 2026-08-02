@@ -60,6 +60,7 @@ export class SocialAccountsService implements OnModuleDestroy {
   private readonly refreshQueue: Queue;
   private readonly publishQueue: Queue;
   private readonly retryQueue: Queue;
+  private readonly syncExternalPostsQueue: Queue;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -78,6 +79,9 @@ export class SocialAccountsService implements OnModuleDestroy {
     this.retryQueue = new Queue('retry-failed-post', {
       connection: this.redis.getClient(),
     });
+    this.syncExternalPostsQueue = new Queue('sync-external-posts', {
+      connection: this.redis.getClient(),
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -85,6 +89,7 @@ export class SocialAccountsService implements OnModuleDestroy {
       this.refreshQueue.close(),
       this.publishQueue.close(),
       this.retryQueue.close(),
+      this.syncExternalPostsQueue.close(),
     ]);
   }
 
@@ -692,6 +697,111 @@ export class SocialAccountsService implements OnModuleDestroy {
         ]);
       }),
     ]);
+  }
+  async triggerSyncExternalPosts(
+    workspaceId: string,
+    socialAccountId: string,
+    requestedByUserId: string,
+    auditCtx: AuditContext,
+  ) {
+    const account = await this.prisma.socialAccount.findUnique({
+      where: { id: socialAccountId, workspaceId, deletedAt: null },
+    });
+    if (!account) throw AppError.notFound('Không tìm thấy tài khoản');
+
+    const registry = await this.adapterFactory.forWorkspace(workspaceId);
+    registry.requireCapability(account.platform, 'getPosts');
+
+    const activeJob = await this.prisma.externalPostSyncJob.findFirst({
+      where: {
+        socialAccountId,
+        workspaceId,
+        status: { in: ['QUEUED', 'RUNNING'] },
+      },
+    });
+    if (activeJob) {
+      throw AppError.conflict('Tài khoản này đang được đồng bộ bài viết. Vui lòng chờ.');
+    }
+
+    const lastCompletedJob = await this.prisma.externalPostSyncJob.findFirst({
+      where: {
+        socialAccountId,
+        workspaceId,
+        status: 'COMPLETED',
+      },
+      orderBy: { finishedAt: 'desc' },
+    });
+
+    if (lastCompletedJob && lastCompletedJob.finishedAt) {
+      const cooldownHours = this.env.EXTERNAL_POST_SYNC_MANUAL_COOLDOWN_HOURS;
+      const cooldownMs = cooldownHours * 60 * 60 * 1000;
+      const timeSinceLastSync = Date.now() - lastCompletedJob.finishedAt.getTime();
+      if (timeSinceLastSync < cooldownMs) {
+        const remainingHours = Math.ceil((cooldownMs - timeSinceLastSync) / (60 * 60 * 1000));
+        throw AppError.conflict(
+          `Vui lòng chờ ${remainingHours} giờ nữa để đồng bộ lại (giới hạn ${cooldownHours}h/lần).`,
+        );
+      }
+    }
+
+    const lastFailedJob = await this.prisma.externalPostSyncJob.findFirst({
+      where: {
+        socialAccountId,
+        workspaceId,
+        status: 'FAILED',
+      },
+      orderBy: { finishedAt: 'desc' },
+    });
+    if (lastFailedJob && lastFailedJob.finishedAt) {
+      const cooldownMs = 15 * 60 * 1000;
+      const timeSinceLastSync = Date.now() - lastFailedJob.finishedAt.getTime();
+      if (timeSinceLastSync < cooldownMs) {
+        const remainingMins = Math.ceil((cooldownMs - timeSinceLastSync) / (60 * 1000));
+        throw AppError.conflict(
+          `Tiến trình trước bị lỗi. Vui lòng thử lại sau ${remainingMins} phút.`,
+        );
+      }
+    }
+
+    await this.audit.record({
+      action: 'EXTERNAL_POSTS_SYNC_REQUESTED',
+      workspaceId,
+      actorUserId: requestedByUserId,
+      metadata: { socialAccountId, platform: account.platform },
+      ...auditCtx,
+    });
+
+    const cutoffDays = this.env.EXTERNAL_POST_SYNC_CUTOFF_DAYS;
+    const cutoffDate = new Date(Date.now() - cutoffDays * 24 * 60 * 60 * 1000);
+
+    const syncJob = await this.prisma.externalPostSyncJob.create({
+      data: {
+        workspaceId,
+        socialAccountId,
+        platform: account.platform,
+        status: 'QUEUED',
+        cutoffDate,
+        createdByUserId: requestedByUserId,
+      },
+    });
+
+    const payload = {
+      workspaceId,
+      socialAccountId,
+      requestedByUserId,
+      cutoffDays,
+      resumeFromJobId: syncJob.id,
+    };
+    const jobId = buildJobId('sync-external-posts', payload);
+    const opts = buildQueueJobOptions('sync-external-posts', jobId);
+
+    await this.syncExternalPostsQueue.add('sync-external-posts', payload, opts);
+
+    return {
+      jobId: syncJob.id,
+      status: 'QUEUED',
+      message: 'Đã đưa job đồng bộ lịch sử vào queue.',
+    };
   }
 
   private redirectUri(platform: Platform): string {

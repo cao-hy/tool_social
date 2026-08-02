@@ -197,7 +197,7 @@ export default function NewPostPage() {
     setError(null);
     try {
       const post = await postsApi.create(workspace.id, payload());
-      router.push(`/posts?created=${post.id}`);
+      router.push(`/posts/${post.id}?created=1`);
     } catch (createError) {
       toast.error(getErrorMessage(createError));
     } finally {
@@ -216,7 +216,7 @@ export default function NewPostPage() {
     setError(null);
     try {
       const post = await postsApi.create(workspace.id, payload());
-      await postsApi.publish(workspace.id, post.id, selectedIds);
+      await postsApi.publish(workspace.id, post.id);
       router.push(`/posts?queued=${post.id}`);
     } catch (publishError) {
       toast.error(getErrorMessage(publishError));
@@ -277,7 +277,8 @@ export default function NewPostPage() {
     return selectedAccounts
       .map((account) => {
         const draft = overrideFor(account);
-        if (!isPlatformOverrideActive(account.platform, draft)) return null;
+        const options = platformOptions(account.platform, draft);
+        if (!isPlatformOverrideActive(account.platform, draft) && !options) return null;
         const selectedMedia =
           draft.mediaAssetIds.length > 0
             ? mediaAssets.filter((asset) => draft.mediaAssetIds.includes(asset.id))
@@ -288,7 +289,7 @@ export default function NewPostPage() {
           caption: normalizeOptionalSocialText(draft.caption),
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssets: selectedMedia,
-          options: platformOptions(account.platform, draft),
+          options,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -298,8 +299,8 @@ export default function NewPostPage() {
     return selectedAccounts
       .map((account) => {
         const draft = overrideFor(account);
-        if (!isPlatformOverrideActive(account.platform, draft)) return null;
         const options = platformOptions(account.platform, draft);
+        if (!isPlatformOverrideActive(account.platform, draft) && !options) return null;
         return {
           socialAccountId: account.id,
           title: normalizeOptionalSocialText(draft.title),
@@ -431,6 +432,10 @@ export default function NewPostPage() {
       updateUploadProgress(uploadId, { stage: 'failed' });
       throw uploadError;
     }
+  }
+
+  function rememberCoverMedia(asset: MediaAssetView) {
+    setCoverMediaAssets((current) => uniqueMediaAssets([...current, asset]));
   }
 
   function upsertUploadProgress(next: UploadProgressItem) {
@@ -833,6 +838,7 @@ export default function NewPostPage() {
           mediaAssets={mediaAssets}
           workspaceId={workspace.id}
           onChange={updateOverride}
+          onSelectCoverMedia={rememberCoverMedia}
           onUploadCoverMedia={uploadCoverMedia}
         />
       </section>

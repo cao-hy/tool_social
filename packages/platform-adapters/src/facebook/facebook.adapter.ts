@@ -10,13 +10,14 @@ import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
   AuthUrlInput,
-  PlatformPostData,
   PublishPostInput,
   PublishResult,
   SocialAccountProfile,
   PostMetrics,
   EditPostInput,
+  ExternalPostPage,
   SyncCommentsParams,
+  SyncPostsParams,
   TokenSet,
 } from '../core/types';
 import { FacebookGraphClient, type FacebookGraphClientConfig } from './facebook.client';
@@ -25,6 +26,7 @@ import {
   mapFacebookPageProfile,
   mapFacebookPageToken,
   selectFacebookPage,
+  mapFacebookPagePost,
 } from './facebook.mapper';
 import { validateFacebookPost } from './facebook.validator';
 import { parseMetaWebhookEvents, verifyMetaWebhookSignature } from '../meta/webhook';
@@ -111,7 +113,36 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
         mimeType: video.mimeType,
         title: input.title,
         description: message || input.description,
+        thumbnail: input.thumbnail
+          ? {
+              bytes: input.thumbnail.bytes ?? new Uint8Array(),
+              fileName: fileNameFromMediaUrl(input.thumbnail.url, 'thumbnail.jpg'),
+              mimeType: input.thumbnail.mimeType,
+            }
+          : undefined,
       });
+
+      if (input.thumbnail?.bytes?.byteLength) {
+        try {
+          await this.client.setVideoThumbnail({
+            videoId: result.id,
+            pageAccessToken: ctx.accessToken,
+            bytes: input.thumbnail.bytes,
+            fileName: 'thumbnail.jpg',
+            mimeType: input.thumbnail.mimeType,
+          });
+          ctx.logger?.info('Facebook video thumbnail preferred request succeeded', {
+            correlationId: ctx.correlationId,
+            videoId: result.id,
+          });
+        } catch (error) {
+          ctx.logger?.warn('Facebook video thumbnail preferred request failed', {
+            correlationId: ctx.correlationId,
+            videoId: result.id,
+            err: error,
+          });
+        }
+      }
 
       return {
         externalPostId: result.id,
@@ -190,8 +221,20 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     };
   }
 
-  async getPosts(): Promise<Paginated<PlatformPostData>> {
-    throw capabilityUnsupported('FACEBOOK', 'getPosts');
+  async getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage> {
+    const response = await this.client.getPagePosts({
+      pageId: ctx.externalAccountId,
+      pageAccessToken: ctx.accessToken,
+      cursor: params.cursor,
+      limit: params.limit,
+      since: params.since,
+    });
+
+    return {
+      items: response.data.map(mapFacebookPagePost),
+      nextCursor: response.paging?.cursors?.after ?? undefined,
+      hasMore: Boolean(response.paging?.next),
+    };
   }
 
   async editPost(ctx: AdapterContext, externalPostId: string, input: EditPostInput): Promise<void> {

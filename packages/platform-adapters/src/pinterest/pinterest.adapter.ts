@@ -1,16 +1,12 @@
-import {
-  computeEngagementRate,
-  emptyPostMetrics,
-  metricFromApi,
-  type Paginated,
-} from '@socialhub/shared';
+import { computeEngagementRate, emptyPostMetrics, metricFromApi } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
   AuthUrlInput,
   EditPostInput,
-  PlatformPostData,
+  ExternalPost,
+  ExternalPostPage,
   PinterestBoardSectionSummary,
   PinterestBoardSummary,
   PostMetrics,
@@ -260,10 +256,7 @@ export class PinterestAdapter implements SocialPlatformAdapter {
     throw new Error('Pinterest xử lý video quá thời gian chờ.');
   }
 
-  async getPosts(
-    ctx: AdapterContext,
-    params: SyncPostsParams,
-  ): Promise<Paginated<PlatformPostData>> {
+  async getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage> {
     const limit = clampPageSize(params.limit);
     const response = ctx.externalPageId
       ? await this.client.listPinsOnBoard({
@@ -280,14 +273,9 @@ export class PinterestAdapter implements SocialPlatformAdapter {
           pinMetrics: true,
         });
 
-    const items = response.items.map(mapPinterestPin);
-    const filtered = params.since
-      ? items.filter((post) => post.publishedAt >= (params.since as Date))
-      : items;
-
     return {
-      items: filtered,
-      nextCursor: response.bookmark ?? null,
+      items: response.items.map(mapPinterestPin),
+      nextCursor: response.bookmark ?? undefined,
       hasMore: Boolean(response.bookmark),
     };
   }
@@ -387,17 +375,23 @@ function clampPageSize(value: number | undefined): number {
   return Math.min(250, Math.max(1, Math.floor(value)));
 }
 
-function mapPinterestPin(pin: PinterestPin): PlatformPostData {
+function mapPinterestPin(pin: PinterestPin): ExternalPost {
   const title = pin.title?.trim();
   const description = pin.description?.trim();
   return {
     externalPostId: pin.id,
-    externalUrl: `https://www.pinterest.com/pin/${pin.id}/`,
-    caption: description || title || undefined,
     title: title || undefined,
-    mediaType: mapPinterestMediaType(pin),
-    thumbnailUrl: pickPinterestThumbnail(pin),
+    caption: description || title || undefined,
+    permalink: `https://www.pinterest.com/pin/${pin.id}/`,
     publishedAt: pin.created_at ? new Date(pin.created_at) : new Date(),
+    media: [
+      {
+        url: `https://www.pinterest.com/pin/${pin.id}/`,
+        thumbnailUrl: pickPinterestThumbnail(pin),
+        type: mapPinterestMediaType(pin) ?? 'IMAGE',
+      },
+    ],
+    raw: pin,
   };
 }
 

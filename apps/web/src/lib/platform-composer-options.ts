@@ -218,17 +218,20 @@ export function platformOverrideFromOptions(input: {
 }
 
 export function platformOptions(platform: Platform, draft: PlatformOverrideDraft) {
-  if (!draft.customized) return undefined;
+  const thumbnail = thumbnailOptions(draft);
+  if (!draft.customized) return thumbnail;
 
   switch (platform) {
     case 'FACEBOOK':
       return compactOptions({
         postType: draft.facebookPostType === 'AUTO' ? undefined : draft.facebookPostType,
+        ...thumbnail,
       });
     case 'INSTAGRAM':
       return compactOptions({
         mediaType: draft.instagramPlacement,
         shareToFeed: draft.instagramPlacement === 'REELS' ? draft.instagramShareToFeed : undefined,
+        ...thumbnail,
       });
     case 'PINTEREST':
       return compactOptions({
@@ -238,11 +241,7 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
         dominantColor: draft.pinterestDominantColor.trim() || undefined,
         aiDisclosures:
           draft.pinterestAiDisclosure === 'GENERATIVE_AI' ? ['GENERATIVE_AI'] : undefined,
-        thumbnailMode: draft.thumbnailMode === 'AUTO' ? undefined : draft.thumbnailMode,
-        thumbnailMediaAssetId:
-          draft.thumbnailMode === 'MEDIA_ASSET'
-            ? draft.thumbnailMediaAssetId.trim() || undefined
-            : undefined,
+        ...thumbnail,
       });
     case 'YOUTUBE':
       return compactOptions({
@@ -250,11 +249,7 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
         categoryId: draft.youtubeCategoryId.trim() || '22',
         selfDeclaredMadeForKids: draft.youtubeMadeForKids,
         containsSyntheticMedia: draft.youtubeContainsSyntheticMedia,
-        thumbnailMode: draft.thumbnailMode === 'AUTO' ? undefined : draft.thumbnailMode,
-        thumbnailMediaAssetId:
-          draft.thumbnailMode === 'MEDIA_ASSET'
-            ? draft.thumbnailMediaAssetId.trim() || undefined
-            : undefined,
+        ...thumbnail,
       });
     case 'TIKTOK': {
       const directPost = draft.tiktokPostMode === 'DIRECT_POST';
@@ -298,15 +293,26 @@ export function isPlatformOverrideActive(
   platform: Platform,
   draft: PlatformOverrideDraft,
 ): boolean {
-  if (!draft.customized) return false;
+  const hasOptions = hasPlatformSpecificOptions(platform, draft);
+  if (!draft.customized) return hasOptions;
   return Boolean(
     draft.title.trim() ||
     draft.caption.trim() ||
     draft.description.trim() ||
     draft.linkUrl.trim() ||
     draft.mediaAssetIds.length > 0 ||
-    hasPlatformSpecificOptions(platform, draft),
+    hasOptions,
   );
+}
+
+function thumbnailOptions(draft: PlatformOverrideDraft): Record<string, unknown> | undefined {
+  return compactOptions({
+    thumbnailMode: draft.thumbnailMode === 'AUTO' ? undefined : draft.thumbnailMode,
+    thumbnailMediaAssetId:
+      draft.thumbnailMode === 'MEDIA_ASSET'
+        ? draft.thumbnailMediaAssetId.trim() || undefined
+        : undefined,
+  });
 }
 
 function compactOptions(input: Record<string, unknown>): Record<string, unknown> | undefined {

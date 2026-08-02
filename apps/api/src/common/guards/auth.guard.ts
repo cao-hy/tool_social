@@ -6,6 +6,8 @@ import type { AuthenticatedRequest } from '../auth/auth.types';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 
+const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1000;
+
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
@@ -35,12 +37,24 @@ export class AuthGuard implements CanActivate {
       name: session.user.name,
     };
 
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: { lastActiveAt: new Date() },
-    });
+    this.touchSessionIfStale(session.id, session.lastActiveAt);
 
     return true;
+  }
+
+  private touchSessionIfStale(sessionId: string, lastActiveAt: Date): void {
+    const now = new Date();
+    if (now.getTime() - lastActiveAt.getTime() < SESSION_TOUCH_INTERVAL_MS) return;
+
+    void this.prisma.session
+      .updateMany({
+        where: {
+          id: sessionId,
+          lastActiveAt: { lt: new Date(now.getTime() - SESSION_TOUCH_INTERVAL_MS) },
+        },
+        data: { lastActiveAt: now },
+      })
+      .catch(() => undefined);
   }
 
   private readSessionCookie(request: FastifyRequest): string | null {

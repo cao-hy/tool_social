@@ -12,11 +12,13 @@ import {
   youtubeTokenResponseSchema,
   youtubeVideoResponseSchema,
   youtubeVideosResponseSchema,
+  youtubePlaylistItemsResponseSchema,
   type YouTubeChannel,
   type YouTubeComment,
   type YouTubeCommentThreadsResponse,
   type YouTubeTokenResponse,
   type YouTubeVideoResponse,
+  type YouTubePlaylistItemsResponse,
 } from './youtube.schemas';
 
 export interface YouTubeClientConfig {
@@ -122,7 +124,7 @@ export class YouTubeClient {
     const response = await this.get(
       '/channels',
       {
-        part: 'snippet,statistics',
+        part: 'snippet,statistics,contentDetails',
         mine: 'true',
       },
       youtubeChannelsResponseSchema,
@@ -143,6 +145,22 @@ export class YouTubeClient {
       });
     }
     return channel;
+  }
+
+  async getPlaylistItems(
+    accessToken: string,
+    playlistId: string,
+    options?: { pageToken?: string; maxResults?: number; since?: Date },
+  ): Promise<YouTubePlaylistItemsResponse> {
+    const params: Record<string, string> = {
+      part: 'snippet',
+      playlistId,
+      maxResults: String(options?.maxResults ?? 50),
+    };
+    if (options?.pageToken) {
+      params.pageToken = options.pageToken;
+    }
+    return this.get('/playlistItems', params, youtubePlaylistItemsResponseSchema, accessToken);
   }
 
   async uploadVideo(input: YouTubeUploadVideoInput): Promise<YouTubeVideoResponse> {

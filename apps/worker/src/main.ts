@@ -26,6 +26,7 @@ import {
 } from './processors/refresh-social-token';
 import { createSyncAccountMetricsProcessor } from './processors/sync-account-metrics';
 import { createSyncCommentsProcessor } from './processors/sync-comments';
+import { createSyncExternalPostsProcessor } from './processors/sync-external-posts';
 import { createSyncPostMetricsProcessor } from './processors/sync-post-metrics';
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
@@ -84,6 +85,10 @@ async function main(): Promise<void> {
   registry.registerWorker(
     'sync-comments',
     createSyncCommentsProcessor({ prisma, keyring, adapters }),
+  );
+  registry.registerWorker(
+    'sync-external-posts',
+    createSyncExternalPostsProcessor({ prisma, keyring, adapters }),
   );
   registry.registerWorker(
     'sync-post-metrics',

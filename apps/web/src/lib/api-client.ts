@@ -227,6 +227,11 @@ export const socialAccountsApi = {
     apiFetch<{ items: PinterestBoardSectionView[]; fetchedAt: string }>(
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/pinterest/boards/${encodeURIComponent(boardId)}/sections`,
     ),
+  syncPosts: (workspaceId: string, socialAccountId: string) =>
+    apiFetch<{ jobId: string; status: 'QUEUED'; message: string }>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/sync-posts`,
+      { method: 'POST' },
+    ),
 };
 
 export const platformsApi = {

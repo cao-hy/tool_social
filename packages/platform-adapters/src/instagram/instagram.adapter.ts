@@ -10,8 +10,8 @@ import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
   AuthUrlInput,
+  ExternalPostPage,
   PlatformComment,
-  PlatformPostData,
   PublishPostInput,
   PublishResult,
   SocialAccountProfile,
@@ -21,12 +21,13 @@ import type {
   TokenSet,
 } from '../core/types';
 import { InstagramGraphClient, type InstagramGraphClientConfig } from './instagram.client';
-import { mapInstagramProfile, mapInstagramToken, selectInstagramAccount } from './instagram.mapper';
-import type {
-  InstagramComment,
-  InstagramContainerStatus,
-  InstagramMedia,
-} from './instagram.schemas';
+import {
+  mapInstagramProfile,
+  mapInstagramToken,
+  selectInstagramAccount,
+  mapInstagramMedia,
+} from './instagram.mapper';
+import type { InstagramComment, InstagramContainerStatus } from './instagram.schemas';
 import { validateInstagramPost } from './instagram.validator';
 import { parseMetaWebhookEvents, verifyMetaWebhookSignature } from '../meta/webhook';
 
@@ -110,6 +111,8 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         caption: message,
         mediaType: mediaType === 'REELS' || mediaType === 'STORIES' ? mediaType : undefined,
         shareToFeed: mediaType === 'REELS' ? options.shareToFeed : undefined,
+        coverUrl:
+          media.type === 'VIDEO' && mediaType === 'REELS' ? input.thumbnail?.url : undefined,
       });
       if (media.type === 'VIDEO') {
         await this.waitUntilContainerReady(ctx, creationId, 'video');
@@ -230,24 +233,19 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     );
   }
 
-  async getPosts(
-    ctx: AdapterContext,
-    params: SyncPostsParams,
-  ): Promise<Paginated<PlatformPostData>> {
+  async getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage> {
     const response = await this.client.getUserMedia({
       igAccountId: ctx.externalAccountId,
       accessToken: ctx.accessToken,
       cursor: params.cursor,
       limit: params.limit,
+      since: params.since,
     });
     const items = response.data.map(mapInstagramMedia);
-    const filtered = params.since
-      ? items.filter((post) => post.publishedAt >= (params.since as Date))
-      : items;
 
     return {
-      items: filtered,
-      nextCursor: response.paging?.cursors?.after ?? null,
+      items,
+      nextCursor: response.paging?.cursors?.after ?? undefined,
       hasMore: Boolean(response.paging?.next),
     };
   }
@@ -409,23 +407,6 @@ export class InstagramAdapter implements SocialPlatformAdapter {
 
     return result;
   }
-}
-
-function mapInstagramMedia(media: InstagramMedia): PlatformPostData {
-  return {
-    externalPostId: media.id,
-    externalUrl: media.permalink,
-    caption: media.caption,
-    mediaType: mapInstagramMediaType(media.media_type),
-    thumbnailUrl: media.thumbnail_url ?? media.media_url,
-    publishedAt: media.timestamp ? new Date(media.timestamp) : new Date(),
-  };
-}
-
-function mapInstagramMediaType(mediaType: string | undefined) {
-  if (mediaType === 'IMAGE' || mediaType === 'CAROUSEL_ALBUM') return 'IMAGE';
-  if (mediaType === 'VIDEO') return 'VIDEO';
-  return undefined;
 }
 
 function mapInstagramComment(input: {

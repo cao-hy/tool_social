@@ -123,6 +123,7 @@ enum AuditAction {
   SOCIAL_ACCOUNT_DISCONNECTED
   SOCIAL_TOKEN_REFRESHED
   SOCIAL_TOKEN_ACCESSED
+  EXTERNAL_POSTS_SYNC_REQUESTED
   POST_CREATED
   POST_UPDATED
   POST_DELETED
@@ -146,6 +147,24 @@ enum JobStatus {
   COMPLETED
   FAILED
   DEAD
+}
+
+enum SyncJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PostSourceType {
+  SOCIALHUB
+  EXTERNAL
+}
+
+enum PlatformPostSyncSource {
+  API
+  WEBHOOK
 }
 
 enum WebhookEventStatus {
@@ -185,19 +204,20 @@ model User {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  accounts            Account[]
-  sessions            Session[]
-  memberships         WorkspaceMember[]
-  passwordResets      PasswordResetToken[]
-  auditLogs           AuditLog[]
-  notifications       Notification[]
-  createdPosts        ContentPost[]        @relation("PostCreator")
-  uploadedMedia       MediaAsset[]
-  sentReplies         CommentReply[]
-  assignedComments    CommentAssignment[]  @relation("AssignedTo")
-  assignedByComments  CommentAssignment[]  @relation("AssignedBy")
-  commentNotes        CommentNote[]
-  sentInvitations     WorkspaceInvitation[]
+  accounts           Account[]
+  sessions           Session[]
+  memberships        WorkspaceMember[]
+  passwordResets     PasswordResetToken[]
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  createdPosts       ContentPost[]         @relation("PostCreator")
+  uploadedMedia      MediaAsset[]
+  sentReplies        CommentReply[]
+  assignedComments   CommentAssignment[]   @relation("AssignedTo")
+  assignedByComments CommentAssignment[]   @relation("AssignedBy")
+  commentNotes       CommentNote[]
+  sentInvitations    WorkspaceInvitation[]
+  externalPostSyncJobs ExternalPostSyncJob[]
 
   @@index([email])
   @@index([deletedAt])
@@ -289,25 +309,26 @@ model Workspace {
   commentTags    CommentTag[]
   backgroundJobs BackgroundJob[]
   proxySetting   WorkspaceProxySetting?
+  externalPostSyncJobs ExternalPostSyncJob[]
 
   @@index([slug])
   @@index([deletedAt])
 }
 
 model WorkspaceProxySetting {
-  id          String  @id @default(cuid())
-  workspaceId String  @unique
+  id          String @id @default(cuid())
+  workspaceId String @unique
 
-  enabled       Boolean @default(false)
-  proxyUrl      String? @db.Text
+  enabled        Boolean @default(false)
+  proxyUrl       String? @db.Text
   proxyUrlMasked String?
-  countryLock   String?
+  countryLock    String?
 
-  lastCheckedAt    DateTime?
-  lastCheckStatus  String?
-  lastIp           String?
-  lastCountryCode  String?
-  lastCheckError   String? @db.Text
+  lastCheckedAt   DateTime?
+  lastCheckStatus String?
+  lastIp          String?
+  lastCountryCode String?
+  lastCheckError  String?   @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -369,9 +390,9 @@ model SocialAccount {
   /// ID của page/channel/board cụ thể — có nền tảng phân biệt hai cấp này.
   externalPageId    String?
 
-  name      String
-  username  String?
-  avatarUrl String?
+  name       String
+  username   String?
+  avatarUrl  String?
   profileUrl String?
 
   status           SocialAccountStatus @default(CONNECTED)
@@ -389,6 +410,7 @@ model SocialAccount {
   platformPosts   PlatformPost[]
   comments        Comment[]
   metricSnapshots MetricSnapshot[]
+  externalPostSyncJobs ExternalPostSyncJob[]
 
   @@unique([workspaceId, platform, externalAccountId, externalPageId])
   @@index([workspaceId])
@@ -442,11 +464,11 @@ model MediaAsset {
 
   /// MIME xác định bằng magic bytes ở bước xác nhận upload, không tin
   /// Content-Type do client khai.
-  mimeType      String?
-  sizeBytes     Int?
-  width         Int?
-  height        Int?
-  durationSec   Float?
+  mimeType       String?
+  sizeBytes      Int?
+  width          Int?
+  height         Int?
+  durationSec    Float?
   checksumSha256 String?
 
   thumbnailKey String?
@@ -456,9 +478,9 @@ model MediaAsset {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  uploadedBy User?              @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
-  posts      ContentPostMedia[]
+  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy    User?               @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  posts         ContentPostMedia[]
   platformPosts PlatformPostMedia[]
 
   @@index([workspaceId])
@@ -477,15 +499,20 @@ model ContentPost {
   status      PostStatus @default(DRAFT)
 
   /// Nội dung mặc định, dùng cho nền tảng nào không có caption riêng.
-  title       String?
-  body        String?    @db.Text
-  linkUrl     String?
-  hashtags    String[]
+  title    String?
+  body     String?  @db.Text
+  linkUrl  String?
+  hashtags String[]
 
   scheduledAt DateTime?
   publishedAt DateTime?
 
   createdById String
+
+  sourceType        PostSourceType @default(SOCIALHUB)
+  externalSyncedAt  DateTime?
+  externalPermalink String?
+  externalAuthor    Json?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -501,6 +528,7 @@ model ContentPost {
   @@index([workspaceId, status])
   @@index([workspaceId, scheduledAt])
   @@index([workspaceId, createdAt])
+  @@index([workspaceId, sourceType, publishedAt])
   @@index([deletedAt])
 }
 
@@ -540,11 +568,15 @@ model PlatformPost {
   /// ID bài đăng trên nền tảng. Có giá trị ngay khi publish thành công và là
   /// lớp phòng thủ cuối cùng chống đăng trùng: có externalPostId nghĩa là đã
   /// đăng rồi, tuyệt đối không gọi API publish lần nữa.
-  externalPostId String?
-  externalUrl    String?
+  externalPostId    String?
+  externalUrl       String?
+  externalCreatedAt DateTime?
+  externalUpdatedAt DateTime?
+  externalRaw       Json?
+  syncSource        PlatformPostSyncSource?
 
-  publishedAt  DateTime?
-  attemptCount Int       @default(0)
+  publishedAt   DateTime?
+  attemptCount  Int       @default(0)
   lastAttemptAt DateTime?
 
   errorCode    String?
@@ -557,17 +589,17 @@ model PlatformPost {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  contentPost     ContentPost      @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
-  socialAccount   SocialAccount    @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentPost     ContentPost         @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
+  socialAccount   SocialAccount       @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
   metric          PostMetric?
   metricSnapshots MetricSnapshot[]
   comments        Comment[]
   media           PlatformPostMedia[]
 
   /// Chống lưu trùng khi sync lại: một externalPostId chỉ tồn tại một lần
-  /// trên mỗi social account.
-  @@unique([socialAccountId, externalPostId])
+  /// trên mỗi platform và account.
+  @@unique([workspaceId, socialAccountId, platform, externalPostId])
   @@index([workspaceId])
   @@index([contentPostId])
   @@index([workspaceId, status])
@@ -710,7 +742,7 @@ model MetricSnapshot {
 /// hành động TRẢ LỜI do người dùng hệ thống thực hiện — có vòng đời riêng
 /// (pending → sent → failed) vì nó là một lời gọi API có thể thất bại.
 model Comment {
-  id              String @id @default(cuid())
+  id              String   @id @default(cuid())
   workspaceId     String
   platformPostId  String
   socialAccountId String
@@ -735,11 +767,11 @@ model Comment {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  platformPost  PlatformPost        @relation(fields: [platformPostId], references: [id], onDelete: Cascade)
-  socialAccount SocialAccount       @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
-  parent        Comment?            @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
-  children      Comment[]           @relation("CommentThread")
+  workspace     Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  platformPost  PlatformPost          @relation(fields: [platformPostId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount         @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  parent        Comment?              @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  children      Comment[]             @relation("CommentThread")
   replies       CommentReply[]
   assignment    CommentAssignment?
   tags          CommentTagOnComment[]
@@ -932,10 +964,10 @@ model WebhookEvent {
   externalEventId String
   eventType       String?
 
-  status       WebhookEventStatus @default(RECEIVED)
-  payload      Json
-  headers      Json?
-  signatureOk  Boolean            @default(false)
+  status      WebhookEventStatus @default(RECEIVED)
+  payload     Json
+  headers     Json?
+  signatureOk Boolean            @default(false)
 
   receivedAt   DateTime  @default(now())
   processedAt  DateTime?
@@ -958,14 +990,14 @@ model BackgroundJob {
   jobId     String
   status    JobStatus @default(QUEUED)
 
-  payload Json?
+  payload     Json?
   /// Số lần thử, để phân biệt lỗi thoáng qua với lỗi có hệ thống.
-  attempts   Int       @default(0)
-  maxAttempts Int      @default(1)
+  attempts    Int   @default(0)
+  maxAttempts Int   @default(1)
 
-  startedAt   DateTime?
-  finishedAt  DateTime?
-  durationMs  Int?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  durationMs Int?
 
   errorCode    String?
   errorMessage String? @db.Text
@@ -988,13 +1020,13 @@ model BackgroundJob {
 /// Log mọi lời gọi ra platform API — phục vụ phân tích quota và điều tra sự cố
 /// (ARCHITECTURE.md §10). KHÔNG chứa token: `requestSummary` đã redact.
 model ApiRequestLog {
-  id              String  @id @default(cuid())
+  id              String   @id @default(cuid())
   workspaceId     String?
   socialAccountId String?
   platform        Platform
 
-  method   String
-  endpoint String
+  method         String
+  endpoint       String
   /// Chỉ path + tên tham số, KHÔNG chứa giá trị của tham số nhạy cảm.
   requestSummary String? @db.Text
 
@@ -1016,4 +1048,34 @@ model ApiRequestLog {
   @@index([socialAccountId, createdAt])
   @@index([workspaceId, createdAt])
   @@index([success, createdAt])
+}
+
+/// Theo dõi tiến độ đồng bộ bài viết ngoại lai (từ nền tảng về SocialHub).
+model ExternalPostSyncJob {
+  id              String        @id @default(cuid())
+  workspaceId     String
+  socialAccountId String
+  platform        Platform
+  status          SyncJobStatus
+  cutoffDate      DateTime
+  cursor          String?
+  scannedCount    Int           @default(0)
+  importedCount   Int           @default(0)
+  updatedCount    Int           @default(0)
+  skippedCount    Int           @default(0)
+  failedCount     Int           @default(0)
+  lastError       Json?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdByUserId String
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  createdBy     User          @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@index([socialAccountId, status])
+  @@index([workspaceId, socialAccountId, status])
 }

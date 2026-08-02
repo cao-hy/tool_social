@@ -1,4 +1,4 @@
-import type { CapabilityKey, Paginated, Platform } from '@socialhub/shared';
+import type { CapabilityKey, Platform } from '@socialhub/shared';
 import { describe, expect, it } from 'vitest';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import { createUnverifiedCapabilityTable } from '../core/capability-table';
@@ -8,7 +8,7 @@ import {
   findCapabilityMismatches,
 } from '../core/registry';
 import { emptyPostMetrics } from '@socialhub/shared';
-import type { PlatformPostData } from '../core/types';
+import type { ExternalPostPage } from '../core/types';
 
 /**
  * Adapter giả CHỈ dùng cho test cấu trúc registry.
@@ -19,7 +19,7 @@ function createFakeAdapter(
   platform: Platform,
   overrides: Partial<SocialPlatformAdapter> = {},
 ): SocialPlatformAdapter {
-  const emptyPage: Paginated<PlatformPostData> = { items: [], nextCursor: null, hasMore: false };
+  const emptyPage: ExternalPostPage = { items: [], hasMore: false };
 
   return {
     platform,

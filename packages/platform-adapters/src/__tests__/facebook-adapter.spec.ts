@@ -244,6 +244,89 @@ describe('FacebookPagesAdapter', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('publish video kèm thumbnail bằng Page videos endpoint', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = String(input);
+      expect(init?.method).toBe('POST');
+
+      if (
+        url ===
+        'https://graph-video.facebook.com/v24.0/page-1/videos?access_token=page-access-token'
+      ) {
+        expect(init?.headers).toMatchObject({
+          'content-type': expect.stringContaining('multipart/form-data; boundary='),
+        });
+        const body = init?.body as Uint8Array;
+        expect(body).toBeInstanceOf(Uint8Array);
+        const text = new TextDecoder().decode(body);
+        expect(text).toContain('name="title"');
+        expect(text).toContain('video title');
+        expect(text).toContain('name="description"');
+        expect(text).toContain('hello');
+        expect(text).toContain('name="thumb"; filename="cover.jpg"');
+        expect(text).toContain('Content-Type: image/jpeg');
+        expect(text).toContain('name="source"; filename="video.mp4"');
+        expect(text).toContain('Content-Type: video/mp4');
+        return jsonResponse({ id: 'video-1' });
+      }
+
+      if (
+        url === 'https://graph.facebook.com/v24.0/video-1/thumbnails?access_token=page-access-token'
+      ) {
+        expect(init?.headers).toMatchObject({
+          'content-type': expect.stringContaining('multipart/form-data; boundary='),
+        });
+        const body = init?.body as Uint8Array;
+        expect(body).toBeInstanceOf(Uint8Array);
+        const text = new TextDecoder().decode(body);
+        expect(text).toContain('name="source"; filename="thumbnail.jpg"');
+        expect(text).toContain('Content-Type: image/jpeg');
+        expect(text).toContain('name="is_preferred"');
+        expect(text).toContain('true');
+        return jsonResponse({ success: true });
+      }
+
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new FacebookPagesAdapter({
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+    });
+
+    await expect(
+      adapter.publishPost(
+        { accessToken: 'page-access-token', externalAccountId: 'page-1', correlationId: 'test' },
+        {
+          title: 'video title',
+          caption: 'hello',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+          thumbnail: {
+            type: 'IMAGE',
+            url: 'workspaces/ws/media/cover.jpg',
+            bytes: new Uint8Array([4, 5, 6]),
+            mimeType: 'image/jpeg',
+            sizeBytes: 3,
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      externalPostId: 'video-1',
+      externalUrl: 'https://www.facebook.com/video-1',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('đọc comments của một Page post qua Graph API comments edge', async () => {
     const fetchMock = vi.fn(async (input: URL | string) => {
       const url = new URL(String(input));

@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
-import { emptyPostMetrics, type Paginated, type Platform } from '@socialhub/shared';
+import { emptyPostMetrics, type Platform } from '@socialhub/shared';
 import { createUnverifiedCapabilityTable } from '../core/capability-table';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
   AuthUrlInput,
-  PlatformPostData,
+  ExternalPostPage,
   PublishPostInput,
   SocialAccountProfile,
   TokenSet,
@@ -73,8 +73,8 @@ export class DevelopmentFixtureAdapter implements SocialPlatformAdapter {
     };
   }
 
-  async getPosts(): Promise<Paginated<PlatformPostData>> {
-    return { items: [], nextCursor: null, hasMore: false };
+  async getPosts(): Promise<ExternalPostPage> {
+    return { items: [], hasMore: false };
   }
 
   async getPostMetrics() {

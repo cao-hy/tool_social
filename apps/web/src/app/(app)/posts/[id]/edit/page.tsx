@@ -24,7 +24,7 @@ import {
 } from '@/components/media-preview';
 import { PlatformComposerPanels } from '@/components/platform-composer-panels';
 import { useToast } from '@/components/toast-provider';
-import { postsApi, socialAccountsApi } from '@/lib/api-client';
+import { mediaApi, postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
@@ -47,6 +47,7 @@ const CONTENT_EDITABLE_POST_STATUSES = [
   'PARTIALLY_PUBLISHED',
 ] as const;
 const TARGET_EDITABLE_POST_STATUSES = ['DRAFT', 'FAILED', 'SCHEDULED'] as const;
+const MAX_COVER_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export default function EditPostPage() {
   const auth = useAuth();
@@ -65,6 +66,9 @@ export default function EditPostPage() {
   const [platformOverrides, setPlatformOverrides] = useState<Record<string, PlatformOverrideDraft>>(
     {},
   );
+  const [coverMediaAssets, setCoverMediaAssets] = useState<
+    Array<MediaAssetView & { previewUrl?: string }>
+  >([]);
   const [previewAsset, setPreviewAsset] = useState<MediaAssetView | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -75,7 +79,7 @@ export default function EditPostPage() {
     setLoading(true);
     setError(null);
     Promise.all([postsApi.get(workspace.id, params.id), socialAccountsApi.list(workspace.id)])
-      .then(([loadedPost, loadedAccounts]) => {
+      .then(async ([loadedPost, loadedAccounts]) => {
         setPost(loadedPost);
         setTitle(loadedPost.title ?? '');
         setBody(loadedPost.body ?? '');
@@ -110,6 +114,21 @@ export default function EditPostPage() {
           ),
         );
         setAccounts(loadedAccounts.items.filter((item) => item.status === 'CONNECTED'));
+        const coverIds = thumbnailMediaAssetIdsFromPost(loadedPost);
+        if (coverIds.length > 0) {
+          const results = await Promise.allSettled(
+            coverIds.map((mediaAssetId) => mediaApi.get(workspace.id, mediaAssetId)),
+          );
+          setCoverMediaAssets(
+            results
+              .filter((result): result is PromiseFulfilledResult<MediaAssetView> => {
+                return result.status === 'fulfilled';
+              })
+              .map((result) => result.value),
+          );
+        } else {
+          setCoverMediaAssets([]);
+        }
       })
       .catch((loadError) => setError(getErrorMessage(loadError)))
       .finally(() => setLoading(false));
@@ -203,6 +222,32 @@ export default function EditPostPage() {
     );
   }
 
+  async function uploadCoverMedia(file: File): Promise<MediaAssetView> {
+    if (!workspace) throw new Error('Chưa chọn workspace.');
+    if (!file.type.startsWith('image/')) {
+      throw new Error('Cover/thumbnail phải là file ảnh.');
+    }
+    if (file.size > MAX_COVER_UPLOAD_BYTES) {
+      throw new Error('File cover/thumbnail vượt giới hạn 100MB.');
+    }
+
+    const upload = await mediaApi.createUpload(workspace.id, {
+      fileName: file.name,
+      sizeBytes: file.size,
+      declaredMimeType: file.type || 'application/octet-stream',
+    });
+    await mediaApi.uploadObject(workspace.id, upload.mediaAsset.id, file);
+    const confirmed = await mediaApi.confirmUpload(workspace.id, upload.mediaAsset.id);
+    const asset = { ...confirmed, previewUrl: URL.createObjectURL(file) };
+    setCoverMediaAssets((current) => uniqueMediaAssets([...current, asset]));
+    toast.success('Đã upload ảnh cover.');
+    return confirmed;
+  }
+
+  function rememberCoverMedia(asset: MediaAssetView) {
+    setCoverMediaAssets((current) => uniqueMediaAssets([...current, asset]));
+  }
+
   async function save() {
     if (!workspace || !post) return;
     const selectedMedia = post.media.filter((asset) => mediaAssetIds.includes(asset.id));
@@ -249,7 +294,8 @@ export default function EditPostPage() {
     return selectedAccounts
       .map((account) => {
         const draft = overrideFor(account);
-        if (!isPlatformOverrideActive(account.platform, draft)) return null;
+        const options = platformOptions(account.platform, draft);
+        if (!isPlatformOverrideActive(account.platform, draft) && !options) return null;
         const selectedMedia =
           draft.mediaAssetIds.length > 0 && post
             ? post.media.filter((asset) => draft.mediaAssetIds.includes(asset.id))
@@ -260,7 +306,7 @@ export default function EditPostPage() {
           caption: normalizeOptionalSocialText(draft.caption),
           linkUrl: draft.linkUrl.trim() || undefined,
           mediaAssets: selectedMedia,
-          options: platformOptions(account.platform, draft),
+          options,
         };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null);
@@ -270,8 +316,8 @@ export default function EditPostPage() {
     return selectedAccounts
       .map((account) => {
         const draft = overrideFor(account);
-        if (!isPlatformOverrideActive(account.platform, draft)) return null;
         const options = platformOptions(account.platform, draft);
+        if (!isPlatformOverrideActive(account.platform, draft) && !options) return null;
         return {
           socialAccountId: account.id,
           title: normalizeOptionalSocialText(draft.title),
@@ -449,6 +495,7 @@ export default function EditPostPage() {
             <div className="border-t border-slate-200 pt-4">
               <PlatformComposerPanels
                 accounts={selectedAccounts}
+                coverMediaAssets={coverMediaAssets}
                 common={{ title, body, linkUrl, hashtags }}
                 disabled={!canEditContent}
                 drafts={platformOverrides}
@@ -456,6 +503,8 @@ export default function EditPostPage() {
                 mediaAssets={post?.media.filter((asset) => mediaAssetIds.includes(asset.id)) ?? []}
                 workspaceId={workspace.id}
                 onChange={updateOverride}
+                onSelectCoverMedia={rememberCoverMedia}
+                onUploadCoverMedia={uploadCoverMedia}
               />
             </div>
           </div>
@@ -592,4 +641,30 @@ function canEditPostTargets(status: ContentPostView['status']) {
 
 function isPublishedPostStatus(status: ContentPostView['status']) {
   return status === 'PUBLISHED' || status === 'PARTIALLY_PUBLISHED';
+}
+
+function thumbnailMediaAssetIdsFromPost(post: ContentPostView): string[] {
+  return [
+    ...new Set(
+      post.platformPosts
+        .map((platformPost) => {
+          const mediaAssetId = platformPost.options?.thumbnailMediaAssetId;
+          return typeof mediaAssetId === 'string' && mediaAssetId.trim()
+            ? mediaAssetId.trim()
+            : null;
+        })
+        .filter((mediaAssetId): mediaAssetId is string => mediaAssetId !== null),
+    ),
+  ];
+}
+
+function uniqueMediaAssets<T extends MediaAssetView>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const unique: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    unique.push(item);
+  }
+  return unique;
 }

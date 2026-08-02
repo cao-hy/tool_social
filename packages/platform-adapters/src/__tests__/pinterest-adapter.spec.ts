@@ -264,11 +264,15 @@ describe('PinterestAdapter', () => {
       items: [
         {
           externalPostId: 'pin-1',
-          externalUrl: 'https://www.pinterest.com/pin/pin-1/',
+          permalink: 'https://www.pinterest.com/pin/pin-1/',
           caption: 'Fresh Pin',
           title: 'Summer board',
-          mediaType: 'IMAGE',
-          thumbnailUrl: 'https://i.pinimg.com/600x/pin-1.jpg',
+          media: [
+            expect.objectContaining({
+              type: 'IMAGE',
+              thumbnailUrl: 'https://i.pinimg.com/600x/pin-1.jpg',
+            }),
+          ],
         },
       ],
       nextCursor: 'cursor-2',

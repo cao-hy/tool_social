@@ -1,5 +1,10 @@
-import type { PlatformComment, SocialAccountProfile, TokenSet } from '../core/types';
-import type { YouTubeChannel, YouTubeCommentThread, YouTubeTokenResponse } from './youtube.schemas';
+import type { ExternalPost, PlatformComment, SocialAccountProfile, TokenSet } from '../core/types';
+import type {
+  YouTubeChannel,
+  YouTubeCommentThread,
+  YouTubePlaylistItem,
+  YouTubeTokenResponse,
+} from './youtube.schemas';
 
 export function mapYouTubeToken(input: {
   token: YouTubeTokenResponse;
@@ -85,5 +90,32 @@ function mapYouTubeComment(input: {
     likeCount: input.comment.snippet.likeCount,
     postedAt: new Date(input.comment.snippet.publishedAt),
     isFromOwner: authorExternalId === input.externalAccountId,
+  };
+}
+
+export function mapYouTubePlaylistItem(item: YouTubePlaylistItem): ExternalPost {
+  const snippet = item.snippet;
+  const videoId = snippet?.resourceId?.videoId;
+  const publishedAt = snippet?.publishedAt ? new Date(snippet.publishedAt) : new Date();
+
+  return {
+    externalPostId: videoId ?? item.id,
+    title: snippet?.title,
+    caption: snippet?.description,
+    permalink: videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined,
+    publishedAt,
+    media: [
+      {
+        url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined,
+        thumbnailUrl:
+          snippet?.thumbnails?.maxres?.url ??
+          snippet?.thumbnails?.high?.url ??
+          snippet?.thumbnails?.medium?.url ??
+          snippet?.thumbnails?.default?.url,
+        type: 'VIDEO',
+      },
+    ],
+    metrics: undefined, // Playlist API doesn't return metrics (likes, views) directly. Need Video API for that.
+    raw: item,
   };
 }

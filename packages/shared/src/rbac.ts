@@ -35,6 +35,7 @@ export const PERMISSIONS = [
   'social_account:view',
   'social_account:connect',
   'social_account:disconnect',
+  'social_account:sync',
   'post:view',
   'post:create',
   'post:update',
@@ -80,6 +81,7 @@ const EDITOR_PERMISSIONS: readonly Permission[] = [
   'media:delete',
   'comment:reply',
   'comment:assign',
+  'social_account:sync',
 ];
 
 const ADMIN_PERMISSIONS: readonly Permission[] = [

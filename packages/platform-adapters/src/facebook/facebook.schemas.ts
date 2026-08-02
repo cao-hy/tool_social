@@ -164,3 +164,92 @@ export const facebookInsightsResponseSchema = z.object({
 });
 
 export type FacebookInsightsResponse = z.infer<typeof facebookInsightsResponseSchema>;
+
+export const facebookPagePostsResponseSchema = z.object({
+  data: z.array(
+    z
+      .object({
+        id: z.string().min(1),
+        message: z.string().optional(),
+        created_time: z.string().min(1),
+        updated_time: z.string().optional(),
+        permalink_url: z.string().url().optional(),
+        attachments: z
+          .object({
+            data: z
+              .array(
+                z.object({
+                  title: z.string().optional(),
+                  description: z.string().optional(),
+                  type: z.string().optional(),
+                  url: z.string().url().optional(),
+                  media: z
+                    .object({
+                      image: z
+                        .object({
+                          src: z.string().url().optional(),
+                          height: z.number().optional(),
+                          width: z.number().optional(),
+                        })
+                        .optional(),
+                      source: z.string().url().optional(),
+                    })
+                    .optional(),
+                  subattachments: z
+                    .object({
+                      data: z
+                        .array(
+                          z.object({
+                            media: z
+                              .object({
+                                image: z
+                                  .object({
+                                    src: z.string().url().optional(),
+                                  })
+                                  .optional(),
+                                source: z.string().url().optional(),
+                              })
+                              .optional(),
+                            type: z.string().optional(),
+                          }),
+                        )
+                        .optional(),
+                    })
+                    .optional(),
+                }),
+              )
+              .optional(),
+          })
+          .optional(),
+        shares: z
+          .object({
+            count: z.number().nonnegative().optional(),
+          })
+          .optional(),
+        likes: z
+          .object({
+            summary: facebookSummaryCountSchema,
+          })
+          .optional(),
+        comments: z
+          .object({
+            summary: facebookSummaryCountSchema,
+          })
+          .optional(),
+      })
+      .passthrough(),
+  ),
+  paging: z
+    .object({
+      cursors: z
+        .object({
+          after: z.string().optional(),
+          before: z.string().optional(),
+        })
+        .optional(),
+      next: z.string().url().optional(),
+    })
+    .optional(),
+});
+
+export type FacebookPagePostsResponse = z.infer<typeof facebookPagePostsResponseSchema>;

@@ -49,6 +49,7 @@ export const CAPABILITY_KEYS = [
   'nativeScheduling',
   'editPublishedPost',
   'deletePublishedPost',
+  'getPosts',
   // Comments
   'readComments',
   'readNestedComments',

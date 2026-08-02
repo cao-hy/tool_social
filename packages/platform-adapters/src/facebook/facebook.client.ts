@@ -16,6 +16,7 @@ import {
   facebookPhotoUploadResponseSchema,
   facebookPublishPostResponseSchema,
   facebookTokenResponseSchema,
+  facebookPagePostsResponseSchema,
   type FacebookCommentsResponse,
   type FacebookCommentReplyResponse,
   type FacebookPostEngagement,
@@ -26,6 +27,7 @@ import {
   type FacebookPhotoUploadResponse,
   type FacebookPublishPostResponse,
   type FacebookTokenResponse,
+  type FacebookPagePostsResponse,
 } from './facebook.schemas';
 
 export interface FacebookGraphClientConfig {
@@ -38,11 +40,13 @@ export interface FacebookGraphClientConfig {
 
 export class FacebookGraphClient {
   private readonly graphBaseUrl: string;
+  private readonly videoBaseUrl: string;
   private readonly dialogBaseUrl: string;
   private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: FacebookGraphClientConfig) {
     this.graphBaseUrl = `https://graph.facebook.com/${config.apiVersion}`;
+    this.videoBaseUrl = `https://graph-video.facebook.com/${config.apiVersion}`;
     this.dialogBaseUrl = `https://www.facebook.com/${config.apiVersion}`;
     this.fetch = config.fetch ?? fetch;
   }
@@ -115,6 +119,25 @@ export class FacebookGraphClient {
     );
   }
 
+  async getPagePosts(input: {
+    pageId: string;
+    pageAccessToken: string;
+    cursor?: string;
+    limit?: number;
+    since?: Date;
+  }): Promise<FacebookPagePostsResponse> {
+    const params: Record<string, string> = {
+      access_token: input.pageAccessToken,
+      fields:
+        'id,message,created_time,updated_time,permalink_url,attachments{title,description,type,url,media,subattachments},shares,likes.summary(true),comments.summary(true)',
+      limit: String(input.limit ?? 50),
+    };
+    if (input.cursor) params.after = input.cursor;
+    if (input.since) params.since = String(Math.floor(input.since.getTime() / 1000));
+
+    return this.get(`/${input.pageId}/published_posts`, params, facebookPagePostsResponseSchema);
+  }
+
   async publishPageFeedPost(input: {
     pageId: string;
     pageAccessToken: string;
@@ -174,11 +197,26 @@ export class FacebookGraphClient {
     mimeType: string;
     title?: string;
     description?: string;
+    thumbnail?: {
+      bytes: Uint8Array;
+      fileName: string;
+      mimeType: string;
+    };
   }): Promise<FacebookPublishPostResponse> {
     const form = encodeMultipartForm([
       ...(input.title ? [{ name: 'title', value: input.title }] : []),
       ...(input.description ? [{ name: 'description', value: input.description }] : []),
       { name: 'published', value: '1' },
+      ...(input.thumbnail
+        ? [
+            {
+              name: 'thumb',
+              fileName: input.thumbnail.fileName,
+              mimeType: input.thumbnail.mimeType,
+              bytes: input.thumbnail.bytes,
+            },
+          ]
+        : []),
       {
         name: 'source',
         fileName: input.fileName,
@@ -191,6 +229,31 @@ export class FacebookGraphClient {
       `/${input.pageId}/videos?access_token=${encodeURIComponent(input.pageAccessToken)}`,
       form,
       facebookPublishPostResponseSchema,
+      this.videoBaseUrl,
+    );
+  }
+
+  async setVideoThumbnail(input: {
+    videoId: string;
+    pageAccessToken: string;
+    bytes: Uint8Array;
+    fileName: string;
+    mimeType: string;
+  }): Promise<FacebookMutationResponse> {
+    const form = encodeMultipartForm([
+      {
+        name: 'source',
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        bytes: input.bytes,
+      },
+      { name: 'is_preferred', value: 'true' },
+    ]);
+
+    return this.postMultipart(
+      `/${input.videoId}/thumbnails?access_token=${encodeURIComponent(input.pageAccessToken)}`,
+      form,
+      facebookMutationResponseSchema,
     );
   }
 
@@ -388,10 +451,11 @@ export class FacebookGraphClient {
     path: string,
     body: EncodedMultipartForm,
     schema: z.ZodType<T>,
+    baseUrl = this.graphBaseUrl,
   ): Promise<T> {
     let response: Response;
     try {
-      response = await this.fetch(`${this.graphBaseUrl}${path}`, {
+      response = await this.fetch(`${baseUrl}${path}`, {
         method: 'POST',
         headers: {
           'content-type': body.contentType,

@@ -276,6 +276,7 @@ export interface PlatformPostView {
   linkUrl: string | null;
   options: Record<string, unknown> | null;
   media: MediaAssetView[];
+  optionMedia?: MediaAssetView[];
   externalPostId: string | null;
   externalUrl: string | null;
   publishedAt: string | null;
@@ -343,6 +344,7 @@ export interface ContentPostView {
   publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  sourceType?: string;
   derivedStatus: PostStatus;
   platformPosts: PlatformPostView[];
   media: MediaAssetView[];

@@ -309,6 +309,23 @@ export class SocialAccountsController {
     return cause;
   }
 
+  @Post('workspaces/:workspaceId/social-accounts/:accountId/sync-posts')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:sync')
+  syncExternalPosts(
+    @Param('workspaceId') workspaceId: string,
+    @Param('accountId') accountId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    const user = requireUser(request);
+    return this.socialAccounts.triggerSyncExternalPosts(
+      workspaceId,
+      accountId,
+      user.id,
+      this.auditContext(request),
+    );
+  }
+
   private auditContext(request: FastifyRequest) {
     return {
       actorIp: request.ip,

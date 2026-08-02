@@ -82,6 +82,7 @@ describe('InstagramAdapter', () => {
         const body = new URLSearchParams(String(init.body));
         expect(body.get('video_url')).toBe('https://cdn.test/video.mp4');
         expect(body.get('media_type')).toBe('REELS');
+        expect(body.get('cover_url')).toBe('https://cdn.test/cover.jpg');
         return jsonResponse({ id: 'container-1' });
       }
       if (url.pathname.endsWith('/container-1') && init?.method !== 'POST') {
@@ -116,6 +117,12 @@ describe('InstagramAdapter', () => {
             sizeBytes: 100,
           },
         ],
+        thumbnail: {
+          type: 'IMAGE',
+          url: 'https://cdn.test/cover.jpg',
+          mimeType: 'image/jpeg',
+          sizeBytes: 100,
+        },
       },
     );
 
@@ -164,8 +171,13 @@ describe('InstagramAdapter', () => {
     expect(page.items[0]).toMatchObject({
       externalPostId: 'media-1',
       caption: 'hello',
-      mediaType: 'IMAGE',
-      externalUrl: 'https://instagram.com/p/media-1',
+      permalink: 'https://instagram.com/p/media-1',
+      media: [
+        expect.objectContaining({
+          type: 'IMAGE',
+          url: 'https://cdn.test/image.jpg',
+        }),
+      ],
     });
     expect(page.nextCursor).toBe('next');
     expect(page.hasMore).toBe(true);

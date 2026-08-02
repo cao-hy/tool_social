@@ -10,11 +10,11 @@ import { countVerified, findStaleCapabilities, isSupported } from '../core/capab
 
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
   const verifiedCounts = {
-    FACEBOOK: 11,
-    INSTAGRAM: 16,
-    PINTEREST: 14,
-    TIKTOK: 10,
-    YOUTUBE: 11,
+    FACEBOOK: 12,
+    INSTAGRAM: 17,
+    PINTEREST: 15,
+    TIKTOK: 11,
+    YOUTUBE: 12,
   } as const;
 
   it('có bảng cho cả 5 nền tảng', () => {
@@ -53,13 +53,15 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
               key === 'postCommentCount' ||
               key === 'postShares' ||
               key === 'postReach' ||
-              key === 'postImpressions')) ||
+              key === 'postImpressions' ||
+              key === 'getPosts')) ||
             (platform === 'PINTEREST' &&
               (key === 'publishImage' ||
                 key === 'publishVideo' ||
                 key === 'publishWithLink' ||
                 key === 'editPublishedPost' ||
                 key === 'deletePublishedPost' ||
+                key === 'getPosts' ||
                 key === 'postViews' ||
                 key === 'postLikes' ||
                 key === 'postCommentCount' ||
@@ -80,7 +82,8 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'postShares' ||
                 key === 'postReach' ||
                 key === 'postImpressions' ||
-                key === 'postSaves')) ||
+                key === 'postSaves' ||
+                key === 'getPosts')) ||
             (platform === 'YOUTUBE' &&
               (key === 'publishVideo' ||
                 key === 'postTitle' ||
@@ -92,7 +95,8 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'hideComment' ||
                 key === 'deleteComment' ||
                 key === 'editPublishedPost' ||
-                key === 'deletePublishedPost')) ||
+                key === 'deletePublishedPost' ||
+                key === 'getPosts')) ||
             (platform === 'TIKTOK' &&
               (key === 'publishImage' ||
                 key === 'publishVideo' ||
@@ -101,7 +105,8 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'postCommentCount' ||
                 key === 'postShares' ||
                 key === 'refreshToken' ||
-                key === 'revokeToken')),
+                key === 'revokeToken' ||
+                key === 'getPosts')),
         );
       }
     }
@@ -122,15 +127,15 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       expect(progress[platform].verified).toBe(verifiedCounts[platform]);
       expect(progress[platform].percent).toBe(
         platform === 'FACEBOOK'
-          ? 33
+          ? 35
           : platform === 'INSTAGRAM'
-            ? 48
+            ? 50
             : platform === 'PINTEREST'
-              ? 42
+              ? 44
               : platform === 'YOUTUBE'
-                ? 33
+                ? 35
                 : platform === 'TIKTOK'
-                  ? 30
+                  ? 32
                   : 0,
       );
     }

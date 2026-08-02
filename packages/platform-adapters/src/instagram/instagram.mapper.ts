@@ -1,5 +1,10 @@
-import type { SocialAccountProfile, TokenSet } from '../core/types';
-import type { InstagramPage, InstagramProfile, InstagramTokenResponse } from './instagram.schemas';
+import type { ExternalPost, SocialAccountProfile, TokenSet } from '../core/types';
+import type {
+  InstagramMedia,
+  InstagramPage,
+  InstagramProfile,
+  InstagramTokenResponse,
+} from './instagram.schemas';
 
 export function selectInstagramAccount(pages: InstagramPage[]): {
   page: InstagramPage;
@@ -41,5 +46,29 @@ export function mapInstagramProfile(profile: InstagramProfile): SocialAccountPro
     avatarUrl: profile.profile_picture_url,
     profileUrl: `https://www.instagram.com/${profile.username}`,
     followersCount: profile.followers_count,
+  };
+}
+
+export function mapInstagramMedia(media: InstagramMedia): ExternalPost {
+  return {
+    externalPostId: media.id,
+    title: undefined,
+    caption: media.caption,
+    permalink: media.permalink,
+    publishedAt: media.timestamp ? new Date(media.timestamp) : new Date(),
+    updatedAt: undefined,
+    media: [
+      {
+        url: media.media_url ?? '',
+        thumbnailUrl: media.thumbnail_url ?? media.media_url ?? '',
+        type: media.media_type === 'VIDEO' ? 'VIDEO' : 'IMAGE',
+      },
+    ],
+    metrics: {
+      likes: media.like_count ?? null,
+      comments: media.comments_count ?? null,
+      shares: null,
+    },
+    raw: media,
   };
 }

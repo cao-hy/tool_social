@@ -131,6 +131,15 @@ CAPABILITY_MATRIX.FACEBOOK.capabilities.postImpressions = {
   verifiedBy: 'Codex + Meta Graph API docs',
 };
 
+CAPABILITY_MATRIX.FACEBOOK.capabilities.getPosts = {
+  state: 'CONDITIONAL',
+  condition:
+    'Lấy danh sách bài viết trên Page bằng /{page_id}/published_posts; token cần quyền pages_read_engagement.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/page/published_posts/',
+  verifiedAt: '2026-08-02',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
 CAPABILITY_MATRIX.INSTAGRAM.capabilities.publishImage = {
   state: 'CONDITIONAL',
   condition:
@@ -176,6 +185,15 @@ CAPABILITY_MATRIX.INSTAGRAM.capabilities.deletePublishedPost = {
     'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media',
   verifiedAt: '2026-08-02',
   verifiedBy: 'Codex + Meta Instagram Media docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.getPosts = {
+  state: 'CONDITIONAL',
+  condition:
+    'Lấy danh sách media của tài khoản Business/Creator bằng /{ig_account_id}/media; token cần quyền instagram_manage_insights hoặc instagram_basic.',
+  source: 'https://developers.facebook.com/docs/instagram-api/reference/ig-user/media',
+  verifiedAt: '2026-08-02',
+  verifiedBy: 'Codex + Meta Instagram API docs',
 };
 
 CAPABILITY_MATRIX.INSTAGRAM.capabilities.readComments = {
@@ -326,6 +344,15 @@ CAPABILITY_MATRIX.PINTEREST.capabilities.deletePublishedPost = {
     'Xóa Pin thuộc operation user_account hoặc group board được chia sẻ bằng DELETE /v5/pins/{pin_id}; token cần pins:write và quyền phù hợp trên board.',
   source: 'https://developer.pinterest.com/docs/api/v5/pins-delete/',
   verifiedAt: '2026-07-31',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
+CAPABILITY_MATRIX.PINTEREST.capabilities.getPosts = {
+  state: 'CONDITIONAL',
+  condition:
+    'Lấy danh sách Pin bằng GET /v5/pins hoặc Pin trên board bằng GET /v5/boards/{board_id}/pins; token cần pins:read và quyền board phù hợp.',
+  source: 'https://developer.pinterest.com/docs/api/v5/pins-list/',
+  verifiedAt: '2026-08-02',
   verifiedBy: 'Codex + Pinterest API v5 docs',
 };
 
@@ -481,6 +508,14 @@ CAPABILITY_MATRIX.YOUTUBE.capabilities.deleteComment = {
   verifiedBy: 'Codex + YouTube Data API docs',
 };
 
+CAPABILITY_MATRIX.YOUTUBE.capabilities.getPosts = {
+  state: 'CONDITIONAL',
+  condition: 'Lấy video trong playlist uploads của channel.',
+  source: 'https://developers.google.com/youtube/v3/docs/playlistItems/list',
+  verifiedAt: '2026-08-02',
+  verifiedBy: 'Codex + YouTube Data API docs',
+};
+
 CAPABILITY_MATRIX.YOUTUBE.capabilities.editPublishedPost = {
   state: 'CONDITIONAL',
   condition:
@@ -547,6 +582,14 @@ CAPABILITY_MATRIX.TIKTOK.capabilities.postShares = {
   source: 'https://developers.tiktok.com/doc/tiktok-api-v2-video-query/',
   verifiedAt: '2026-07-30',
   verifiedBy: 'Codex + TikTok Display API docs',
+};
+
+CAPABILITY_MATRIX.TIKTOK.capabilities.getPosts = {
+  state: 'SUPPORTED',
+  condition: 'Lấy video sử dụng endpoint /v2/video/list/.',
+  source: 'https://developers.tiktok.com/doc/tiktok-api-v2-video-list/',
+  verifiedAt: '2026-08-02',
+  verifiedBy: 'Codex',
 };
 
 CAPABILITY_MATRIX.TIKTOK.capabilities.refreshToken = {

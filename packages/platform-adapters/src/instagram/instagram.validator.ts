@@ -6,6 +6,13 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
 
   const hasImage = input.media.some((m) => m.type === 'IMAGE');
   const hasVideo = input.media.some((m) => m.type === 'VIDEO');
+  const requestedMediaType =
+    typeof input.options?.mediaType === 'string' ? input.options.mediaType : undefined;
+  const usesReelsCover =
+    Boolean(input.thumbnail) &&
+    input.media.length === 1 &&
+    input.media[0]?.type === 'VIDEO' &&
+    (requestedMediaType === undefined || requestedMediaType === 'REELS');
 
   // Instagram bắt buộc phải có ít nhất 1 ảnh hoặc 1 video
   if (!hasImage && !hasVideo) {
@@ -50,6 +57,37 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
       });
     }
   });
+
+  if (usesReelsCover && input.thumbnail) {
+    if (input.thumbnail.type !== 'IMAGE') {
+      issues.push({
+        field: 'thumbnail',
+        message: 'Instagram cover phải là ảnh.',
+      });
+    }
+
+    if (!/^https:\/\//.test(input.thumbnail.url)) {
+      issues.push({
+        field: 'thumbnail.url',
+        message: 'Instagram Reels cover cần URL ảnh public HTTPS để Meta tải được.',
+      });
+    } else {
+      const host = safeHostname(input.thumbnail.url);
+      if (
+        host === 'localhost' ||
+        host === 'minio' ||
+        host === '127.0.0.1' ||
+        host?.startsWith('10.') ||
+        host?.startsWith('172.') ||
+        host?.startsWith('192.168.')
+      ) {
+        issues.push({
+          field: 'thumbnail.url',
+          message: 'Instagram Reels cover cần URL ảnh public ngoài internet.',
+        });
+      }
+    }
+  }
 
   // Caption giới hạn 2200 ký tự
   const fullCaption = [input.caption, input.hashtags?.map((t) => `#${t}`).join(' ')]

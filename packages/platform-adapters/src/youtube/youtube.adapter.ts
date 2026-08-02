@@ -10,20 +10,22 @@ import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
   AuthUrlInput,
+  ExternalPostPage,
   PlatformComment,
-  PlatformPostData,
   PostMetrics,
   EditPostInput,
   PublishPostInput,
   PublishResult,
   SocialAccountProfile,
   SyncCommentsParams,
+  SyncPostsParams,
   TokenSet,
 } from '../core/types';
 import {
   mapYouTubeChannelProfile,
   mapYouTubeCommentThread,
   mapYouTubeToken,
+  mapYouTubePlaylistItem,
 } from './youtube.mapper';
 import { YouTubeClient, type YouTubeClientConfig } from './youtube.client';
 import { validateYouTubePost } from './youtube.validator';
@@ -148,8 +150,23 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
     };
   }
 
-  async getPosts(): Promise<Paginated<PlatformPostData>> {
-    throw capabilityUnsupported('YOUTUBE', 'getPosts');
+  async getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage> {
+    const channel = await this.client.getMyChannel(ctx.accessToken);
+    const uploadsPlaylistId = channel.contentDetails?.relatedPlaylists?.uploads;
+    if (!uploadsPlaylistId) {
+      return { items: [], hasMore: false };
+    }
+
+    const response = await this.client.getPlaylistItems(ctx.accessToken, uploadsPlaylistId, {
+      pageToken: params.cursor,
+      maxResults: params.limit,
+    });
+
+    return {
+      items: response.items.map(mapYouTubePlaylistItem),
+      nextCursor: response.nextPageToken ?? undefined,
+      hasMore: Boolean(response.nextPageToken),
+    };
   }
 
   async editPost(ctx: AdapterContext, externalPostId: string, input: EditPostInput): Promise<void> {

@@ -164,6 +164,7 @@ export interface SyncPostsParams {
   cursor?: string;
   limit?: number;
   since?: Date;
+  until?: Date;
 }
 
 export interface SyncCommentsParams {
@@ -211,6 +212,34 @@ export interface NormalizedWebhookEvent {
   externalCommentId?: string;
   occurredAt: Date;
   raw: unknown;
+}
+
+export interface ExternalPostMedia {
+  url?: string;
+  thumbnailUrl?: string;
+  type: MediaType;
+  width?: number;
+  height?: number;
+  duration?: number;
+}
+
+export interface ExternalPost {
+  externalPostId: string;
+  title?: string;
+  caption?: string;
+  description?: string;
+  permalink?: string;
+  publishedAt: Date;
+  updatedAt?: Date;
+  media: ExternalPostMedia[];
+  metrics?: Record<string, number | null>;
+  raw: unknown;
+}
+
+export interface ExternalPostPage {
+  items: ExternalPost[];
+  nextCursor?: string;
+  hasMore: boolean;
 }
 
 export type { AccountMetrics, Paginated, Platform, PostMetrics };

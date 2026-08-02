@@ -1,9 +1,9 @@
 import { PLATFORM_LABELS } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
-import { ChevronDown, RefreshCw, Upload } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, RefreshCw, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Field, SelectInput, TextInput } from '@/components/form-controls';
-import { socialAccountsApi } from '@/lib/api-client';
+import { mediaApi, socialAccountsApi } from '@/lib/api-client';
 import { getErrorMessage } from '@/lib/errors';
 import {
   type CommonComposerContent,
@@ -12,6 +12,7 @@ import {
 } from '@/lib/platform-composer-options';
 import type {
   MediaAssetView,
+  MediaLibraryItem,
   PinterestBoardSectionView,
   PinterestBoardView,
   SocialAccountView,
@@ -30,6 +31,7 @@ interface PlatformComposerPanelsProps {
     hashtags?: string;
   };
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }
 
@@ -43,6 +45,7 @@ export function PlatformComposerPanels({
   workspaceId,
   common,
   onChange,
+  onSelectCoverMedia,
   onUploadCoverMedia,
 }: PlatformComposerPanelsProps) {
   const [expandedAccountIds, setExpandedAccountIds] = useState<string[]>([]);
@@ -310,12 +313,14 @@ export function PlatformComposerPanels({
                       tiktokCreatorInfo={creatorInfoByAccountId[account.id]}
                       tiktokCreatorInfoError={creatorErrors[account.id]}
                       tiktokCreatorInfoLoading={creatorLoadingIds.includes(account.id)}
+                      workspaceId={workspaceId}
                       onLoadPinterestSections={(boardId) =>
                         loadPinterestBoardSections(account.id, boardId)
                       }
                       onRefreshPinterestBoards={() => loadPinterestBoards(account.id)}
                       onRefreshTikTokCreatorInfo={() => loadTikTokCreatorInfo(account.id)}
                       onChange={onChange}
+                      onSelectCoverMedia={onSelectCoverMedia}
                       onUploadCoverMedia={onUploadCoverMedia}
                     />
                   ) : (
@@ -401,10 +406,12 @@ function PlatformFields({
   tiktokCreatorInfo,
   tiktokCreatorInfoError,
   tiktokCreatorInfoLoading,
+  workspaceId,
   onLoadPinterestSections,
   onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
   onChange,
+  onSelectCoverMedia,
   onUploadCoverMedia,
 }: {
   account: SocialAccountView;
@@ -422,10 +429,12 @@ function PlatformFields({
   tiktokCreatorInfo?: TikTokCreatorInfoView;
   tiktokCreatorInfoError?: string;
   tiktokCreatorInfoLoading?: boolean;
+  workspaceId?: string;
   onLoadPinterestSections: (boardId: string) => void;
   onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }) {
   const resolvedMedia = resolveMedia(draft, mediaAssets);
@@ -496,10 +505,12 @@ function PlatformFields({
         tiktokCreatorInfo={tiktokCreatorInfo}
         tiktokCreatorInfoError={tiktokCreatorInfoError}
         tiktokCreatorInfoLoading={tiktokCreatorInfoLoading ?? false}
+        workspaceId={workspaceId}
         onLoadPinterestSections={onLoadPinterestSections}
         onRefreshPinterestBoards={onRefreshPinterestBoards}
         onRefreshTikTokCreatorInfo={onRefreshTikTokCreatorInfo}
         onChange={onChange}
+        onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
       />
       <MediaSelector
@@ -528,10 +539,12 @@ function PlatformOptions({
   tiktokCreatorInfo,
   tiktokCreatorInfoError,
   tiktokCreatorInfoLoading,
+  workspaceId,
   onLoadPinterestSections,
   onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
   onChange,
+  onSelectCoverMedia,
   onUploadCoverMedia,
 }: {
   account: SocialAccountView;
@@ -548,30 +561,27 @@ function PlatformOptions({
   tiktokCreatorInfo?: TikTokCreatorInfoView;
   tiktokCreatorInfoError?: string;
   tiktokCreatorInfoLoading: boolean;
+  workspaceId?: string;
   onLoadPinterestSections: (boardId: string) => void;
   onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }) {
   if (account.platform === 'FACEBOOK') {
     return (
-      <Field label="Kiểu bài Facebook">
-        <SelectInput
-          disabled={disabled}
-          value={draft.facebookPostType}
-          onChange={(event) =>
-            onChange(account.id, {
-              facebookPostType: event.target.value as PlatformOverrideDraft['facebookPostType'],
-            })
-          }
-        >
-          <option value="AUTO">Tự chọn theo media/link</option>
-          <option value="TEXT_LINK">Text hoặc link</option>
-          <option value="PHOTO">Ảnh</option>
-          <option value="VIDEO">Video</option>
-        </SelectInput>
-      </Field>
+      <FacebookOptionsPanel
+        account={account}
+        availableMediaAssets={availableMediaAssets}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={mediaAssets}
+        workspaceId={workspaceId}
+        onChange={onChange}
+        onSelectCoverMedia={onSelectCoverMedia}
+        onUploadCoverMedia={onUploadCoverMedia}
+      />
     );
   }
 
@@ -606,6 +616,22 @@ function PlatformOptions({
           />
           Share Reels lên feed
         </label>
+        {draft.instagramPlacement === 'REELS' ? (
+          <div className="md:col-span-2">
+            <CoverThumbnailSelector
+              account={account}
+              availableMediaAssets={availableMediaAssets}
+              disabled={disabled}
+              draft={draft}
+              mediaAssets={mediaAssets}
+              platformLabel="Instagram Reels cover"
+              workspaceId={workspaceId}
+              onChange={onChange}
+              onSelectCoverMedia={onSelectCoverMedia}
+              onUploadCoverMedia={onUploadCoverMedia}
+            />
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -624,9 +650,11 @@ function PlatformOptions({
         sections={pinterestSections}
         sectionsError={pinterestSectionsError}
         sectionsLoading={pinterestSectionsLoading}
+        workspaceId={workspaceId}
         onChange={onChange}
         onLoadSections={onLoadPinterestSections}
         onRefreshBoards={onRefreshPinterestBoards}
+        onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
       />
     );
@@ -640,7 +668,9 @@ function PlatformOptions({
         disabled={disabled}
         draft={draft}
         mediaAssets={mediaAssets}
+        workspaceId={workspaceId}
         onChange={onChange}
+        onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
       />
     );
@@ -665,6 +695,67 @@ function PlatformOptions({
   return null;
 }
 
+function FacebookOptionsPanel({
+  account,
+  availableMediaAssets,
+  disabled,
+  draft,
+  mediaAssets,
+  workspaceId,
+  onChange,
+  onSelectCoverMedia,
+  onUploadCoverMedia,
+}: {
+  account: SocialAccountView;
+  availableMediaAssets: MediaAssetView[];
+  disabled: boolean;
+  draft: PlatformOverrideDraft;
+  mediaAssets: MediaAssetView[];
+  workspaceId?: string;
+  onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onSelectCoverMedia?: (asset: MediaAssetView) => void;
+  onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
+}) {
+  return (
+    <div className="space-y-3 rounded-md border border-blue-100 bg-blue-50/50 p-3">
+      <Field label="Kiểu bài Facebook">
+        <SelectInput
+          disabled={disabled}
+          value={draft.facebookPostType}
+          onChange={(event) =>
+            onChange(account.id, {
+              facebookPostType: event.target.value as PlatformOverrideDraft['facebookPostType'],
+            })
+          }
+        >
+          <option value="AUTO">Tự chọn theo media/link</option>
+          <option value="TEXT_LINK">Text hoặc link</option>
+          <option value="PHOTO">Ảnh</option>
+          <option value="VIDEO">Video</option>
+        </SelectInput>
+        <p className="mt-1 text-xs text-slate-500">
+          Thumbnail riêng chỉ áp dụng cho Facebook Page video. Ảnh/link/text sẽ dùng preview mặc
+          định của Facebook. Nếu video đã có thumbnail nội bộ, hệ thống sẽ tự gửi thumbnail đó khi
+          publish.
+        </p>
+      </Field>
+
+      <CoverThumbnailSelector
+        account={account}
+        availableMediaAssets={availableMediaAssets}
+        disabled={disabled}
+        draft={draft}
+        mediaAssets={mediaAssets}
+        platformLabel="Facebook video thumbnail"
+        workspaceId={workspaceId}
+        onChange={onChange}
+        onSelectCoverMedia={onSelectCoverMedia}
+        onUploadCoverMedia={onUploadCoverMedia}
+      />
+    </div>
+  );
+}
+
 function PinterestOptionsPanel({
   account,
   availableMediaAssets,
@@ -677,7 +768,9 @@ function PinterestOptionsPanel({
   sections,
   sectionsError,
   sectionsLoading,
+  workspaceId,
   onChange,
+  onSelectCoverMedia,
   onLoadSections,
   onRefreshBoards,
   onUploadCoverMedia,
@@ -693,7 +786,9 @@ function PinterestOptionsPanel({
   sections: PinterestBoardSectionView[];
   sectionsError?: string;
   sectionsLoading: boolean;
+  workspaceId?: string;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onLoadSections: (boardId: string) => void;
   onRefreshBoards: () => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
@@ -800,7 +895,9 @@ function PinterestOptionsPanel({
         draft={draft}
         mediaAssets={mediaAssets}
         platformLabel="Pinterest video cover"
+        workspaceId={workspaceId}
         onChange={onChange}
+        onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
       />
 
@@ -823,7 +920,9 @@ function YouTubeOptionsPanel({
   disabled,
   draft,
   mediaAssets,
+  workspaceId,
   onChange,
+  onSelectCoverMedia,
   onUploadCoverMedia,
 }: {
   account: SocialAccountView;
@@ -831,7 +930,9 @@ function YouTubeOptionsPanel({
   disabled: boolean;
   draft: PlatformOverrideDraft;
   mediaAssets: MediaAssetView[];
+  workspaceId?: string;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }) {
   return (
@@ -898,7 +999,9 @@ function YouTubeOptionsPanel({
         draft={draft}
         mediaAssets={mediaAssets}
         platformLabel="YouTube thumbnail"
+        workspaceId={workspaceId}
         onChange={onChange}
+        onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
       />
     </div>
@@ -912,7 +1015,9 @@ function CoverThumbnailSelector({
   draft,
   mediaAssets,
   platformLabel,
+  workspaceId,
   onChange,
+  onSelectCoverMedia,
   onUploadCoverMedia,
 }: {
   account: SocialAccountView;
@@ -921,13 +1026,22 @@ function CoverThumbnailSelector({
   draft: PlatformOverrideDraft;
   mediaAssets: MediaAssetView[];
   platformLabel: string;
+  workspaceId?: string;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
+  onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
 }) {
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [serverPickerOpen, setServerPickerOpen] = useState(false);
+  const [serverImages, setServerImages] = useState<MediaLibraryItem[]>([]);
+  const [serverCursorStack, setServerCursorStack] = useState<string[]>([]);
+  const [serverNextCursor, setServerNextCursor] = useState<string | null>(null);
+  const [serverQuery, setServerQuery] = useState('');
+  const [serverLoading, setServerLoading] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
   const videos = mediaAssets.filter((asset) => asset.type === 'VIDEO');
-  const imageOptions = availableMediaAssets.filter(
+  const imageOptions = uniqueMediaAssets([...availableMediaAssets, ...serverImages]).filter(
     (asset) => asset.type === 'IMAGE' && asset.status === 'READY',
   );
   const generatedReady = videos.some((asset) => asset.thumbnailUrl);
@@ -936,6 +1050,63 @@ function CoverThumbnailSelector({
   if (!shouldShow) return null;
 
   const selectedImage = imageOptions.find((asset) => asset.id === draft.thumbnailMediaAssetId);
+
+  async function loadServerImages(cursor?: string) {
+    if (!workspaceId) return;
+    setServerLoading(true);
+    setServerError(null);
+    try {
+      const response = await mediaApi.list(workspaceId, {
+        q: serverQuery.trim() || undefined,
+        type: 'IMAGE',
+        status: 'READY',
+        cursor,
+        limit: 12,
+      });
+      setServerImages(response.items);
+      setServerNextCursor(response.nextCursor);
+    } catch (error) {
+      setServerError(getErrorMessage(error));
+    } finally {
+      setServerLoading(false);
+    }
+  }
+
+  function openServerPicker() {
+    setServerPickerOpen((open) => {
+      const next = !open;
+      if (next && serverImages.length === 0 && !serverLoading) {
+        void loadServerImages();
+      }
+      return next;
+    });
+  }
+
+  function refreshServerImages() {
+    setServerCursorStack([]);
+    void loadServerImages();
+  }
+
+  function previousServerImagesPage() {
+    const previousStack = serverCursorStack.slice(0, -1);
+    setServerCursorStack(previousStack);
+    void loadServerImages(previousStack.at(-1));
+  }
+
+  function nextServerImagesPage() {
+    if (!serverNextCursor) return;
+    setServerCursorStack((current) => [...current, serverNextCursor]);
+    void loadServerImages(serverNextCursor);
+  }
+
+  function selectServerImage(asset: MediaAssetView) {
+    onSelectCoverMedia?.(asset);
+    onChange(account.id, {
+      customized: true,
+      thumbnailMode: 'MEDIA_ASSET',
+      thumbnailMediaAssetId: asset.id,
+    });
+  }
 
   return (
     <div className="rounded-md border border-slate-200 bg-white p-3">
@@ -964,6 +1135,7 @@ function CoverThumbnailSelector({
             onChange={(event) => {
               const thumbnailMode = event.target.value as PlatformOverrideDraft['thumbnailMode'];
               onChange(account.id, {
+                customized: true,
                 thumbnailMode,
                 thumbnailMediaAssetId:
                   thumbnailMode === 'MEDIA_ASSET' ? draft.thumbnailMediaAssetId : '',
@@ -990,7 +1162,10 @@ function CoverThumbnailSelector({
             disabled={disabled || draft.thumbnailMode !== 'MEDIA_ASSET'}
             value={draft.thumbnailMediaAssetId}
             onChange={(event) =>
-              onChange(account.id, { thumbnailMediaAssetId: event.target.value })
+              onChange(account.id, {
+                customized: true,
+                thumbnailMediaAssetId: event.target.value,
+              })
             }
           >
             <option value="">
@@ -1027,7 +1202,9 @@ function CoverThumbnailSelector({
                 setUploadError(null);
                 try {
                   const asset = await onUploadCoverMedia(file);
+                  onSelectCoverMedia?.(asset);
                   onChange(account.id, {
+                    customized: true,
                     thumbnailMode: 'MEDIA_ASSET',
                     thumbnailMediaAssetId: asset.id,
                   });
@@ -1042,6 +1219,113 @@ function CoverThumbnailSelector({
           <span className="text-xs text-slate-500">
             JPG/PNG/WebP. File này chỉ làm thumbnail/cover.
           </span>
+        </div>
+      ) : null}
+
+      {workspaceId ? (
+        <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Ảnh cover trên server</p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Chọn lại ảnh READY đã upload trong workspace này.
+              </p>
+            </div>
+            <button
+              className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
+              disabled={disabled}
+              type="button"
+              onClick={openServerPicker}
+            >
+              {serverPickerOpen ? 'Ẩn thư viện' : 'Chọn từ server'}
+            </button>
+          </div>
+
+          {serverPickerOpen ? (
+            <div className="mt-3 space-y-3">
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+                <TextInput
+                  disabled={serverLoading}
+                  placeholder="Tìm ảnh cover..."
+                  value={serverQuery}
+                  onChange={(event) => setServerQuery(event.target.value)}
+                />
+                <button
+                  className="h-11 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 disabled:opacity-60"
+                  disabled={serverLoading}
+                  type="button"
+                  onClick={refreshServerImages}
+                >
+                  {serverLoading ? 'Đang tải...' : 'Tìm'}
+                </button>
+              </div>
+
+              {serverError ? (
+                <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {serverError}
+                </p>
+              ) : null}
+
+              {serverImages.length > 0 ? (
+                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                  {serverImages.map((asset) => {
+                    const selected = draft.thumbnailMediaAssetId === asset.id;
+                    return (
+                      <button
+                        key={asset.id}
+                        className={`min-w-0 rounded-md border bg-white p-2 text-left transition hover:-translate-y-px hover:shadow-sm ${
+                          selected
+                            ? 'border-brand-400 ring-2 ring-brand-100'
+                            : 'border-slate-200 hover:border-brand-200'
+                        }`}
+                        disabled={disabled}
+                        type="button"
+                        onClick={() => selectServerImage(asset)}
+                      >
+                        <MediaThumb asset={asset} />
+                        <span className="mt-2 block truncate text-xs font-semibold text-slate-900">
+                          {asset.originalFileName ?? asset.id}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] text-slate-500">
+                          {formatBytes(asset.sizeBytes)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="rounded-md border border-slate-200 bg-white px-3 py-5 text-center text-sm text-slate-500">
+                  {serverLoading ? 'Đang tải ảnh cover...' : 'Chưa có ảnh READY trên server.'}
+                </p>
+              )}
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-semibold text-slate-500">
+                  Trang {serverCursorStack.length + 1}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                    disabled={serverLoading || serverCursorStack.length === 0}
+                    type="button"
+                    onClick={previousServerImagesPage}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Trước
+                  </button>
+                  <button
+                    className="inline-flex h-9 items-center gap-1 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                    disabled={serverLoading || !serverNextCursor}
+                    type="button"
+                    onClick={nextServerImagesPage}
+                  >
+                    Sau
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

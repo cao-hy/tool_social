@@ -44,6 +44,15 @@ export const youtubeChannelSchema = z.object({
       hiddenSubscriberCount: z.boolean().optional(),
     })
     .optional(),
+  contentDetails: z
+    .object({
+      relatedPlaylists: z
+        .object({
+          uploads: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export type YouTubeChannel = z.infer<typeof youtubeChannelSchema>;
@@ -99,6 +108,15 @@ export const youtubeVideoResponseSchema = z.object({
       commentCount: optionalNullableNonNegativeInt,
     })
     .optional(),
+  contentDetails: z
+    .object({
+      relatedPlaylists: z
+        .object({
+          uploads: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export type YouTubeVideoResponse = z.infer<typeof youtubeVideoResponseSchema>;
@@ -108,6 +126,38 @@ export const youtubeVideosResponseSchema = z.object({
 });
 
 export type YouTubeVideosResponse = z.infer<typeof youtubeVideosResponseSchema>;
+
+export const youtubePlaylistItemSchema = z.object({
+  id: z.string().min(1),
+  snippet: z
+    .object({
+      publishedAt: z.string().optional(),
+      title: optionalNullableString,
+      description: optionalNullableString,
+      thumbnails: z
+        .record(
+          z.object({
+            url: optionalNullableString,
+            width: z.number().optional(),
+            height: z.number().optional(),
+          }),
+        )
+        .optional(),
+      resourceId: z.object({
+        videoId: z.string().min(1),
+      }),
+    })
+    .optional(),
+});
+
+export type YouTubePlaylistItem = z.infer<typeof youtubePlaylistItemSchema>;
+
+export const youtubePlaylistItemsResponseSchema = z.object({
+  items: z.array(youtubePlaylistItemSchema),
+  nextPageToken: optionalNullableString,
+});
+
+export type YouTubePlaylistItemsResponse = z.infer<typeof youtubePlaylistItemsResponseSchema>;
 
 const youtubeAuthorChannelIdSchema = z
   .object({

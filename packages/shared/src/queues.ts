@@ -15,6 +15,7 @@ export const QUEUE_NAMES = [
   'retry-failed-post',
   'generate-thumbnail',
   'cleanup-unused-media',
+  'sync-external-posts',
 ] as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[number];
@@ -39,6 +40,7 @@ export const QUEUE_SETTINGS: Record<QueueName, QueueSettings> = {
   'retry-failed-post': { concurrency: 3, attempts: 1, backoffDelayMs: 0 },
   'generate-thumbnail': { concurrency: 1, attempts: 3, backoffDelayMs: 5_000 },
   'cleanup-unused-media': { concurrency: 1, attempts: 1, backoffDelayMs: 0 },
+  'sync-external-posts': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
 };
 
 /**
@@ -65,6 +67,13 @@ export interface QueuePayloads {
   'retry-failed-post': { platformPostId: string; workspaceId: string; requestedByUserId: string };
   'generate-thumbnail': { mediaAssetId: string; workspaceId: string };
   'cleanup-unused-media': { olderThanDays: number };
+  'sync-external-posts': {
+    workspaceId: string;
+    socialAccountId: string;
+    requestedByUserId: string;
+    cutoffDays: number;
+    resumeFromJobId?: string;
+  };
 }
 
 export type QueuePayload<Q extends QueueName> = QueuePayloads[Q];
@@ -109,6 +118,10 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
       return jobId(queue, (payload as QueuePayloads['generate-thumbnail']).mediaAssetId);
     case 'cleanup-unused-media':
       return jobId(queue, String((payload as QueuePayloads['cleanup-unused-media']).olderThanDays));
+    case 'sync-external-posts': {
+      const p = payload as QueuePayloads['sync-external-posts'];
+      return jobId(queue, p.socialAccountId, p.resumeFromJobId ?? 'start');
+    }
     default: {
       const exhaustive: never = queue;
       throw new Error(`Queue chưa có quy tắc idempotency: ${String(exhaustive)}`);

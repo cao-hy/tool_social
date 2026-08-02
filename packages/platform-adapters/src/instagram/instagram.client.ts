@@ -120,6 +120,7 @@ export class InstagramGraphClient {
     mediaType?: 'IMAGE' | 'VIDEO' | 'CAROUSEL' | 'REELS' | 'STORIES';
     children?: string[];
     shareToFeed?: boolean;
+    coverUrl?: string;
   }): Promise<string> {
     const body: Record<string, string> = {
       access_token: input.accessToken,
@@ -131,6 +132,7 @@ export class InstagramGraphClient {
       body.media_type = 'VIDEO';
     }
     if (input.caption) body.caption = input.caption;
+    if (input.coverUrl) body.cover_url = input.coverUrl;
     if (input.isCarouselItem) body.is_carousel_item = 'true';
     if (input.mediaType === 'REELS' || input.mediaType === 'STORIES') {
       body.media_type = input.mediaType;
@@ -186,14 +188,17 @@ export class InstagramGraphClient {
     accessToken: string;
     cursor?: string;
     limit?: number;
+    since?: Date;
   }): Promise<InstagramMediaPage> {
     return this.get(
       `/${input.igAccountId}/media`,
       {
-        fields: 'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp',
+        fields:
+          'id,caption,media_type,media_url,permalink,thumbnail_url,timestamp,like_count,comments_count',
         access_token: input.accessToken,
         ...(input.cursor ? { after: input.cursor } : {}),
         ...(input.limit ? { limit: String(input.limit) } : {}),
+        ...(input.since ? { since: String(Math.floor(input.since.getTime() / 1000)) } : {}),
       },
       instagramMediaPageSchema,
     );

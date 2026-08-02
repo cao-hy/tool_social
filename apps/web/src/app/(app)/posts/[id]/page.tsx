@@ -58,6 +58,7 @@ export default function PostDetailPage() {
     Partial<Record<Platform, PlatformCapabilitiesView>>
   >({});
   const [loading, setLoading] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
@@ -82,6 +83,15 @@ export default function PostDetailPage() {
   useEffect(() => {
     void loadPost();
   }, [workspace, params.id]);
+
+  useEffect(() => {
+    if (!post) return;
+    const query = new URLSearchParams(window.location.search);
+    if (!query.has('created')) return;
+    toast.success('Đã lưu draft. Đang mở chi tiết target để kiểm tra cấu hình.');
+    setExpandedPlatformPostId(post.platformPosts[0]?.id ?? null);
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.hash}`);
+  }, [post, toast]);
 
   useEffect(() => {
     if (!workspace) return;
@@ -109,6 +119,21 @@ export default function PostDetailPage() {
       toast.error(getErrorMessage(retryError));
     } finally {
       setRetrying(false);
+    }
+  }
+
+  async function publishNow() {
+    if (!workspace || !post) return;
+    setPublishing(true);
+    setError(null);
+    try {
+      const updated = await postsApi.publish(workspace.id, post.id);
+      setPost(updated);
+      toast.info('Đã đưa draft vào queue publish.');
+    } catch (publishError) {
+      toast.error(getErrorMessage(publishError));
+    } finally {
+      setPublishing(false);
     }
   }
 
@@ -206,6 +231,7 @@ export default function PostDetailPage() {
   const canUpdate = hasPermission(workspace.role, 'post:update');
   const hasFailedPlatformPost =
     post?.platformPosts.some((item) => item.status === 'FAILED') ?? false;
+  const canPublishStatus = post ? canPublishPostStatus(post.status) : false;
   const canDeleteStatus = post ? canDeletePostStatus(post.status) : false;
 
   return (
@@ -215,8 +241,13 @@ export default function PostDetailPage() {
           <Link className="text-sm font-medium text-brand-700 hover:text-brand-800" href="/posts">
             Quay lại Posts
           </Link>
-          <h1 className="mt-2 text-2xl font-semibold text-slate-950">
+          <h1 className="mt-2 text-2xl font-semibold text-slate-950 flex items-center gap-2">
             {post?.title ?? 'Chi tiết bài đăng'}
+            {post?.sourceType === 'EXTERNAL' ? (
+              <span className="inline-block rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
+                EXTERNAL
+              </span>
+            ) : null}
           </h1>
           {post ? (
             <p className="mt-1 text-sm text-slate-600">
@@ -233,6 +264,14 @@ export default function PostDetailPage() {
               <Edit3 className="h-4 w-4" />
             </IconLink>
           ) : null}
+          <PrimaryButton
+            busy={publishing}
+            disabled={!post || !canPublish || !canPublishStatus || post.platformPosts.length === 0}
+            onClick={() => void publishNow()}
+            type="button"
+          >
+            Publish ngay
+          </PrimaryButton>
           <IconButton
             disabled={!post || !canDelete || !canDeleteStatus || deleting}
             label="Xóa"
@@ -678,6 +717,30 @@ function hasPlatformOverride(platformPost: PlatformPostView): boolean {
   );
 }
 
+function platformPostOptions(platformPost: PlatformPostView): Record<string, unknown> | null {
+  const options = platformPost.options;
+  if (!options || typeof options !== 'object' || Array.isArray(options)) return null;
+  return options as Record<string, unknown>;
+}
+
+function platformThumbnailSummary(platformPost: PlatformPostView): string | null {
+  const mode = platformPostOptions(platformPost)?.thumbnailMode;
+  if (mode === 'MEDIA_ASSET') return 'Cover riêng đã chọn';
+  if (mode === 'GENERATED') return 'Thumbnail tự tạo từ video';
+  return null;
+}
+
+function platformThumbnailMediaAssetId(platformPost: PlatformPostView): string | null {
+  const mediaAssetId = platformPostOptions(platformPost)?.thumbnailMediaAssetId;
+  return typeof mediaAssetId === 'string' && mediaAssetId.trim() ? mediaAssetId : null;
+}
+
+function platformThumbnailMedia(platformPost: PlatformPostView): MediaAssetView | null {
+  const mediaAssetId = platformThumbnailMediaAssetId(platformPost);
+  if (!mediaAssetId) return null;
+  return platformPost.optionMedia?.find((asset) => asset.id === mediaAssetId) ?? null;
+}
+
 function StatusBadge({ status }: { status: string }) {
   const tone =
     status.includes('PUBLISHED') || status === 'COMPLETED'
@@ -729,6 +792,10 @@ function formatBytes(bytes: number): string {
 
 function canDeletePostStatus(status: ContentPostView['status']) {
   return DELETABLE_POST_STATUSES.includes(status as (typeof DELETABLE_POST_STATUSES)[number]);
+}
+
+function canPublishPostStatus(status: ContentPostView['status']) {
+  return ['DRAFT', 'SCHEDULED', 'FAILED', 'PARTIALLY_PUBLISHED'].includes(status);
 }
 
 function deleteResultFailures(result: DeletePostResult) {
@@ -978,6 +1045,7 @@ function MediaPreviewDialog({
 
 function PlatformPostNote({ platformPost }: { platformPost: PlatformPostView }) {
   const metrics = extractPlatformPostMetrics(platformPost);
+  const thumbnailSummary = platformThumbnailSummary(platformPost);
   if (platformPost.errorMessage) {
     return (
       <span className="text-red-700">
@@ -995,6 +1063,7 @@ function PlatformPostNote({ platformPost }: { platformPost: PlatformPostView }) 
       </span>
     );
   }
+  if (thumbnailSummary) return <span>{thumbnailSummary}</span>;
   if (hasPlatformOverride(platformPost)) return <span>Có override riêng</span>;
   if (platformPost.externalPostId) return <span>Đã có external ID</span>;
   return <span>-</span>;
@@ -1017,6 +1086,8 @@ function PlatformPostDetails({
   onCancel: () => void;
   onPreview: (asset: MediaAssetView) => void;
 }) {
+  const thumbnailMedia = platformThumbnailMedia(platformPost);
+
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
@@ -1039,6 +1110,40 @@ function PlatformPostDetails({
           </div>
           {hasPlatformOverride(platformPost) ? (
             <div className="mt-3 space-y-3 text-sm text-slate-700">
+              {platformThumbnailSummary(platformPost) ? (
+                <div className="flex items-center gap-3 rounded-md border border-brand-200 bg-brand-50 px-3 py-2 text-sm text-brand-800">
+                  {thumbnailMedia ? (
+                    <button
+                      className="h-14 w-20 shrink-0 overflow-hidden rounded border border-brand-100 bg-white"
+                      title="Xem cover"
+                      type="button"
+                      onClick={() => onPreview(thumbnailMedia)}
+                    >
+                      <FallbackImage
+                        alt={thumbnailMedia.originalFileName ?? 'thumbnail cover'}
+                        className="h-full w-full object-cover"
+                        sources={mediaPreviewSources(thumbnailMedia)}
+                      />
+                    </button>
+                  ) : null}
+                  <span className="min-w-0">
+                    <span className="block font-semibold">Thumbnail/Cover</span>
+                    <span className="block truncate">
+                      {thumbnailMedia?.originalFileName ?? platformThumbnailSummary(platformPost)}
+                    </span>
+                    {thumbnailMedia ? (
+                      <span className="block text-xs text-brand-700">
+                        {thumbnailMedia.mimeType ?? thumbnailMedia.type} ·{' '}
+                        {formatBytes(thumbnailMedia.sizeBytes ?? 0)}
+                      </span>
+                    ) : platformThumbnailMediaAssetId(platformPost) ? (
+                      <span className="block text-xs text-brand-700">
+                        {platformThumbnailMediaAssetId(platformPost)}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              ) : null}
               {platformPost.title ? <DetailText label="Title" value={platformPost.title} /> : null}
               {platformPost.caption ? (
                 <DetailText label="Caption" value={platformPost.caption} multiline />

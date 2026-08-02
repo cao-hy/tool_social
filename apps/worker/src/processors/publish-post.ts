@@ -1,6 +1,7 @@
 import {
   AdapterRegistry,
   DevelopmentFixtureAdapter,
+  createPlatformError,
   isPlatformError,
   type AdapterContext,
   type AdapterLogger,
@@ -25,6 +26,7 @@ import {
   deriveContentPostStatus,
   PLATFORM_LABELS,
   type MediaType,
+  type Platform,
   type PlatformPostStatus,
   type ProxyConfig,
 } from '@socialhub/shared';
@@ -242,6 +244,7 @@ async function publishPlatformPost(
       storage: input.storage,
       prisma: input.prisma,
       workspaceId: payload.workspaceId,
+      platform: platformPost.platform,
       options,
       sourceMedia,
     });
@@ -258,6 +261,12 @@ async function publishPlatformPost(
           sizeBytes: item.sizeBytes,
           byteLength: item.bytes?.byteLength ?? 0,
         })),
+        thumbnailSelection: {
+          mode:
+            options?.thumbnailMode ??
+            (platformPost.platform === 'FACEBOOK' && thumbnail ? 'GENERATED_FALLBACK' : undefined),
+          mediaAssetId: options?.thumbnailMediaAssetId,
+        },
         thumbnail: thumbnail
           ? {
               type: thumbnail.type,
@@ -570,16 +579,29 @@ async function thumbnailInputFromOptions(input: {
   storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
   prisma: PrismaClientInstance;
   workspaceId: string;
+  platform: Platform;
   options: Record<string, unknown> | undefined;
   sourceMedia: Array<{ mediaAsset: MediaAssetForInput }>;
 }): Promise<MediaInput | undefined> {
+  if (!platformSupportsExternalThumbnail(input.platform)) {
+    return undefined;
+  }
+
   const mode = input.options?.thumbnailMode;
-  if (mode === 'GENERATED') {
+  if (mode === 'GENERATED' || shouldUseGeneratedThumbnailByDefault(input.platform, mode)) {
     const video = input.sourceMedia.find(
       (item) => item.mediaAsset.type === 'VIDEO' && item.mediaAsset.thumbnailKey,
     )?.mediaAsset;
-    if (!video?.thumbnailKey) return undefined;
-    return generatedThumbnailInputFromKey(input.storage, video.thumbnailKey);
+    if (!video?.thumbnailKey) {
+      if (mode !== 'GENERATED') return undefined;
+      throw createPlatformError(
+        'VALIDATION',
+        input.platform,
+        'Đã chọn thumbnail tự tạo nhưng video chưa có thumbnail sẵn. Hãy chờ job tạo thumbnail xong rồi publish lại.',
+      );
+    }
+    const thumbnail = await generatedThumbnailInputFromKey(input.storage, video.thumbnailKey);
+    return normalizeThumbnailForPlatform(input.platform, thumbnail);
   }
 
   if (mode === 'MEDIA_ASSET') {
@@ -587,7 +609,13 @@ async function thumbnailInputFromOptions(input: {
       typeof input.options?.thumbnailMediaAssetId === 'string'
         ? input.options.thumbnailMediaAssetId
         : '';
-    if (!mediaAssetId) return undefined;
+    if (!mediaAssetId) {
+      throw createPlatformError(
+        'VALIDATION',
+        input.platform,
+        'Đã chọn dùng ảnh cover/thumbnail riêng nhưng chưa chọn media ảnh.',
+      );
+    }
 
     const localAsset = input.sourceMedia.find(
       (item) => item.mediaAsset.id === mediaAssetId,
@@ -605,12 +633,61 @@ async function thumbnailInputFromOptions(input: {
       }));
 
     if (!mediaAsset || mediaAsset.type !== 'IMAGE' || mediaAsset.status !== 'READY') {
-      return undefined;
+      throw createPlatformError(
+        'VALIDATION',
+        input.platform,
+        'Ảnh cover/thumbnail đã chọn không tồn tại, chưa xử lý xong hoặc không phải ảnh.',
+      );
     }
-    return mediaInputFromAsset(input.storage, mediaAsset);
+    const thumbnail = await mediaInputFromAsset(input.storage, mediaAsset);
+    return normalizeThumbnailForPlatform(input.platform, thumbnail);
   }
 
   return undefined;
+}
+
+function platformSupportsExternalThumbnail(platform: Platform): boolean {
+  return (
+    platform === 'FACEBOOK' ||
+    platform === 'INSTAGRAM' ||
+    platform === 'PINTEREST' ||
+    platform === 'YOUTUBE'
+  );
+}
+
+function shouldUseGeneratedThumbnailByDefault(platform: Platform, mode: unknown): boolean {
+  return platform === 'FACEBOOK' && (mode === undefined || mode === 'AUTO');
+}
+
+async function normalizeThumbnailForPlatform(
+  platform: Platform,
+  thumbnail: MediaInput,
+): Promise<MediaInput> {
+  if (platform !== 'FACEBOOK') return thumbnail;
+  if (!thumbnail.bytes || thumbnail.bytes.byteLength === 0) {
+    throw createPlatformError(
+      'VALIDATION',
+      platform,
+      'Thumbnail Facebook cần có dữ liệu ảnh để upload.',
+    );
+  }
+
+  const bytes = new Uint8Array(
+    await sharp(Buffer.from(thumbnail.bytes), { failOn: 'none' })
+      .rotate()
+      .flatten({ background: '#ffffff' })
+      .resize({ width: 1920, height: 1080, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 90, mozjpeg: true })
+      .toBuffer(),
+  );
+
+  return {
+    ...thumbnail,
+    url: thumbnail.url.replace(/\.[a-z0-9]+(?=($|\?))/i, '-facebook-thumbnail.jpg'),
+    bytes,
+    mimeType: 'image/jpeg',
+    sizeBytes: bytes.byteLength,
+  };
 }
 
 async function generatedThumbnailInputFromKey(

@@ -6,7 +6,6 @@ import type {
   CommentReplyResult,
   NormalizedWebhookEvent,
   PlatformComment,
-  PlatformPostData,
   PostMetrics,
   EditPostInput,
   PublishPostInput,
@@ -16,6 +15,7 @@ import type {
   SyncPostsParams,
   TokenSet,
   ValidationResult,
+  ExternalPostPage,
 } from './types';
 import type { PlatformCapabilityTable } from './capability-table';
 
@@ -69,7 +69,7 @@ export interface SocialPlatformAdapter {
 
   /* ------------------------------------------------------------------- Read */
 
-  getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<Paginated<PlatformPostData>>;
+  getPosts?(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage>;
   getPostMetrics(ctx: AdapterContext, externalPostId: string): Promise<PostMetrics>;
 
   /* --------------------------------------------------------------- Comments */

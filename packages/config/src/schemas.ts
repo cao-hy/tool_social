@@ -50,6 +50,11 @@ const observabilitySchema = z.object({
   SENTRY_DSN: z.string().url().optional(),
 });
 
+const syncSchema = z.object({
+  EXTERNAL_POST_SYNC_CUTOFF_DAYS: z.coerce.number().int().min(1).default(365),
+  EXTERNAL_POST_SYNC_MANUAL_COOLDOWN_HOURS: z.coerce.number().int().min(0).default(24),
+});
+
 /**
  * OAuth credential của từng nền tảng — TẤT CẢ đều optional.
  *
@@ -190,6 +195,7 @@ export const apiEnvSchema = z
   .merge(encryptionSchema)
   .merge(storageSchema)
   .merge(observabilitySchema)
+  .merge(syncSchema)
   .merge(platformOAuthSchema)
   .superRefine((env, ctx) => {
     validatePlatformOAuth(env, ctx);
@@ -241,6 +247,7 @@ export const workerEnvSchema = z
   .merge(encryptionSchema)
   .merge(storageSchema)
   .merge(observabilitySchema)
+  .merge(syncSchema)
   .merge(platformOAuthSchema)
   .superRefine(validatePlatformOAuth);
 

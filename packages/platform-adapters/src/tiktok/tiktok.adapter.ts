@@ -1,15 +1,10 @@
-import {
-  computeEngagementRate,
-  emptyPostMetrics,
-  metricFromApi,
-  type Paginated,
-} from '@socialhub/shared';
+import { computeEngagementRate, emptyPostMetrics, metricFromApi } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
   AuthUrlInput,
-  PlatformPostData,
+  ExternalPostPage,
   PostMetrics,
   PublishPostInput,
   PublishResult,
@@ -19,7 +14,7 @@ import type {
   TokenSet,
 } from '../core/types';
 import { TikTokClient, type TikTokClientConfig } from './tiktok.client';
-import { mapTikTokProfile, mapTikTokToken } from './tiktok.mapper';
+import { mapTikTokProfile, mapTikTokToken, mapTikTokVideo } from './tiktok.mapper';
 import { validateTikTokPost } from './tiktok.validator';
 
 export interface TikTokAdapterConfig extends TikTokClientConfig {
@@ -208,26 +203,15 @@ export class TikTokAdapter implements SocialPlatformAdapter {
     };
   }
 
-  async getPosts(
-    ctx: AdapterContext,
-    params: SyncPostsParams = {},
-  ): Promise<Paginated<PlatformPostData>> {
+  async getPosts(ctx: AdapterContext, params: SyncPostsParams = {}): Promise<ExternalPostPage> {
     const page = await this.client.listVideos({
       accessToken: ctx.accessToken,
       cursor: params.cursor ? Number(params.cursor) : undefined,
       limit: params.limit,
     });
     return {
-      items: page.data.videos.map((video) => ({
-        externalPostId: video.id,
-        externalUrl: video.share_url,
-        caption: video.video_description ?? video.title,
-        title: video.title,
-        mediaType: 'VIDEO',
-        thumbnailUrl: video.cover_image_url,
-        publishedAt: video.create_time ? new Date(video.create_time * 1000) : new Date(0),
-      })),
-      nextCursor: page.data.has_more && page.data.cursor ? String(page.data.cursor) : null,
+      items: page.data.videos.map(mapTikTokVideo),
+      nextCursor: page.data.has_more && page.data.cursor ? String(page.data.cursor) : undefined,
       hasMore: page.data.has_more,
     };
   }

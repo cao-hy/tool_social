@@ -824,15 +824,21 @@ export class PostsService implements OnModuleDestroy {
         throw AppError.conflict('Bài này không ở trạng thái có thể publish.');
       }
 
-      if (socialAccountIds) {
-        await this.replaceTargets(tx, workspaceId, postId, socialAccountIds);
+      const existingAccountIds = new Set(post.platformPosts.map((item) => item.socialAccountId));
+      const requestedTargets = socialAccountIds ? [...new Set(socialAccountIds)] : null;
+      if (requestedTargets) {
+        const invalidTargets = requestedTargets.filter((id) => !existingAccountIds.has(id));
+        if (invalidTargets.length > 0) {
+          throw AppError.validation(
+            'Chỉ publish được các social account đã có trong draft. Hãy sửa draft nếu muốn đổi target.',
+          );
+        }
       }
 
-      const targets =
-        socialAccountIds ??
-        post.platformPosts
-          .filter((item) => item.status !== 'PUBLISHED')
-          .map((item) => item.socialAccountId);
+      const targets = post.platformPosts
+        .filter((item) => item.status !== 'PUBLISHED')
+        .filter((item) => !requestedTargets || requestedTargets.includes(item.socialAccountId))
+        .map((item) => item.socialAccountId);
       if (targets.length === 0) throw AppError.validation('Cần chọn ít nhất một social account.');
 
       await tx.contentPost.update({
@@ -1216,6 +1222,21 @@ export class PostsService implements OnModuleDestroy {
     jobs: Awaited<ReturnType<typeof this.jobHistory>> = [],
   ) {
     const platformStatuses = post.platformPosts.map((item) => item.status as PlatformPostStatus);
+    const optionMediaAssetIds = [
+      ...new Set(post.platformPosts.flatMap((item) => mediaAssetIdsFromOptions(item.options))),
+    ];
+    const optionMediaAssets =
+      optionMediaAssetIds.length > 0
+        ? await this.prisma.mediaAsset.findMany({
+            where: {
+              id: { in: optionMediaAssetIds },
+              workspaceId: post.workspaceId,
+              deletedAt: null,
+            },
+          })
+        : [];
+    const optionMediaAssetById = new Map(optionMediaAssets.map((asset) => [asset.id, asset]));
+
     return {
       id: post.id,
       status: post.status,
@@ -1227,6 +1248,7 @@ export class PostsService implements OnModuleDestroy {
       publishedAt: post.publishedAt,
       createdAt: post.createdAt,
       updatedAt: post.updatedAt,
+      sourceType: post.sourceType,
       derivedStatus: deriveContentPostStatus(platformStatuses),
       platformPosts: await Promise.all(
         post.platformPosts.map(async (item) => ({
@@ -1242,6 +1264,12 @@ export class PostsService implements OnModuleDestroy {
           options: item.options,
           media: await Promise.all(
             item.media.map((media) => this.toMediaAssetView(media.mediaAsset, media.position)),
+          ),
+          optionMedia: await Promise.all(
+            mediaAssetIdsFromOptions(item.options)
+              .map((id) => optionMediaAssetById.get(id))
+              .filter((asset): asset is NonNullable<typeof asset> => Boolean(asset))
+              .map((asset) => this.toMediaAssetView(asset)),
           ),
           externalPostId: item.externalPostId,
           externalUrl: item.externalUrl,

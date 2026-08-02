@@ -17,6 +17,7 @@ export default function AccountsPage() {
   const [loading, setLoading] = useState(false);
   const [connecting, setConnecting] = useState<Platform | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function loadAccounts(workspaceId: string) {
@@ -101,6 +102,21 @@ export default function AccountsPage() {
     }
   }
 
+  async function syncPosts(accountId: string) {
+    if (!workspace) return;
+    setSyncing(accountId);
+    setError(null);
+    try {
+      await socialAccountsApi.syncPosts(workspace.id, accountId);
+      toast.success('Đã gửi yêu cầu đồng bộ. Vui lòng đợi trong giây lát...');
+      await loadAccounts(workspace.id);
+    } catch (syncError) {
+      toast.error(getErrorMessage(syncError));
+    } finally {
+      setSyncing(null);
+    }
+  }
+
   if (!workspace) {
     return (
       <section className="rounded-lg border border-slate-200 bg-white p-6">
@@ -153,11 +169,19 @@ export default function AccountsPage() {
                   </p>
                   <SecondaryButton
                     className="mt-3 w-full"
-                    disabled={testing !== null}
+                    disabled={testing !== null || syncing === account.id}
                     onClick={() => void testConnection(account.id)}
                     type="button"
                   >
                     {testing === account.id ? 'Đang kiểm tra...' : 'Test connection'}
+                  </SecondaryButton>
+                  <SecondaryButton
+                    className="mt-2 w-full"
+                    disabled={syncing !== null || testing === account.id}
+                    onClick={() => void syncPosts(account.id)}
+                    type="button"
+                  >
+                    {syncing === account.id ? 'Đang gửi yêu cầu...' : 'Đồng bộ bài viết'}
                   </SecondaryButton>
                   <SecondaryButton
                     className="mt-2 w-full"
@@ -195,6 +219,13 @@ export default function AccountsPage() {
               <div className="min-w-0">
                 <p className="truncate text-sm text-slate-900">{account.name}</p>
                 <p className="truncate text-xs text-slate-500">{account.scopes.join(', ')}</p>
+                {account.lastSyncedAt ? (
+                  <p className="truncate text-xs text-slate-400 mt-1">
+                    Đồng bộ lần cuối: {new Date(account.lastSyncedAt).toLocaleString('vi-VN')}
+                  </p>
+                ) : (
+                  <p className="truncate text-xs text-slate-400 mt-1">Chưa đồng bộ bao giờ</p>
+                )}
               </div>
               <p className="text-sm font-medium text-slate-600">{account.status}</p>
             </div>
