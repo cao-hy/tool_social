@@ -173,7 +173,10 @@ function detailsForJob(
     return `${platformLabel(account.platform)} · ${account.name}${account.username ? ` · @${account.username}` : ''}`;
   }
   if (job.queueName === 'sync-post-metrics') {
-    return `Metric bài ${stringField(payload, 'platformPostId') ?? ''}`.trim();
+    return `Bài ${stringField(payload, 'platformPostId') ?? ''}`.trim();
+  }
+  if (job.queueName === 'sync-account-metrics') {
+    return `Tài khoản ${account?.name ?? stringField(payload, 'socialAccountId') ?? ''}`.trim();
   }
   if (job.queueName === 'publish-post' || job.queueName === 'retry-failed-post') {
     return `Target ${stringField(payload, 'platformPostId') ?? ''}`.trim();
