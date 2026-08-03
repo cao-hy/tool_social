@@ -175,6 +175,12 @@ function detailsForJob(
   if (job.queueName === 'sync-post-metrics') {
     return `Bài ${stringField(payload, 'platformPostId') ?? ''}`.trim();
   }
+  if (job.queueName === 'create-platform-comment') {
+    return `Target ${stringField(payload, 'platformPostId') ?? ''}`.trim();
+  }
+  if (job.queueName === 'reply-platform-comment') {
+    return `Comment ${stringField(payload, 'commentId') ?? ''}`.trim();
+  }
   if (job.queueName === 'sync-account-metrics') {
     return `Tài khoản ${stringField(payload, 'socialAccountId') ?? ''}`.trim();
   }
@@ -274,6 +280,10 @@ function labelJob(queueName: string): string {
       return 'Đăng bài';
     case 'sync-comments':
       return 'Đồng bộ comment';
+    case 'create-platform-comment':
+      return 'Gửi comment công khai';
+    case 'reply-platform-comment':
+      return 'Gửi reply comment';
     case 'sync-post-metrics':
       return 'Đồng bộ metric bài';
     case 'sync-account-metrics':

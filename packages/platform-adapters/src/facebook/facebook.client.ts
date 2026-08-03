@@ -292,6 +292,21 @@ export class FacebookGraphClient {
     );
   }
 
+  async createPostComment(input: {
+    externalPostId: string;
+    pageAccessToken: string;
+    message: string;
+  }): Promise<FacebookCommentReplyResponse> {
+    return this.postForm(
+      `/${input.externalPostId}/comments`,
+      {
+        access_token: input.pageAccessToken,
+        message: input.message,
+      },
+      facebookCommentReplyResponseSchema,
+    );
+  }
+
   async hideComment(input: {
     externalCommentId: string;
     pageAccessToken: string;

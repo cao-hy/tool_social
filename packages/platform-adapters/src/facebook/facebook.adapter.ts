@@ -409,6 +409,23 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     };
   }
 
+  async createComment(
+    ctx: AdapterContext,
+    externalPostId: string,
+    message: string,
+  ): Promise<{ externalCommentId: string; postedAt: Date }> {
+    const result = await this.client.createPostComment({
+      externalPostId,
+      pageAccessToken: ctx.accessToken,
+      message,
+    });
+
+    return {
+      externalCommentId: result.id,
+      postedAt: new Date(),
+    };
+  }
+
   async deleteComment(ctx: AdapterContext, externalCommentId: string): Promise<void> {
     await this.client.deleteComment({
       externalCommentId,

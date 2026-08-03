@@ -282,6 +282,22 @@ export class InstagramGraphClient {
     return response.id;
   }
 
+  async createMediaComment(input: {
+    mediaId: string;
+    accessToken: string;
+    message: string;
+  }): Promise<string> {
+    const response = await this.postForm(
+      `/${input.mediaId}/comments`,
+      {
+        access_token: input.accessToken,
+        message: input.message,
+      },
+      instagramMediaContainerResponseSchema,
+    );
+    return response.id;
+  }
+
   async hideComment(input: {
     commentId: string;
     accessToken: string;

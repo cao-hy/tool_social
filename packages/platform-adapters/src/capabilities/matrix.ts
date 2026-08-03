@@ -50,6 +50,15 @@ CAPABILITY_MATRIX.FACEBOOK.capabilities.replyToComment = {
   verifiedBy: 'Codex + Meta Graph API docs',
 };
 
+CAPABILITY_MATRIX.FACEBOOK.capabilities.createComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Tạo top-level comment trên Page post bằng POST /{page-post-id}/comments với Page access token có pages_manage_engagement.',
+  source: 'https://developers.facebook.com/docs/graph-api/reference/object/comments/',
+  verifiedAt: '2026-08-03',
+  verifiedBy: 'Codex + Meta Graph API docs',
+};
+
 CAPABILITY_MATRIX.FACEBOOK.capabilities.hideComment = {
   state: 'CONDITIONAL',
   condition:
@@ -214,6 +223,16 @@ CAPABILITY_MATRIX.INSTAGRAM.capabilities.replyToComment = {
     'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-comment/replies',
   verifiedAt: '2026-07-30',
   verifiedBy: 'Codex + Meta Instagram Comment docs',
+};
+
+CAPABILITY_MATRIX.INSTAGRAM.capabilities.createComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Tạo top-level comment trên Instagram media thuộc tài khoản Business/Creator bằng /{ig_media_id}/comments; token cần instagram_manage_comments.',
+  source:
+    'https://developers.facebook.com/documentation/instagram-platform/reference/instagram-media/comments',
+  verifiedAt: '2026-08-03',
+  verifiedBy: 'Codex + Meta Instagram Comments docs',
 };
 
 CAPABILITY_MATRIX.INSTAGRAM.capabilities.hideComment = {
@@ -435,6 +454,15 @@ CAPABILITY_MATRIX.PINTEREST.capabilities.replyToComment = {
   verifiedBy: 'Codex + Pinterest API v5 docs',
 };
 
+CAPABILITY_MATRIX.PINTEREST.capabilities.createComment = {
+  state: 'UNSUPPORTED',
+  condition:
+    'Pinterest API v5 không expose endpoint chính thức để tạo organic Pin comment cho adapter này.',
+  source: 'https://developers.pinterest.com/docs/api/v5/pins-get/',
+  verifiedAt: '2026-08-03',
+  verifiedBy: 'Codex + Pinterest API v5 docs',
+};
+
 CAPABILITY_MATRIX.YOUTUBE.capabilities.publishVideo = {
   state: 'CONDITIONAL',
   condition:
@@ -478,6 +506,15 @@ CAPABILITY_MATRIX.YOUTUBE.capabilities.replyToComment = {
   state: 'SUPPORTED',
   source: 'https://developers.google.com/youtube/v3/docs/comments/insert',
   verifiedAt: '2026-07-28',
+  verifiedBy: 'Codex + YouTube Data API docs',
+};
+
+CAPABILITY_MATRIX.YOUTUBE.capabilities.createComment = {
+  state: 'CONDITIONAL',
+  condition:
+    'Tạo top-level comment trên video bằng commentThreads.insert; token cần youtube.force-ssl và video/channel phải cho phép comment.',
+  source: 'https://developers.google.com/youtube/v3/docs/commentThreads/insert',
+  verifiedAt: '2026-08-03',
   verifiedBy: 'Codex + YouTube Data API docs',
 };
 
@@ -621,6 +658,15 @@ CAPABILITY_MATRIX.TIKTOK.capabilities.replyToComment = {
     'Organic comment reply is not available in TikTok public Content Posting API; Business API comment management is a separate integration.',
   source: 'https://developers.tiktok.com/doc/content-posting-api-get-started',
   verifiedAt: '2026-07-28',
+  verifiedBy: 'Codex + TikTok Developer docs',
+};
+
+CAPABILITY_MATRIX.TIKTOK.capabilities.createComment = {
+  state: 'UNSUPPORTED',
+  condition:
+    'TikTok Content Posting/Display API không hỗ trợ tạo organic comment công khai lên video qua adapter hiện tại.',
+  source: 'https://developers.tiktok.com/doc/content-posting-api-get-started',
+  verifiedAt: '2026-08-03',
   verifiedBy: 'Codex + TikTok Developer docs',
 };
 

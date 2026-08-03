@@ -10,8 +10,8 @@ describe('cấu hình queue', () => {
     }
   });
 
-  it('đủ 11 queue theo roadmap hiện tại', () => {
-    expect(QUEUE_NAMES).toHaveLength(11);
+  it('đủ 13 queue theo roadmap hiện tại', () => {
+    expect(QUEUE_NAMES).toHaveLength(13);
   });
 
   it('publish-post có nhiều lần thử nhất — đây là job người dùng nhìn thấy', () => {

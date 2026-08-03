@@ -48,6 +48,20 @@ export class ApiClientError extends Error {
   }
 }
 
+export interface BulkCommentQueueResult {
+  requested: number;
+  queued: number;
+  failed: number;
+  results: Array<{
+    id: string;
+    queued: boolean;
+    jobId?: string;
+    backgroundJobId?: string;
+    errorCode?: string;
+    errorMessage?: string;
+  }>;
+}
+
 function getApiBaseUrl(): string {
   // Next.js thay biến NEXT_PUBLIC_* lúc build; đọc trực tiếp là cách duy nhất
   // để việc thay thế đó hoạt động (không dùng được @socialhub/config ở client).
@@ -638,6 +652,24 @@ export const commentsApi = {
     apiFetch<CommentView>(`/workspaces/${workspaceId}/comments/${commentId}/replies`, {
       method: 'POST',
       body: JSON.stringify({ message }),
+    }),
+  bulkReply: (workspaceId: string, commentIds: string[], message: string) =>
+    apiFetch<BulkCommentQueueResult>(`/workspaces/${workspaceId}/comments/replies/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({ commentIds, message }),
+    }),
+  createPlatformComment: (workspaceId: string, platformPostId: string, message: string) =>
+    apiFetch<{ queued: true; jobId: string; backgroundJobId: string; message: string }>(
+      `/workspaces/${workspaceId}/comments/platform-posts/${platformPostId}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ message }),
+      },
+    ),
+  bulkCreatePlatformComments: (workspaceId: string, platformPostIds: string[], message: string) =>
+    apiFetch<BulkCommentQueueResult>(`/workspaces/${workspaceId}/comments/platform-posts/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({ platformPostIds, message }),
     }),
   sync: (
     workspaceId: string,

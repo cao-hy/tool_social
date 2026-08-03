@@ -386,6 +386,25 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
     };
   }
 
+  async createComment(
+    ctx: AdapterContext,
+    externalPostId: string,
+    message: string,
+  ): Promise<{ externalCommentId: string; postedAt: Date }> {
+    const result = await this.client.createTopLevelComment({
+      accessToken: ctx.accessToken,
+      channelId: ctx.externalAccountId,
+      videoId: externalPostId,
+      message,
+    });
+    const comment = result.snippet.topLevelComment;
+
+    return {
+      externalCommentId: comment.id,
+      postedAt: new Date(comment.snippet.publishedAt),
+    };
+  }
+
   async editComment(
     ctx: AdapterContext,
     externalCommentId: string,

@@ -1,6 +1,6 @@
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import type { Prisma } from '@socialhub/db';
-import { buildJobId, buildQueueJobOptions } from '@socialhub/shared';
+import { buildJobId, buildQueueJobOptions, type QueuePayload } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import {
@@ -18,7 +18,10 @@ import { AuditService, type AuditContext } from '../audit/audit.service';
 import type {
   AddCommentNoteInput,
   AssignCommentInput,
+  BulkCreatePlatformCommentInput,
+  BulkReplyToCommentsInput,
   CreateCommentTagInput,
+  CreatePlatformCommentInput,
   CreateReplyTemplateInput,
   DeleteCommentQuery,
   ListCommentsQuery,
@@ -31,9 +34,20 @@ import type {
   UpdateReplyTemplateInput,
 } from './comments.schemas';
 
+export interface BulkQueueResult {
+  id: string;
+  queued: boolean;
+  jobId?: string;
+  backgroundJobId?: string;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
 @Injectable()
 export class CommentsService implements OnModuleDestroy {
   private readonly syncQueue: Queue;
+  private readonly createPlatformCommentQueue: Queue;
+  private readonly replyPlatformCommentQueue: Queue;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -43,10 +57,18 @@ export class CommentsService implements OnModuleDestroy {
     @Inject(KEYRING) private readonly keyring: Keyring,
   ) {
     this.syncQueue = new Queue('sync-comments', { connection: this.redis.getClient() });
+    this.createPlatformCommentQueue = new Queue('create-platform-comment', {
+      connection: this.redis.getClient(),
+    });
+    this.replyPlatformCommentQueue = new Queue('reply-platform-comment', {
+      connection: this.redis.getClient(),
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.syncQueue.close();
+    await this.createPlatformCommentQueue.close();
+    await this.replyPlatformCommentQueue.close();
   }
 
   async list(workspaceId: string, query: ListCommentsQuery) {
@@ -514,6 +536,310 @@ export class CommentsService implements OnModuleDestroy {
     return this.get(workspaceId, comment.id);
   }
 
+  async createPlatformComment(
+    workspaceId: string,
+    platformPostId: string,
+    actorUserId: string,
+    input: CreatePlatformCommentInput,
+    auditContext: AuditContext,
+  ) {
+    const platformPost = await this.prisma.platformPost.findFirst({
+      where: { id: platformPostId, workspaceId },
+      include: { socialAccount: { include: { token: true } }, contentPost: true },
+    });
+    if (!platformPost) throw AppError.notFound('platform post');
+    if (platformPost.status !== 'PUBLISHED' || !platformPost.externalPostId) {
+      throw AppError.conflict('Chỉ comment được vào bản đăng đã publish và có external ID.');
+    }
+    if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
+      throw AppError.conflict('Social account chưa kết nối.');
+    }
+
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
+      platformPost.platform,
+      'createComment',
+    );
+    if (!adapter.createComment) {
+      throw AppError.capabilityUnsupported(platformPost.platform, 'createComment');
+    }
+    this.ensureCreateCommentScopes(platformPost);
+
+    const payload: QueuePayload<'create-platform-comment'> = {
+      platformPostId: platformPost.id,
+      socialAccountId: platformPost.socialAccountId,
+      workspaceId,
+      message: input.message,
+      requestedByUserId: actorUserId,
+      correlationId: auditContext.requestId ?? `comment-create:${platformPost.id}:${Date.now()}`,
+    };
+    const jobId = buildJobId('create-platform-comment', payload);
+    const opts = buildQueueJobOptions('create-platform-comment', jobId);
+    const backgroundJob = await this.prisma.backgroundJob.upsert({
+      where: { queueName_jobId: { queueName: 'create-platform-comment', jobId } },
+      create: {
+        workspaceId,
+        queueName: 'create-platform-comment',
+        jobId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        correlationId: payload.correlationId,
+      },
+      update: {
+        workspaceId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        errorCode: null,
+        errorMessage: null,
+        isDead: false,
+        correlationId: payload.correlationId,
+      },
+    });
+
+    await this.createPlatformCommentQueue.add('create-platform-comment', payload, opts);
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'COMMENT_REPLIED',
+      resourceType: 'PlatformPost',
+      resourceId: platformPost.id,
+      metadata: {
+        action: 'createPlatformComment',
+        platform: platformPost.platform,
+        socialAccountId: platformPost.socialAccountId,
+      },
+    });
+
+    return {
+      queued: true,
+      jobId,
+      backgroundJobId: backgroundJob.id,
+      message: 'Đã đưa comment công khai vào queue.',
+    };
+  }
+
+  async bulkCreatePlatformComments(
+    workspaceId: string,
+    actorUserId: string,
+    input: BulkCreatePlatformCommentInput,
+    auditContext: AuditContext,
+  ) {
+    const platformPostIds = [...new Set(input.platformPostIds)];
+    const results: BulkQueueResult[] = [];
+
+    for (const platformPostId of platformPostIds) {
+      try {
+        const queued = await this.createPlatformComment(
+          workspaceId,
+          platformPostId,
+          actorUserId,
+          { message: input.message },
+          {
+            ...auditContext,
+            requestId: `${auditContext.requestId ?? 'bulk-comment'}:${platformPostId}`,
+          },
+        );
+        results.push({
+          id: platformPostId,
+          queued: true,
+          jobId: queued.jobId,
+          backgroundJobId: queued.backgroundJobId,
+        });
+      } catch (error) {
+        results.push({
+          id: platformPostId,
+          queued: false,
+          errorCode:
+            error instanceof AppError
+              ? error.code
+              : error instanceof Error
+                ? error.name
+                : 'UNKNOWN',
+          errorMessage:
+            error instanceof Error ? error.message : 'Không thể queue comment cho target này.',
+        });
+      }
+    }
+
+    return this.toBulkQueueSummary(platformPostIds.length, results);
+  }
+
+  async bulkReplyToComments(
+    workspaceId: string,
+    actorUserId: string,
+    input: BulkReplyToCommentsInput,
+    auditContext: AuditContext,
+  ) {
+    const commentIds = [...new Set(input.commentIds)];
+    const results: BulkQueueResult[] = [];
+
+    for (const commentId of commentIds) {
+      try {
+        const queued = await this.queueReplyToComment(
+          workspaceId,
+          commentId,
+          actorUserId,
+          input.message,
+          {
+            ...auditContext,
+            requestId: `${auditContext.requestId ?? 'bulk-reply'}:${commentId}`,
+          },
+        );
+        results.push({
+          id: commentId,
+          queued: true,
+          jobId: queued.jobId,
+          backgroundJobId: queued.backgroundJobId,
+        });
+      } catch (error) {
+        results.push({
+          id: commentId,
+          queued: false,
+          errorCode:
+            error instanceof AppError
+              ? error.code
+              : error instanceof Error
+                ? error.name
+                : 'UNKNOWN',
+          errorMessage:
+            error instanceof Error ? error.message : 'Không thể queue reply cho comment này.',
+        });
+      }
+    }
+
+    return this.toBulkQueueSummary(commentIds.length, results);
+  }
+
+  private async queueReplyToComment(
+    workspaceId: string,
+    commentId: string,
+    actorUserId: string,
+    message: string,
+    auditContext: AuditContext,
+  ) {
+    const comment = await this.findComment(workspaceId, commentId);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
+      comment.platform,
+      'replyToComment',
+    );
+    if (!adapter.replyToComment) {
+      throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
+    }
+    this.ensureReplyCommentScopes(comment);
+
+    const reply = await this.prisma.commentReply.create({
+      data: { workspaceId, commentId: comment.id, message, sentById: actorUserId },
+    });
+    const payload: QueuePayload<'reply-platform-comment'> = {
+      commentId: comment.id,
+      workspaceId,
+      message,
+      requestedByUserId: actorUserId,
+      replyRecordId: reply.id,
+      correlationId: auditContext.requestId ?? `comment-reply:${reply.id}`,
+    };
+    const jobId = buildJobId('reply-platform-comment', payload);
+    const opts = buildQueueJobOptions('reply-platform-comment', jobId);
+    const backgroundJob = await this.prisma.backgroundJob.upsert({
+      where: { queueName_jobId: { queueName: 'reply-platform-comment', jobId } },
+      create: {
+        workspaceId,
+        queueName: 'reply-platform-comment',
+        jobId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        correlationId: payload.correlationId,
+      },
+      update: {
+        workspaceId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        errorCode: null,
+        errorMessage: null,
+        isDead: false,
+        correlationId: payload.correlationId,
+      },
+    });
+
+    await this.replyPlatformCommentQueue.add('reply-platform-comment', payload, opts);
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'COMMENT_REPLIED',
+      resourceType: 'Comment',
+      resourceId: comment.id,
+      metadata: { queued: true, replyRecordId: reply.id },
+    });
+
+    return {
+      queued: true,
+      jobId,
+      backgroundJobId: backgroundJob.id,
+      message: 'Đã đưa reply vào queue.',
+    };
+  }
+
+  private toBulkQueueSummary(requested: number, results: BulkQueueResult[]) {
+    const queued = results.filter((result) => result.queued).length;
+    return {
+      requested,
+      queued,
+      failed: results.length - queued,
+      results,
+    };
+  }
+
+  private ensureCreateCommentScopes(commentTarget: {
+    platform: Platform;
+    socialAccount: { scopes: string[] };
+  }) {
+    if (
+      commentTarget.platform === 'FACEBOOK' &&
+      !commentTarget.socialAccount.scopes.includes('pages_manage_engagement')
+    ) {
+      throw AppError.conflict(
+        'Facebook token hiện tại thiếu quyền pages_manage_engagement. Hãy ngắt kết nối rồi kết nối lại Facebook Page.',
+      );
+    }
+    if (
+      commentTarget.platform === 'YOUTUBE' &&
+      !commentTarget.socialAccount.scopes.includes(
+        'https://www.googleapis.com/auth/youtube.force-ssl',
+      )
+    ) {
+      throw AppError.conflict(
+        'YouTube token hiện tại thiếu scope youtube.force-ssl. Hãy ngắt kết nối rồi kết nối lại YouTube.',
+      );
+    }
+    if (commentTarget.platform === 'INSTAGRAM') {
+      const missingScopes = ['instagram_manage_comments', 'pages_read_engagement'].filter(
+        (scope) => !commentTarget.socialAccount.scopes.includes(scope),
+      );
+      if (missingScopes.length > 0) {
+        throw AppError.conflict(
+          `Instagram token hiện tại thiếu quyền ${missingScopes.join(
+            ', ',
+          )}. Hãy ngắt kết nối rồi kết nối lại Instagram sau khi quyền đã được bật trong Meta App Dashboard.`,
+        );
+      }
+    }
+  }
+
   private ensureCommentActionScopes(
     comment: Awaited<ReturnType<typeof this.findComment>>,
     action: 'editComment' | 'deleteComment' | 'hideComment',
@@ -551,6 +877,40 @@ export class CommentsService implements OnModuleDestroy {
     }
     if (action === 'editComment' && comment.platform !== 'YOUTUBE') {
       throw AppError.capabilityUnsupported(comment.platform, action);
+    }
+  }
+
+  private ensureReplyCommentScopes(comment: Awaited<ReturnType<typeof this.findComment>>) {
+    if (!comment.socialAccount.token || comment.socialAccount.status !== 'CONNECTED') {
+      throw AppError.conflict('Social account chưa kết nối.');
+    }
+    if (
+      comment.platform === 'FACEBOOK' &&
+      !comment.socialAccount.scopes.includes('pages_manage_engagement')
+    ) {
+      throw AppError.conflict(
+        'Facebook token hiện tại thiếu quyền pages_manage_engagement. Hãy ngắt kết nối rồi kết nối lại Facebook Page để cấp quyền reply comment.',
+      );
+    }
+    if (
+      comment.platform === 'YOUTUBE' &&
+      !comment.socialAccount.scopes.includes('https://www.googleapis.com/auth/youtube.force-ssl')
+    ) {
+      throw AppError.conflict(
+        'YouTube token hiện tại thiếu scope youtube.force-ssl. Hãy ngắt kết nối rồi kết nối lại YouTube để cấp quyền quản lý comment.',
+      );
+    }
+    if (comment.platform === 'INSTAGRAM') {
+      const missingScopes = ['instagram_manage_comments', 'pages_read_engagement'].filter(
+        (scope) => !comment.socialAccount.scopes.includes(scope),
+      );
+      if (missingScopes.length > 0) {
+        throw AppError.conflict(
+          `Instagram token hiện tại thiếu quyền ${missingScopes.join(
+            ', ',
+          )}. Hãy ngắt kết nối rồi kết nối lại Instagram sau khi quyền đã được bật trong Meta App Dashboard.`,
+        );
+      }
     }
   }
 

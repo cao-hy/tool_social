@@ -60,6 +60,20 @@ export const replyToCommentSchema = z.object({
   message: z.string().trim().min(1).max(2000),
 });
 
+export const createPlatformCommentSchema = z.object({
+  message: z.string().trim().min(1).max(2000),
+});
+
+export const bulkCreatePlatformCommentSchema = z.object({
+  platformPostIds: z.array(z.string().min(1)).min(1).max(50),
+  message: z.string().trim().min(1).max(2000),
+});
+
+export const bulkReplyToCommentsSchema = z.object({
+  commentIds: z.array(z.string().min(1)).min(1).max(50),
+  message: z.string().trim().min(1).max(2000),
+});
+
 export const createReplyTemplateSchema = z.object({
   name: z.string().trim().min(1).max(80),
   body: z.string().trim().min(1).max(2000),
@@ -83,6 +97,9 @@ export type DeleteCommentQuery = z.infer<typeof deleteCommentQuerySchema>;
 export type CreateCommentTagInput = z.infer<typeof createCommentTagSchema>;
 export type AddCommentNoteInput = z.infer<typeof addCommentNoteSchema>;
 export type ReplyToCommentInput = z.infer<typeof replyToCommentSchema>;
+export type CreatePlatformCommentInput = z.infer<typeof createPlatformCommentSchema>;
+export type BulkCreatePlatformCommentInput = z.infer<typeof bulkCreatePlatformCommentSchema>;
+export type BulkReplyToCommentsInput = z.infer<typeof bulkReplyToCommentsSchema>;
 export type CreateReplyTemplateInput = z.infer<typeof createReplyTemplateSchema>;
 export type UpdateReplyTemplateInput = z.infer<typeof updateReplyTemplateSchema>;
 export type SyncCommentsInput = z.infer<typeof syncCommentsSchema>;

@@ -1,6 +1,11 @@
 'use client';
 
-import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
+import {
+  capabilityBlockReason,
+  hasPermission,
+  PLATFORM_LABELS,
+  type Platform,
+} from '@socialhub/shared';
 import { Edit3, ExternalLink, Eye, RefreshCw, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
@@ -15,7 +20,7 @@ import {
 } from '@/components/media-preview';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
 import { useToast } from '@/components/toast-provider';
-import { platformsApi, postsApi } from '@/lib/api-client';
+import { commentsApi, platformsApi, postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
@@ -64,6 +69,7 @@ export default function PostDetailPage() {
   const [deleteTarget, setDeleteTarget] = useState<ContentPostView | null>(null);
   const [previewAsset, setPreviewAsset] = useState<MediaAssetView | null>(null);
   const [platformAction, setPlatformAction] = useState<string | null>(null);
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [expandedPlatformPostId, setExpandedPlatformPostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -216,6 +222,26 @@ export default function PostDetailPage() {
       toast.success('Đã hủy publish TikTok.');
     } catch (cancelError) {
       toast.error(getErrorMessage(cancelError));
+    } finally {
+      setPlatformAction(null);
+    }
+  }
+
+  async function createPlatformComment(platformPost: PlatformPostView) {
+    if (!workspace) return;
+    const message = (commentDrafts[platformPost.id] ?? '').trim();
+    if (!message) {
+      toast.warning('Nhập nội dung comment trước khi gửi.');
+      return;
+    }
+    setPlatformAction(`comment:${platformPost.id}`);
+    setError(null);
+    try {
+      await commentsApi.createPlatformComment(workspace.id, platformPost.id, message);
+      setCommentDrafts((current) => ({ ...current, [platformPost.id]: '' }));
+      toast.info(`${PLATFORM_LABELS[platformPost.platform]}: đã đưa comment vào queue.`);
+    } catch (commentError) {
+      toast.error(`${PLATFORM_LABELS[platformPost.platform]}: ${getErrorMessage(commentError)}`);
     } finally {
       setPlatformAction(null);
     }
@@ -413,8 +439,17 @@ export default function PostDetailPage() {
                             <td colSpan={5} className="px-4 pb-4 pt-0">
                               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                                 <PlatformPostDetails
+                                  capability={capabilityByPlatform[platformPost.platform]}
                                   canPublish={canPublish}
+                                  commentDraft={commentDrafts[platformPost.id] ?? ''}
+                                  onCommentDraftChange={(value) =>
+                                    setCommentDrafts((current) => ({
+                                      ...current,
+                                      [platformPost.id]: value,
+                                    }))
+                                  }
                                   onCancel={() => void cancelTikTokPublish(platformPost)}
+                                  onCreateComment={() => void createPlatformComment(platformPost)}
                                   onMakePublic={() => void makeYouTubePublic(platformPost)}
                                   onPreview={setPreviewAsset}
                                   onRefresh={() => void refreshPlatformState(platformPost)}
@@ -1072,18 +1107,26 @@ function PlatformPostNote({ platformPost }: { platformPost: PlatformPostView }) 
 function PlatformPostDetails({
   platformPost,
   platformAction,
+  capability,
   canPublish,
+  commentDraft,
   onRefresh,
   onMakePublic,
   onCancel,
+  onCreateComment,
+  onCommentDraftChange,
   onPreview,
 }: {
   platformPost: PlatformPostView;
   platformAction: string | null;
+  capability?: PlatformCapabilitiesView;
   canPublish: boolean;
+  commentDraft: string;
   onRefresh: () => void;
   onMakePublic: () => void;
   onCancel: () => void;
+  onCreateComment: () => void;
+  onCommentDraftChange: (value: string) => void;
   onPreview: (asset: MediaAssetView) => void;
 }) {
   const thumbnailMedia = platformThumbnailMedia(platformPost);
@@ -1174,6 +1217,14 @@ function PlatformPostDetails({
         </section>
 
         <aside className="space-y-3">
+          <PlatformCommentComposer
+            capability={capability}
+            draft={commentDraft}
+            onChange={onCommentDraftChange}
+            onSubmit={onCreateComment}
+            platformAction={platformAction}
+            platformPost={platformPost}
+          />
           <PlatformMetricsPanel
             onRefresh={onRefresh}
             platformAction={platformAction}
@@ -1201,6 +1252,69 @@ function PlatformPostDetails({
         </aside>
       </div>
     </div>
+  );
+}
+
+function PlatformCommentComposer({
+  platformPost,
+  capability,
+  draft,
+  platformAction,
+  onChange,
+  onSubmit,
+}: {
+  platformPost: PlatformPostView;
+  capability?: PlatformCapabilitiesView;
+  draft: string;
+  platformAction: string | null;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  const capabilityReason = capabilityBlockReason(capability?.capabilities.createComment);
+  const statusReason =
+    platformPost.status !== 'PUBLISHED'
+      ? 'Chỉ gửi comment vào bài đã publish.'
+      : !platformPost.externalPostId
+        ? 'Target chưa có external ID để comment.'
+        : null;
+  const blockReason = statusReason ?? capabilityReason;
+  const busy = platformAction === `comment:${platformPost.id}`;
+
+  return (
+    <section className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-950">Comment công khai</h3>
+          <p className="mt-1 text-xs text-slate-500">
+            Gửi một comment top-level bằng chính tài khoản/page đang publish.
+          </p>
+        </div>
+        <StatusBadge status={blockReason ? 'Unavailable' : 'Ready'} />
+      </div>
+      {blockReason ? (
+        <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {blockReason}
+        </p>
+      ) : null}
+      <textarea
+        className="mt-3 min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50 disabled:text-slate-400"
+        disabled={Boolean(blockReason) || busy}
+        maxLength={2000}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Viết comment cho bài này..."
+        value={draft}
+      />
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <span className="text-xs text-slate-500">{draft.trim().length}/2000</span>
+        <SecondaryButton
+          disabled={Boolean(blockReason) || busy || draft.trim().length === 0}
+          onClick={onSubmit}
+          type="button"
+        >
+          {busy ? 'Đang gửi...' : 'Gửi comment'}
+        </SecondaryButton>
+      </div>
+    </section>
   );
 }
 

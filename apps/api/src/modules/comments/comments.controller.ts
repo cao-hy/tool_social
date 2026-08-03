@@ -23,7 +23,10 @@ import { getRequestId } from '../../common/request-context';
 import {
   addCommentNoteSchema,
   assignCommentSchema,
+  bulkCreatePlatformCommentSchema,
+  bulkReplyToCommentsSchema,
   createCommentTagSchema,
+  createPlatformCommentSchema,
   createReplyTemplateSchema,
   deleteCommentQuerySchema,
   listCommentsQuerySchema,
@@ -36,7 +39,10 @@ import {
   updateReplyTemplateSchema,
   type AddCommentNoteInput,
   type AssignCommentInput,
+  type BulkCreatePlatformCommentInput,
+  type BulkReplyToCommentsInput,
   type CreateCommentTagInput,
+  type CreatePlatformCommentInput,
   type CreateReplyTemplateInput,
   type DeleteCommentQuery,
   type ListCommentsQuery,
@@ -72,6 +78,53 @@ export class CommentsController {
     @Req() request: FastifyRequest,
   ) {
     return this.comments.sync(workspaceId, body, getRequestId(request));
+  }
+
+  @Post('platform-posts/bulk')
+  @RequirePermissions('comment:reply')
+  bulkCreatePlatformComments(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(bulkCreatePlatformCommentSchema)) body: BulkCreatePlatformCommentInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.comments.bulkCreatePlatformComments(
+      workspaceId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Post('platform-posts/:platformPostId')
+  @RequirePermissions('comment:reply')
+  createPlatformComment(
+    @Param('workspaceId') workspaceId: string,
+    @Param('platformPostId') platformPostId: string,
+    @Body(zodPipe(createPlatformCommentSchema)) body: CreatePlatformCommentInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.comments.createPlatformComment(
+      workspaceId,
+      platformPostId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Post('replies/bulk')
+  @RequirePermissions('comment:reply')
+  bulkReplyToComments(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(bulkReplyToCommentsSchema)) body: BulkReplyToCommentsInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.comments.bulkReplyToComments(
+      workspaceId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
   }
 
   @Get('tags')

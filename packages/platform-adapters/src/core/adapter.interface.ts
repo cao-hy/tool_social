@@ -3,6 +3,7 @@ import type {
   AccountMetrics,
   AdapterContext,
   AuthUrlInput,
+  CommentCreateResult,
   CommentReplyResult,
   NormalizedWebhookEvent,
   PlatformComment,
@@ -78,6 +79,11 @@ export interface SocialPlatformAdapter {
     ctx: AdapterContext,
     params: SyncCommentsParams,
   ): Promise<Paginated<PlatformComment>>;
+  createComment?(
+    ctx: AdapterContext,
+    externalPostId: string,
+    message: string,
+  ): Promise<CommentCreateResult>;
   replyToComment?(
     ctx: AdapterContext,
     externalCommentId: string,
@@ -101,6 +107,7 @@ export interface SocialPlatformAdapter {
  */
 export const OPTIONAL_METHOD_CAPABILITY_MAP = {
   editPost: 'editPublishedPost',
+  createComment: 'createComment',
   replyToComment: 'replyToComment',
   editComment: 'editComment',
   deleteComment: 'deleteComment',

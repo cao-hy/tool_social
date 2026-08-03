@@ -17,6 +17,7 @@ import { Keyring } from '@socialhub/security';
 import type { ProxyConfig } from '@socialhub/shared';
 import Redis from 'ioredis';
 import { logger } from './logger';
+import { createCreatePlatformCommentProcessor } from './processors/create-platform-comment';
 import { createGenerateThumbnailProcessor } from './processors/generate-thumbnail';
 import { createProcessWebhookProcessor } from './processors/process-webhook';
 import { createPublishPostProcessor } from './processors/publish-post';
@@ -24,6 +25,7 @@ import {
   createRefreshSocialTokenProcessor,
   createWorkerPrisma,
 } from './processors/refresh-social-token';
+import { createReplyPlatformCommentProcessor } from './processors/reply-platform-comment';
 import { createSyncAccountMetricsProcessor } from './processors/sync-account-metrics';
 import { createSyncCommentsProcessor } from './processors/sync-comments';
 import { createSyncExternalPostsProcessor } from './processors/sync-external-posts';
@@ -85,6 +87,14 @@ async function main(): Promise<void> {
   registry.registerWorker(
     'sync-comments',
     createSyncCommentsProcessor({ prisma, keyring, adapters }),
+  );
+  registry.registerWorker(
+    'create-platform-comment',
+    createCreatePlatformCommentProcessor({ prisma, keyring, adapters, createAdapters }),
+  );
+  registry.registerWorker(
+    'reply-platform-comment',
+    createReplyPlatformCommentProcessor({ prisma, keyring, adapters, createAdapters }),
   );
   registry.registerWorker(
     'sync-external-posts',

@@ -438,6 +438,23 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     };
   }
 
+  async createComment(
+    ctx: AdapterContext,
+    externalPostId: string,
+    message: string,
+  ): Promise<{ externalCommentId: string; postedAt: Date }> {
+    const id = await this.client.createMediaComment({
+      mediaId: externalPostId,
+      accessToken: ctx.accessToken,
+      message,
+    });
+
+    return {
+      externalCommentId: id,
+      postedAt: new Date(),
+    };
+  }
+
   async deleteComment(ctx: AdapterContext, externalCommentId: string): Promise<void> {
     await this.client.deleteComment({
       commentId: externalCommentId,

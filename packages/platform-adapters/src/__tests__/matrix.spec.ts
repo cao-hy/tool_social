@@ -10,11 +10,11 @@ import { countVerified, findStaleCapabilities, isSupported } from '../core/capab
 
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
   const verifiedCounts = {
-    FACEBOOK: 12,
-    INSTAGRAM: 17,
-    PINTEREST: 15,
-    TIKTOK: 11,
-    YOUTUBE: 12,
+    FACEBOOK: 13,
+    INSTAGRAM: 18,
+    PINTEREST: 16,
+    TIKTOK: 12,
+    YOUTUBE: 13,
   } as const;
 
   it('có bảng cho cả 5 nền tảng', () => {
@@ -44,6 +44,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
         expect(isSupported(table, key)).toBe(
           (platform === 'FACEBOOK' &&
             (key === 'readComments' ||
+              key === 'createComment' ||
               key === 'replyToComment' ||
               key === 'hideComment' ||
               key === 'deleteComment' ||
@@ -73,6 +74,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'publishMultipleImages' ||
                 key === 'publishVideo' ||
                 key === 'readComments' ||
+                key === 'createComment' ||
                 key === 'replyToComment' ||
                 key === 'hideComment' ||
                 key === 'deleteComment' ||
@@ -90,6 +92,7 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
                 key === 'refreshToken' ||
                 key === 'revokeToken' ||
                 key === 'readComments' ||
+                key === 'createComment' ||
                 key === 'replyToComment' ||
                 key === 'editComment' ||
                 key === 'hideComment' ||
@@ -127,15 +130,15 @@ describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () 
       expect(progress[platform].verified).toBe(verifiedCounts[platform]);
       expect(progress[platform].percent).toBe(
         platform === 'FACEBOOK'
-          ? 35
+          ? 37
           : platform === 'INSTAGRAM'
-            ? 50
+            ? 51
             : platform === 'PINTEREST'
-              ? 44
+              ? 46
               : platform === 'YOUTUBE'
-                ? 35
+                ? 37
                 : platform === 'TIKTOK'
-                  ? 32
+                  ? 34
                   : 0,
       );
     }

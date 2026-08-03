@@ -8,6 +8,7 @@ import {
 import {
   youtubeChannelsResponseSchema,
   youtubeCommentThreadsResponseSchema,
+  youtubeCommentThreadSchema,
   youtubeCommentSchema,
   youtubeTokenResponseSchema,
   youtubeVideoResponseSchema,
@@ -396,6 +397,31 @@ export class YouTubeClient {
       },
       { part: 'snippet' },
       youtubeCommentSchema,
+      input.accessToken,
+    );
+  }
+
+  createTopLevelComment(input: {
+    accessToken: string;
+    channelId: string;
+    videoId: string;
+    message: string;
+  }) {
+    return this.postJson(
+      '/commentThreads',
+      {
+        snippet: {
+          channelId: input.channelId,
+          videoId: input.videoId,
+          topLevelComment: {
+            snippet: {
+              textOriginal: input.message,
+            },
+          },
+        },
+      },
+      { part: 'snippet' },
+      youtubeCommentThreadSchema,
       input.accessToken,
     );
   }

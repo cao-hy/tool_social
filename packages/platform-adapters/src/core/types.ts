@@ -204,6 +204,11 @@ export interface CommentReplyResult {
   sentAt: Date;
 }
 
+export interface CommentCreateResult {
+  externalCommentId: string;
+  postedAt: Date;
+}
+
 export interface NormalizedWebhookEvent {
   externalEventId: string;
   eventType: string;

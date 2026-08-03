@@ -10,6 +10,7 @@ import {
 import {
   CheckCircle2,
   Clock3,
+  CloudDownload,
   MessageSquare,
   Eye,
   EyeOff,
@@ -49,6 +50,7 @@ import type {
 const STATUSES = ['OPEN', 'PENDING', 'RESOLVED'] as const;
 const TAG_COLORS = ['#64748b', '#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'] as const;
 const DEFAULT_TAG_COLOR = TAG_COLORS[0];
+const EMPTY_COMMENT_CHILDREN = new Map<string, CommentView[]>();
 const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   assign: 'Đã cập nhật người phụ trách.',
   'create-tag': 'Đã tạo tag.',
@@ -84,6 +86,11 @@ export default function InboxPage() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [noteBody, setNoteBody] = useState('');
   const [replyBody, setReplyBody] = useState('');
+  const [publicCommentBody, setPublicCommentBody] = useState('');
+  const [bulkPostCommentBody, setBulkPostCommentBody] = useState('');
+  const [bulkReplyBody, setBulkReplyBody] = useState('');
+  const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(() => new Set());
+  const [selectedCommentIds, setSelectedCommentIds] = useState<Set<string>>(() => new Set());
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState<string>(DEFAULT_TAG_COLOR);
   const [newTemplateName, setNewTemplateName] = useState('');
@@ -174,6 +181,7 @@ export default function InboxPage() {
   }, [workspace, filters]);
 
   const rootComments = useMemo(() => comments.filter((comment) => !comment.parentId), [comments]);
+  const postThreads = useMemo(() => buildPostThreads(comments), [comments]);
   const counts = useMemo(() => statusCounts(comments), [comments]);
 
   if (!workspace) {
@@ -189,6 +197,7 @@ export default function InboxPage() {
     : undefined;
   const selectedCapability = selected ? capabilityByPlatform[selected.platform] : undefined;
   const replyCapability = selectedCapability?.capabilities.replyToComment;
+  const createCommentCapability = selectedCapability?.capabilities.createComment;
   const replyBlockReason =
     selected?.platform === 'FACEBOOK' &&
     selectedAccount &&
@@ -197,10 +206,37 @@ export default function InboxPage() {
       : selected && !isCapabilityUsable(replyCapability)
         ? capabilityBlockReason(replyCapability)
         : null;
+  const createCommentBlockReason =
+    selected?.platform === 'FACEBOOK' &&
+    selectedAccount &&
+    !selectedAccount.scopes.includes('pages_manage_engagement')
+      ? 'Facebook token hiện tại thiếu quyền pages_manage_engagement. Hãy ngắt kết nối rồi kết nối lại Facebook Page để cấp quyền comment.'
+      : selected?.platform === 'INSTAGRAM' &&
+          selectedAccount &&
+          (!selectedAccount.scopes.includes('instagram_manage_comments') ||
+            !selectedAccount.scopes.includes('pages_read_engagement'))
+        ? 'Instagram token hiện tại thiếu quyền instagram_manage_comments hoặc pages_read_engagement. Hãy ngắt kết nối rồi kết nối lại Instagram để cấp quyền comment.'
+        : selected?.platform === 'YOUTUBE' &&
+            selectedAccount &&
+            !selectedAccount.scopes.includes('https://www.googleapis.com/auth/youtube.force-ssl')
+          ? 'YouTube token hiện tại thiếu scope youtube.force-ssl. Hãy kết nối lại YouTube với quyền quản lý comment.'
+          : selected && !isCapabilityUsable(createCommentCapability)
+            ? capabilityBlockReason(createCommentCapability)
+            : null;
 
   const syncAccount = platform
     ? accounts.find((account) => account.platform === platform)
     : accounts[0];
+  const syncExternalPostsCapability = syncAccount
+    ? capabilityByPlatform[syncAccount.platform]?.capabilities.getPosts
+    : undefined;
+  const syncExternalPostsBlockReason =
+    (platform && !syncAccount
+      ? `Chưa có tài khoản ${PLATFORM_LABELS[platform as Platform]} đã kết nối.`
+      : null) ??
+    (syncAccount && !isCapabilityUsable(syncExternalPostsCapability)
+      ? capabilityBlockReason(syncExternalPostsCapability)
+      : null);
   const syncCapability = syncAccount
     ? capabilityByPlatform[syncAccount.platform]?.capabilities.readComments
     : undefined;
@@ -224,6 +260,18 @@ export default function InboxPage() {
   const selectedChildComments = selected
     ? comments.filter((comment) => comment.parentId === selected.id)
     : [];
+  const activeThread =
+    (selected
+      ? postThreads.find((thread) => thread.platformPostId === selected.platformPostId)
+      : null) ??
+    postThreads[0] ??
+    null;
+  const selectedThread =
+    selected && activeThread?.platformPostId === selected.platformPostId
+      ? activeThread
+      : selected
+        ? postThreads.find((thread) => thread.platformPostId === selected.platformPostId)
+        : null;
   const selectedPostLabel = selected?.contentPostTitle ?? selected?.contentPostId ?? 'Bài đăng';
   const selectedAssignee =
     selected?.assignment?.assignedToName ?? selected?.assignment?.assignedToEmail ?? 'Chưa gán';
@@ -239,7 +287,7 @@ export default function InboxPage() {
         }
       : {
           title: 'Chưa có comment trong inbox',
-          body: `Bấm sync để kéo comment từ ${syncAccountName}. Hệ thống chỉ kéo comment từ post đã publish trong SocialHub và nền tảng có hỗ trợ đọc comment.`,
+          body: `Bấm "Kéo bài ngoài tool" nếu bài được đăng trực tiếp trên nền tảng, sau đó bấm sync để kéo comment từ ${syncAccountName}.`,
         };
 
   async function mutateComment(label: string, action: () => Promise<unknown>) {
@@ -299,6 +347,132 @@ export default function InboxPage() {
     });
   }
 
+  async function syncExternalPostsForSelectedAccount() {
+    const accountId = syncAccount?.id;
+    if (!workspace || !accountId) {
+      toast.warning('Cần có ít nhất một social account để kéo bài ngoài tool.');
+      return;
+    }
+    if (syncExternalPostsBlockReason) {
+      toast.warning(syncExternalPostsBlockReason);
+      return;
+    }
+
+    setBusy('sync-external-posts');
+    setError(null);
+    try {
+      const result = await socialAccountsApi.syncPosts(workspace.id, accountId);
+      toast.success(
+        `Đã đưa ${syncAccountName} vào queue kéo bài ngoài tool. Xong bước này hãy bấm Sync comments.`,
+      );
+      if (result.backgroundJobId) {
+        toast.info(`Theo dõi Server activity: ${result.backgroundJobId}`);
+      }
+      scheduleCommentReloads();
+    } catch (actionError) {
+      toast.error(getErrorMessage(actionError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function createPublicCommentForSelectedPost() {
+    if (!workspace || !selected) return;
+    const message = publicCommentBody.trim();
+    if (!message) {
+      toast.warning('Nhập nội dung comment trước khi gửi.');
+      return;
+    }
+    if (createCommentBlockReason) {
+      toast.warning(createCommentBlockReason);
+      return;
+    }
+
+    setBusy('create-comment');
+    setError(null);
+    try {
+      await commentsApi.createPlatformComment(workspace.id, selected.platformPostId, message);
+      setPublicCommentBody('');
+      toast.info(`${PLATFORM_LABELS[selected.platform]}: đã đưa comment công khai vào queue.`);
+      scheduleCommentReloads();
+      await loadComments();
+    } catch (actionError) {
+      toast.error(`${PLATFORM_LABELS[selected.platform]}: ${getErrorMessage(actionError)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function bulkCreatePublicComments() {
+    const message = bulkPostCommentBody.trim();
+    const platformPostIds = [...selectedPostIds];
+    if (!workspace || platformPostIds.length === 0) return;
+    if (!message) {
+      toast.warning('Nhập nội dung comment trước khi gửi hàng loạt.');
+      return;
+    }
+
+    setBusy('bulk-create-comment');
+    setError(null);
+    try {
+      const result = await commentsApi.bulkCreatePlatformComments(
+        workspace.id,
+        platformPostIds,
+        message,
+      );
+      setBulkPostCommentBody('');
+      setSelectedPostIds(new Set());
+      toast.info(`Đã queue ${result.queued}/${result.requested} comment công khai.`);
+      if (result.failed > 0) {
+        const firstError = result.results.find((item) => !item.queued)?.errorMessage;
+        toast.warning(firstError ?? `${result.failed} target không queue được.`);
+      }
+      scheduleCommentReloads();
+      await loadComments();
+    } catch (actionError) {
+      toast.error(getErrorMessage(actionError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function bulkReplySelectedComments() {
+    const message = bulkReplyBody.trim();
+    const commentIds = [...selectedCommentIds];
+    if (!workspace || commentIds.length === 0) return;
+    if (!message) {
+      toast.warning('Nhập nội dung reply trước khi gửi hàng loạt.');
+      return;
+    }
+
+    setBusy('bulk-reply');
+    setError(null);
+    try {
+      const result = await commentsApi.bulkReply(workspace.id, commentIds, message);
+      setBulkReplyBody('');
+      setSelectedCommentIds(new Set());
+      toast.info(`Đã queue ${result.queued}/${result.requested} reply.`);
+      if (result.failed > 0) {
+        const firstError = result.results.find((item) => !item.queued)?.errorMessage;
+        toast.warning(firstError ?? `${result.failed} comment không queue được.`);
+      }
+      scheduleCommentReloads();
+      await loadComments();
+    } catch (actionError) {
+      toast.error(getErrorMessage(actionError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function togglePostSelection(platformPostId: string) {
+    setSelectedPostIds((current) => toggleSetValue(current, platformPostId));
+  }
+
+  function toggleCommentSelection(commentId: string) {
+    setSelectedCommentIds((current) => toggleSetValue(current, commentId));
+  }
+
   function clearFilters() {
     setStatus('');
     setPlatform('');
@@ -321,6 +495,20 @@ export default function InboxPage() {
           <IconButton disabled={loading} label="Làm mới" onClick={() => void loadComments()}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </IconButton>
+          <SecondaryButton
+            disabled={
+              !canModerate ||
+              busy !== null ||
+              accounts.length === 0 ||
+              !!syncExternalPostsBlockReason
+            }
+            onClick={() => void syncExternalPostsForSelectedAccount()}
+            title={syncExternalPostsBlockReason ?? undefined}
+            type="button"
+          >
+            <CloudDownload className="h-4 w-4" />
+            {busy === 'sync-external-posts' ? 'Đang kéo bài...' : 'Kéo bài ngoài tool'}
+          </SecondaryButton>
           <PrimaryButton
             disabled={!canModerate || busy !== null || accounts.length === 0 || !!syncBlockReason}
             onClick={() => void syncSelectedAccount()}
@@ -417,6 +605,173 @@ export default function InboxPage() {
             </Field>
           </div>
         ) : null}
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+        <div className="rounded-md border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-950">Bài đang có hội thoại</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Chọn nhiều bài để gửi cùng một comment công khai.
+            </p>
+          </div>
+          <div className="max-h-[520px] overflow-y-auto p-3">
+            {postThreads.map((thread) => (
+              <div
+                key={thread.platformPostId}
+                className={`mb-2 flex w-full items-start gap-3 rounded-md border p-3 text-left transition hover:-translate-y-px hover:shadow-sm ${
+                  activeThread?.platformPostId === thread.platformPostId
+                    ? 'border-brand-300 bg-brand-50'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
+                }`}
+              >
+                <input
+                  aria-label={`Chọn bài ${thread.title}`}
+                  checked={selectedPostIds.has(thread.platformPostId)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300"
+                  onChange={() => togglePostSelection(thread.platformPostId)}
+                  type="checkbox"
+                />
+                <button
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => setSelectedId(thread.rootComments[0]?.id ?? null)}
+                  type="button"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                      {platformShortLabel(thread.platform)}
+                    </span>
+                    <span className="truncate text-xs text-slate-500">{thread.accountName}</span>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-sm font-semibold text-slate-950">
+                    {thread.title}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {thread.commentCount} comment · mới nhất {formatDateTime(thread.latestAt)}
+                  </p>
+                </button>
+              </div>
+            ))}
+            {!loading && postThreads.length === 0 ? (
+              <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">{emptyState.body}</p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="rounded-md border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-950">
+                {activeThread?.title ?? 'Chọn một bài đăng'}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Tree comment theo bài, cho phép chọn nhiều comment để reply cùng lúc.
+              </p>
+            </div>
+            <div className="flex gap-2 text-xs font-semibold text-slate-600">
+              <span className="rounded bg-slate-100 px-2 py-1">
+                {selectedPostIds.size} bài đã chọn
+              </span>
+              <span className="rounded bg-slate-100 px-2 py-1">
+                {selectedCommentIds.size} comment đã chọn
+              </span>
+            </div>
+          </div>
+
+          <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="space-y-3">
+              {activeThread?.rootComments.map((comment) => (
+                <ThreadCommentTree
+                  key={comment.id}
+                  busy={busy}
+                  childrenByParentId={activeThread.childrenByParentId}
+                  comment={comment}
+                  isSelected={selectedCommentIds.has(comment.id)}
+                  onOpenComment={setSelectedId}
+                  onToggleSelected={() => toggleCommentSelection(comment.id)}
+                  selectedCommentIds={selectedCommentIds}
+                  toggleCommentSelection={toggleCommentSelection}
+                />
+              ))}
+              {activeThread && activeThread.rootComments.length === 0 ? (
+                <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
+                  Bài này chưa có comment nào trong SocialHub.
+                </p>
+              ) : null}
+              {!activeThread ? (
+                <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
+                  Chưa có thread comment để hiển thị.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="space-y-3">
+              <section className="rounded-md border border-slate-200 p-3">
+                <p className="text-sm font-semibold text-slate-950">Comment nhiều bài</p>
+                <textarea
+                  className="mt-3 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  maxLength={2000}
+                  placeholder="Một comment công khai cho các bài đã chọn..."
+                  value={bulkPostCommentBody}
+                  onChange={(event) => setBulkPostCommentBody(event.target.value)}
+                />
+                <PrimaryButton
+                  className="mt-3 w-full"
+                  disabled={
+                    !canReply ||
+                    selectedPostIds.size === 0 ||
+                    !bulkPostCommentBody.trim() ||
+                    busy !== null
+                  }
+                  onClick={() => void bulkCreatePublicComments()}
+                  type="button"
+                >
+                  Queue comment
+                </PrimaryButton>
+              </section>
+
+              <section className="rounded-md border border-slate-200 p-3">
+                <p className="text-sm font-semibold text-slate-950">Reply nhiều comment</p>
+                <SelectInput
+                  className="mt-3"
+                  disabled={templates.length === 0}
+                  value=""
+                  onChange={(event) => {
+                    const template = templates.find((item) => item.id === event.target.value);
+                    if (template) setBulkReplyBody(template.body);
+                  }}
+                >
+                  <option value="">Chọn quick reply</option>
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}
+                    </option>
+                  ))}
+                </SelectInput>
+                <textarea
+                  className="mt-3 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  maxLength={2000}
+                  placeholder="Một reply cho các comment đã chọn..."
+                  value={bulkReplyBody}
+                  onChange={(event) => setBulkReplyBody(event.target.value)}
+                />
+                <PrimaryButton
+                  className="mt-3 w-full"
+                  disabled={
+                    !canReply ||
+                    selectedCommentIds.size === 0 ||
+                    !bulkReplyBody.trim() ||
+                    busy !== null
+                  }
+                  onClick={() => void bulkReplySelectedComments()}
+                  type="button"
+                >
+                  Queue reply
+                </PrimaryButton>
+              </section>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
@@ -647,6 +1002,8 @@ export default function InboxPage() {
             })
           }
           onReplyBodyChange={setReplyBody}
+          onCreatePublicComment={() => void createPublicCommentForSelectedPost()}
+          onPublicCommentBodyChange={setPublicCommentBody}
           onSelectTag={(nextTagId) => {
             const tagIds = new Set(selected.tags.map((tag) => tag.id));
             tagIds.add(nextTagId);
@@ -666,8 +1023,11 @@ export default function InboxPage() {
           onTagNameChange={setNewTagName}
           replyBlockReason={replyBlockReason}
           replyBody={replyBody}
+          publicCommentBlockReason={createCommentBlockReason}
+          publicCommentBody={publicCommentBody}
           selectedAssignee={selectedAssignee}
           selectedChildComments={selectedChildComments}
+          selectedChildrenByParentId={selectedThread?.childrenByParentId ?? EMPTY_COMMENT_CHILDREN}
           selectedPostLabel={selectedPostLabel}
           tagColor={newTagColor}
           tagName={newTagName}
@@ -700,6 +1060,8 @@ function CommentDrawer({
   onAddNote,
   onNoteBodyChange,
   onRemoveTag,
+  onCreatePublicComment,
+  onPublicCommentBodyChange,
   onReply,
   onReplyBodyChange,
   onSelectTag,
@@ -709,10 +1071,13 @@ function CommentDrawer({
   onTemplateBodyChange,
   onTemplateNameChange,
   onUseTemplate,
+  publicCommentBlockReason,
+  publicCommentBody,
   replyBlockReason,
   replyBody,
   selectedAssignee,
   selectedChildComments,
+  selectedChildrenByParentId,
   selectedPostLabel,
   tagColor,
   tagName,
@@ -739,6 +1104,8 @@ function CommentDrawer({
   onAddNote: () => void;
   onNoteBodyChange: (value: string) => void;
   onRemoveTag: (tagId: string) => void;
+  onCreatePublicComment: () => void;
+  onPublicCommentBodyChange: (value: string) => void;
   onReply: () => void;
   onReplyBodyChange: (value: string) => void;
   onSelectTag: (tagId: string) => void;
@@ -748,10 +1115,13 @@ function CommentDrawer({
   onTemplateBodyChange: (value: string) => void;
   onTemplateNameChange: (value: string) => void;
   onUseTemplate: (body: string) => void;
+  publicCommentBlockReason: string | null;
+  publicCommentBody: string;
   replyBlockReason: string | null;
   replyBody: string;
   selectedAssignee: string;
   selectedChildComments: CommentView[];
+  selectedChildrenByParentId: Map<string, CommentView[]>;
   selectedPostLabel: string;
   tagColor: string;
   tagName: string;
@@ -825,10 +1195,11 @@ function CommentDrawer({
                     onToggleHidden={onToggleHidden}
                   />
                   {selectedChildComments.map((child) => (
-                    <CommentBubble
+                    <ConversationCommentTree
                       key={child.id}
                       busy={busy}
                       canModerate={canModerate}
+                      childrenByParentId={selectedChildrenByParentId}
                       comment={child}
                       onDeleteComment={onDeleteComment}
                       onEditComment={onEditComment}
@@ -857,6 +1228,42 @@ function CommentDrawer({
                     </div>
                   ))}
                 </div>
+              </section>
+
+              <section className="rounded-md border border-slate-200 p-4">
+                <SectionTitle icon={<MessageSquare className="h-4 w-4" />} title="Comment mới" />
+                <p className="mt-2 text-sm text-slate-600">
+                  Gửi một comment công khai mới vào bài đăng này, không phải reply vào comment đang
+                  chọn.
+                </p>
+                {canReply && !publicCommentBlockReason ? (
+                  <div className="mt-3 grid gap-2">
+                    <textarea
+                      className="min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                      maxLength={2000}
+                      placeholder="Nhập comment mới cho bài đăng..."
+                      value={publicCommentBody}
+                      onChange={(event) => onPublicCommentBodyChange(event.target.value)}
+                    />
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs text-slate-500">
+                        {publicCommentBody.length}/2000
+                      </span>
+                      <PrimaryButton
+                        disabled={!publicCommentBody.trim() || busy !== null}
+                        onClick={onCreatePublicComment}
+                        type="button"
+                      >
+                        Gửi comment mới
+                      </PrimaryButton>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                    {publicCommentBlockReason ??
+                      'Vai trò hiện tại không có quyền gửi comment công khai.'}
+                  </p>
+                )}
               </section>
 
               <section className="rounded-md border border-slate-200 p-4">
@@ -1195,6 +1602,145 @@ function StatusTab({
   );
 }
 
+function ThreadCommentTree({
+  busy,
+  childrenByParentId,
+  comment,
+  depth = 0,
+  isSelected,
+  onOpenComment,
+  onToggleSelected,
+  selectedCommentIds,
+  toggleCommentSelection,
+}: {
+  busy: string | null;
+  childrenByParentId: Map<string, CommentView[]>;
+  comment: CommentView;
+  depth?: number;
+  isSelected: boolean;
+  onOpenComment: (commentId: string) => void;
+  onToggleSelected: () => void;
+  selectedCommentIds: Set<string>;
+  toggleCommentSelection: (commentId: string) => void;
+}) {
+  const childComments = childrenByParentId.get(comment.id) ?? [];
+  const nested = depth > 0;
+
+  return (
+    <div
+      className={`rounded-md border p-3 ${
+        nested ? 'border-slate-200 bg-white' : 'border-slate-200 bg-slate-50'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <input
+          aria-label={`Chọn comment ${comment.id}`}
+          checked={isSelected}
+          className="mt-1 h-4 w-4 rounded border-slate-300"
+          onChange={onToggleSelected}
+          type="checkbox"
+        />
+        <button
+          className="min-w-0 flex-1 text-left"
+          onClick={() => onOpenComment(comment.id)}
+          type="button"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-slate-950">
+              {comment.authorName ?? 'Unknown author'}
+            </p>
+            {comment.isFromPage ? (
+              <span className="rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-brand-700">
+                Page
+              </span>
+            ) : null}
+            <StatusBadge status={comment.status} />
+          </div>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+            {comment.message ?? 'Không có nội dung.'}
+          </p>
+          <p className="mt-2 text-xs text-slate-500">{formatDateTime(comment.postedAt)}</p>
+        </button>
+      </div>
+
+      {childComments.length > 0 ? (
+        <div
+          className={`mt-3 space-y-2 border-l-2 border-slate-200 ${depth >= 3 ? 'pl-3' : 'pl-4'}`}
+        >
+          {childComments.map((child) => (
+            <ThreadCommentTree
+              key={child.id}
+              busy={busy}
+              childrenByParentId={childrenByParentId}
+              comment={child}
+              depth={depth + 1}
+              isSelected={selectedCommentIds.has(child.id)}
+              onOpenComment={onOpenComment}
+              onToggleSelected={() => toggleCommentSelection(child.id)}
+              selectedCommentIds={selectedCommentIds}
+              toggleCommentSelection={toggleCommentSelection}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ConversationCommentTree({
+  busy,
+  canModerate,
+  childrenByParentId,
+  comment,
+  depth = 1,
+  onDeleteComment,
+  onEditComment,
+  onToggleHidden,
+}: {
+  busy?: string | null;
+  canModerate: boolean;
+  childrenByParentId: Map<string, CommentView[]>;
+  comment: CommentView;
+  depth?: number;
+  onDeleteComment?: (commentId: string, deleteFromPlatform: boolean) => void;
+  onEditComment?: (commentId: string, message: string) => void;
+  onToggleHidden?: (commentId: string, hidden: boolean) => void;
+}) {
+  const children = childrenByParentId.get(comment.id) ?? [];
+
+  return (
+    <div className={depth >= 4 ? 'ml-3' : ''}>
+      <CommentBubble
+        busy={busy}
+        canModerate={canModerate}
+        comment={comment}
+        onDeleteComment={onDeleteComment}
+        onEditComment={onEditComment}
+        onToggleHidden={onToggleHidden}
+      />
+      {children.length > 0 ? (
+        <div
+          className={`mt-2 space-y-2 border-l-2 border-slate-200 ${depth >= 4 ? 'pl-3' : 'pl-5'}`}
+        >
+          {children.map((child) => (
+            <ConversationCommentTree
+              key={child.id}
+              busy={busy}
+              canModerate={canModerate}
+              childrenByParentId={childrenByParentId}
+              comment={child}
+              depth={depth + 1}
+              onDeleteComment={onDeleteComment}
+              onEditComment={onEditComment}
+              onToggleHidden={onToggleHidden}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CommentBubble({
   busy,
   canModerate = false,
@@ -1385,6 +1931,86 @@ function IconMiniButton({
       {children}
     </button>
   );
+}
+
+interface PostThread {
+  platformPostId: string;
+  contentPostId: string;
+  title: string;
+  platform: Platform;
+  accountName: string;
+  commentCount: number;
+  latestAt: string;
+  rootComments: CommentView[];
+  childrenByParentId: Map<string, CommentView[]>;
+}
+
+function buildPostThreads(comments: CommentView[]): PostThread[] {
+  const threadMap = new Map<string, PostThread>();
+  const childrenByPost = new Map<string, Map<string, CommentView[]>>();
+
+  for (const comment of comments) {
+    const children = childrenByPost.get(comment.platformPostId) ?? new Map<string, CommentView[]>();
+    childrenByPost.set(comment.platformPostId, children);
+    if (comment.parentId) {
+      const existing = children.get(comment.parentId) ?? [];
+      existing.push(comment);
+      children.set(comment.parentId, existing);
+    }
+
+    const current = threadMap.get(comment.platformPostId);
+    const latestAt =
+      current && new Date(current.latestAt).getTime() > new Date(comment.postedAt).getTime()
+        ? current.latestAt
+        : comment.postedAt;
+    if (!current) {
+      threadMap.set(comment.platformPostId, {
+        platformPostId: comment.platformPostId,
+        contentPostId: comment.contentPostId,
+        title: comment.contentPostTitle ?? comment.contentPostId,
+        platform: comment.platform,
+        accountName: comment.socialAccountName,
+        commentCount: 1,
+        latestAt,
+        rootComments: comment.parentId ? [] : [comment],
+        childrenByParentId: children,
+      });
+    } else {
+      current.commentCount += 1;
+      current.latestAt = latestAt;
+      current.childrenByParentId = children;
+      if (!comment.parentId) current.rootComments.push(comment);
+    }
+  }
+
+  for (const thread of threadMap.values()) {
+    thread.rootComments.sort(sortCommentsNewestFirst);
+    for (const children of thread.childrenByParentId.values()) {
+      children.sort(sortCommentsOldestFirst);
+    }
+  }
+
+  return [...threadMap.values()].sort((a, b) => {
+    return new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime();
+  });
+}
+
+function sortCommentsNewestFirst(a: CommentView, b: CommentView) {
+  return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
+}
+
+function sortCommentsOldestFirst(a: CommentView, b: CommentView) {
+  return new Date(a.postedAt).getTime() - new Date(b.postedAt).getTime();
+}
+
+function toggleSetValue(current: Set<string>, value: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(value)) {
+    next.delete(value);
+  } else {
+    next.add(value);
+  }
+  return next;
 }
 
 function isReplyAlreadySynced(

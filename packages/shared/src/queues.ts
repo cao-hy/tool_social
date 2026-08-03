@@ -8,6 +8,8 @@ export const QUEUE_NAMES = [
   'publish-post',
   'sync-posts',
   'sync-comments',
+  'create-platform-comment',
+  'reply-platform-comment',
   'sync-post-metrics',
   'sync-account-metrics',
   'refresh-social-token',
@@ -33,6 +35,8 @@ export const QUEUE_SETTINGS: Record<QueueName, QueueSettings> = {
   'publish-post': { concurrency: 5, attempts: 5, backoffDelayMs: 5_000 },
   'sync-posts': { concurrency: 3, attempts: 3, backoffDelayMs: 10_000 },
   'sync-comments': { concurrency: 5, attempts: 3, backoffDelayMs: 10_000 },
+  'create-platform-comment': { concurrency: 3, attempts: 3, backoffDelayMs: 5_000 },
+  'reply-platform-comment': { concurrency: 3, attempts: 3, backoffDelayMs: 5_000 },
   'sync-post-metrics': { concurrency: 5, attempts: 3, backoffDelayMs: 15_000 },
   'sync-account-metrics': { concurrency: 3, attempts: 3, backoffDelayMs: 15_000 },
   'refresh-social-token': { concurrency: 3, attempts: 3, backoffDelayMs: 30_000 },
@@ -59,6 +63,22 @@ export interface QueuePayloads {
     socialAccountId: string;
     workspaceId: string;
     since?: string;
+  };
+  'create-platform-comment': {
+    platformPostId: string;
+    socialAccountId: string;
+    workspaceId: string;
+    message: string;
+    requestedByUserId: string;
+    correlationId: string;
+  };
+  'reply-platform-comment': {
+    commentId: string;
+    workspaceId: string;
+    message: string;
+    requestedByUserId: string;
+    correlationId: string;
+    replyRecordId?: string;
   };
   'sync-post-metrics': { platformPostId: string; workspaceId: string; syncRunId?: string };
   'sync-account-metrics': { socialAccountId: string; workspaceId: string; syncRunId?: string };
@@ -103,6 +123,14 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
     case 'sync-comments': {
       const p = payload as QueuePayloads['sync-comments'];
       return jobId(queue, p.platformPostId ?? p.socialAccountId, p.since ?? 'all');
+    }
+    case 'create-platform-comment': {
+      const p = payload as QueuePayloads['create-platform-comment'];
+      return jobId(queue, p.platformPostId, p.correlationId);
+    }
+    case 'reply-platform-comment': {
+      const p = payload as QueuePayloads['reply-platform-comment'];
+      return jobId(queue, p.commentId, p.correlationId);
     }
     case 'sync-post-metrics': {
       const p = payload as QueuePayloads['sync-post-metrics'];

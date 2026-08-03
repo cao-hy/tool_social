@@ -53,6 +53,7 @@ export const CAPABILITY_KEYS = [
   // Comments
   'readComments',
   'readNestedComments',
+  'createComment',
   'replyToComment',
   'editComment',
   'hideComment',
