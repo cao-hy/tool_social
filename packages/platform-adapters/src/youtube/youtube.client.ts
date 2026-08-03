@@ -13,7 +13,9 @@ import {
   youtubeVideoResponseSchema,
   youtubeVideosResponseSchema,
   youtubePlaylistItemsResponseSchema,
+  youtubeAnalyticsReportSchema,
   type YouTubeChannel,
+  type YouTubeAnalyticsReport,
   type YouTubeComment,
   type YouTubeCommentThreadsResponse,
   type YouTubeTokenResponse,
@@ -53,6 +55,7 @@ export class YouTubeClient {
   private readonly revokeUrl = 'https://oauth2.googleapis.com/revoke';
   private readonly apiBaseUrl = 'https://www.googleapis.com/youtube/v3';
   private readonly uploadBaseUrl = 'https://www.googleapis.com/upload/youtube/v3';
+  private readonly analyticsBaseUrl = 'https://youtubeanalytics.googleapis.com/v2';
 
   private readonly fetch: AdapterFetch;
 
@@ -247,6 +250,34 @@ export class YouTubeClient {
       });
     }
     return video;
+  }
+
+  queryAnalyticsReport(input: {
+    accessToken: string;
+    startDate: string;
+    endDate: string;
+    metrics: string[];
+    dimensions?: string[];
+    filters?: string;
+    sort?: string;
+    maxResults?: number;
+  }): Promise<YouTubeAnalyticsReport> {
+    return this.getFromBaseUrl(
+      this.analyticsBaseUrl,
+      '/reports',
+      {
+        ids: 'channel==MINE',
+        startDate: input.startDate,
+        endDate: input.endDate,
+        metrics: input.metrics.join(','),
+        ...(input.dimensions?.length ? { dimensions: input.dimensions.join(',') } : {}),
+        ...(input.filters ? { filters: input.filters } : {}),
+        ...(input.sort ? { sort: input.sort } : {}),
+        ...(input.maxResults ? { maxResults: String(input.maxResults) } : {}),
+      },
+      youtubeAnalyticsReportSchema,
+      input.accessToken,
+    );
   }
 
   updateVideoPrivacy(input: {
@@ -519,6 +550,31 @@ export class YouTubeClient {
     accessToken: string,
   ): Promise<T> {
     const url = new URL(`${this.apiBaseUrl}${path}`);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+
+    let response: Response;
+    try {
+      response = await this.fetch(url, {
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(15000),
+      });
+    } catch (error) {
+      throw youtubeNetworkError(error);
+    }
+
+    return parseResponse(response, schema);
+  }
+
+  private async getFromBaseUrl<T>(
+    baseUrl: string,
+    path: string,
+    params: Record<string, string>,
+    schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+    accessToken: string,
+  ): Promise<T> {
+    const url = new URL(`${baseUrl}${path}`);
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value);
     }

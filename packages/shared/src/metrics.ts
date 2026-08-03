@@ -28,6 +28,31 @@ export const metricValueSchema = z.object({
   source: metricSourceSchema,
 });
 
+export const PLATFORM_METRIC_UNITS = [
+  'count',
+  'percent',
+  'ratio',
+  'seconds',
+  'minutes',
+  'milliseconds',
+  'text',
+] as const;
+
+export type PlatformMetricUnit = (typeof PLATFORM_METRIC_UNITS)[number];
+export type PlatformMetricPrimitive = number | string | boolean | null;
+
+export interface PlatformMetricValue {
+  key: string;
+  label: string;
+  value: PlatformMetricPrimitive;
+  unit?: PlatformMetricUnit;
+  group?: string;
+  source?: MetricSource;
+  description?: string;
+}
+
+export type PlatformMetricMap = Record<string, PlatformMetricValue>;
+
 export function metricFromApi(value: number): MetricValue {
   return { value, source: 'PLATFORM_API' };
 }
@@ -71,6 +96,7 @@ export interface PostMetrics {
   saves: MetricValue;
   engagement: MetricValue;
   engagementRate: MetricValue;
+  raw?: Record<string, unknown>;
 }
 
 export interface AccountMetrics {
@@ -79,6 +105,7 @@ export interface AccountMetrics {
   reach: MetricValue;
   impressions: MetricValue;
   profileViews: MetricValue;
+  raw?: Record<string, unknown>;
 }
 
 export function emptyPostMetrics(source: MetricSource = 'NOT_SYNCED'): PostMetrics {

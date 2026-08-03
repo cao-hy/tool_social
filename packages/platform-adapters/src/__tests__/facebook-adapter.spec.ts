@@ -417,16 +417,23 @@ describe('FacebookPagesAdapter', () => {
       }
 
       if (url.pathname === '/v24.0/page-1_post-1/insights') {
-        expect(url.searchParams.get('metric')).toBe(
-          'post_impressions,post_impressions_unique,post_engaged_users',
-        );
         expect(url.searchParams.get('period')).toBe('lifetime');
+        const metric = url.searchParams.get('metric');
+        const values: Record<string, unknown> = {
+          post_media_view: 150,
+          post_total_media_view_unique: 90,
+          post_impressions: 100,
+          post_impressions_unique: 80,
+          post_engaged_users: 20,
+          post_clicks: 7,
+          post_reactions_by_type_total: { like: 10, love: 2 },
+          post_video_avg_time_watched: 5,
+        };
+        if (!metric || !(metric in values)) {
+          return jsonResponse({ data: [] });
+        }
         return jsonResponse({
-          data: [
-            { name: 'post_impressions', values: [{ value: 100 }] },
-            { name: 'post_impressions_unique', values: [{ value: 80 }] },
-            { name: 'post_engaged_users', values: [{ value: 20 }] },
-          ],
+          data: [{ name: metric, values: [{ value: values[metric] }] }],
         });
       }
 
@@ -448,11 +455,22 @@ describe('FacebookPagesAdapter', () => {
     expect(metrics.likes).toEqual({ value: 12, source: 'PLATFORM_API' });
     expect(metrics.comments).toEqual({ value: 3, source: 'PLATFORM_API' });
     expect(metrics.shares).toEqual({ value: 2, source: 'PLATFORM_API' });
+    expect(metrics.views).toEqual({ value: 150, source: 'PLATFORM_API' });
     expect(metrics.impressions).toEqual({ value: 100, source: 'PLATFORM_API' });
-    expect(metrics.reach).toEqual({ value: 80, source: 'PLATFORM_API' });
+    expect(metrics.reach).toEqual({ value: 90, source: 'PLATFORM_API' });
     expect(metrics.engagement).toEqual({ value: 20, source: 'PLATFORM_API' });
-    expect(metrics.engagementRate.value).toBeCloseTo(21.25);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(metrics.engagementRate.value).toBeCloseTo(18.888);
+    expect(metrics.raw).toMatchObject({
+      insights: {
+        post_media_view: 150,
+        post_reactions_by_type_total: { like: 10, love: 2 },
+      },
+      normalized: {
+        clicks: 7,
+        reactionBreakdown: { like: 10, love: 2 },
+      },
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(2);
   });
 
   it('giữ metrics engagement khi Facebook insights bị thiếu quyền', async () => {

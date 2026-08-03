@@ -217,11 +217,13 @@ async function persistPostMetrics(input: {
         metricDate: today,
         ...snapshotWrite(input.metrics),
         source: dominantSource(input.metrics),
+        raw: rawMetrics(input.metrics),
       },
       update: {
         capturedAt: now,
         ...snapshotWrite(input.metrics),
         source: dominantSource(input.metrics),
+        raw: rawMetrics(input.metrics),
       },
     }),
     input.prisma.platformPost.update({
@@ -281,11 +283,29 @@ function snapshotWrite(metrics: PostMetrics) {
 }
 
 function dominantSource(metrics: PostMetrics): MetricSource {
-  const values = Object.values(metrics);
+  const values = postMetricValues(metrics);
   if (values.some((metric) => metric.source === 'PLATFORM_API')) return 'PLATFORM_API';
   if (values.some((metric) => metric.source === 'DERIVED')) return 'DERIVED';
   if (values.every((metric) => metric.source === 'UNSUPPORTED')) return 'UNSUPPORTED';
   return 'NOT_SYNCED';
+}
+
+function postMetricValues(metrics: PostMetrics) {
+  return [
+    metrics.views,
+    metrics.likes,
+    metrics.comments,
+    metrics.shares,
+    metrics.reach,
+    metrics.impressions,
+    metrics.saves,
+    metrics.engagement,
+    metrics.engagementRate,
+  ];
+}
+
+function rawMetrics(metrics: PostMetrics): Prisma.InputJsonValue | undefined {
+  return metrics.raw === undefined ? undefined : (metrics.raw as Prisma.InputJsonValue);
 }
 
 function metricDate(date: Date, timezone: string): Date {

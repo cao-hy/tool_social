@@ -231,6 +231,23 @@ export class InstagramGraphClient {
     );
   }
 
+  async getUserInsights(input: {
+    igAccountId: string;
+    accessToken: string;
+    metrics: string[];
+    period?: 'day' | 'week' | 'days_28' | 'lifetime';
+  }): Promise<InstagramInsightsResponse> {
+    return this.get(
+      `/${input.igAccountId}/insights`,
+      {
+        metric: input.metrics.join(','),
+        period: input.period ?? 'day',
+        access_token: input.accessToken,
+      },
+      instagramInsightsResponseSchema,
+    );
+  }
+
   async getMediaComments(input: {
     mediaId: string;
     accessToken: string;

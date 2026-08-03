@@ -1,8 +1,12 @@
 import {
   computeEngagementRate,
+  derivedMetric,
   emptyPostMetrics,
   metricFromApi,
+  type AccountMetrics,
   type Paginated,
+  type PlatformMetricMap,
+  type PlatformMetricValue,
 } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported } from '../core/platform-error';
@@ -81,6 +85,58 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
   async getAccountProfile(ctx: AdapterContext): Promise<SocialAccountProfile> {
     const profile = await this.client.getPageProfile(ctx.accessToken);
     return mapFacebookPageProfile(profile);
+  }
+
+  async getAccountMetrics(ctx: AdapterContext): Promise<AccountMetrics> {
+    const profile = await this.client.getPageProfile(ctx.accessToken);
+    const metrics = emptyFacebookAccountMetrics();
+    const raw: Record<string, unknown> = {
+      profile: {
+        fanCount: profile.fan_count ?? null,
+      },
+    };
+
+    if (profile.fan_count !== undefined) metrics.followers = metricFromApi(profile.fan_count);
+
+    const insights = await this.readAvailablePageInsights(ctx, FACEBOOK_PAGE_METRICS);
+    raw.insights = insights;
+
+    const mediaViews = firstNumber(insights, ['page_media_view', 'page_impressions']);
+    const uniqueMediaViews = firstNumber(insights, [
+      'page_total_media_view_unique',
+      'page_impressions_unique',
+    ]);
+    const follows = firstNumber(insights, ['page_follows', 'page_fan_adds']);
+    const unfollows = firstNumber(insights, ['page_fan_removes']);
+    const profileViews = firstNumber(insights, ['page_views_total']);
+
+    if (mediaViews !== undefined) metrics.impressions = metricFromApi(mediaViews);
+    if (uniqueMediaViews !== undefined) metrics.reach = metricFromApi(uniqueMediaViews);
+    if (follows !== undefined && unfollows !== undefined) {
+      metrics.followersGained = derivedMetric(follows - unfollows);
+    } else if (follows !== undefined) {
+      metrics.followersGained = metricFromApi(follows);
+    }
+    if (profileViews !== undefined) metrics.profileViews = metricFromApi(profileViews);
+    raw.normalized = {
+      mediaViews: mediaViews ?? null,
+      uniqueMediaViews: uniqueMediaViews ?? null,
+      follows: follows ?? null,
+      unfollows: unfollows ?? null,
+      profileViews: profileViews ?? null,
+    };
+    raw.platformMetrics = facebookPlatformMetrics({
+      ...insights,
+      fan_count: profile.fan_count ?? null,
+      mediaViews: mediaViews ?? null,
+      uniqueMediaViews: uniqueMediaViews ?? null,
+      follows: follows ?? null,
+      unfollows: unfollows ?? null,
+      profileViews: profileViews ?? null,
+    });
+
+    metrics.raw = raw;
+    return metrics;
   }
 
   validatePost(input: PublishPostInput) {
@@ -374,6 +430,7 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
 
   async getPostMetrics(ctx: AdapterContext, externalPostId: string): Promise<PostMetrics> {
     const metrics = emptyPostMetrics('UNSUPPORTED');
+    const raw: Record<string, unknown> = {};
 
     const engagement = await this.client.getPostEngagement({
       externalPostId,
@@ -383,29 +440,82 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     const comments = engagement.comments?.summary?.total_count;
     const shares = engagement.shares?.count;
 
+    raw.engagementFields = {
+      reactions: likes ?? null,
+      comments: comments ?? null,
+      shares: shares ?? null,
+    };
+
     if (likes !== undefined) metrics.likes = metricFromApi(likes);
     if (comments !== undefined) metrics.comments = metricFromApi(comments);
     if (shares !== undefined) metrics.shares = metricFromApi(shares);
 
-    const insights = await this.readPostInsights(ctx, externalPostId, [
-      'post_impressions',
-      'post_impressions_unique',
-      'post_engaged_users',
-    ]);
+    const insights = await this.readAvailablePostInsights(
+      ctx,
+      externalPostId,
+      FACEBOOK_POST_METRICS,
+    );
+    raw.insights = insights;
 
-    if (insights.post_impressions !== undefined) {
-      metrics.impressions = metricFromApi(insights.post_impressions);
+    const views = firstNumber(insights, [
+      'post_media_view',
+      'post_video_views',
+      'post_video_views_15s',
+      'post_video_complete_views_30s',
+    ]);
+    const reach = firstNumber(insights, [
+      'post_total_media_view_unique',
+      'post_impressions_unique',
+      'post_video_views_unique',
+      'post_video_complete_views_30s_unique',
+    ]);
+    const impressions = firstNumber(insights, ['post_impressions', 'post_media_view']);
+    const engagedUsers = firstNumber(insights, ['post_engaged_users']);
+    const clicks = firstNumber(insights, ['post_clicks']);
+    const reactionBreakdown = numberRecord(insights.post_reactions_by_type_total);
+    const reactionBreakdownTotal = sumRecordValues(reactionBreakdown);
+
+    raw.normalized = {
+      views: views ?? null,
+      reach: reach ?? null,
+      impressions: impressions ?? null,
+      engagedUsers: engagedUsers ?? null,
+      clicks: clicks ?? null,
+      reactionBreakdown,
+    };
+    raw.platformMetrics = facebookPlatformMetrics({
+      ...insights,
+      reactions: likes ?? null,
+      comments: comments ?? null,
+      shares: shares ?? null,
+      views: views ?? null,
+      reach: reach ?? null,
+      impressions: impressions ?? null,
+      engagedUsers: engagedUsers ?? null,
+      clicks: clicks ?? null,
+      ...(reactionBreakdown
+        ? Object.fromEntries(
+            Object.entries(reactionBreakdown).map(([key, value]) => [`reaction_${key}`, value]),
+          )
+        : {}),
+    });
+
+    if (views !== undefined) metrics.views = metricFromApi(views);
+    if (impressions !== undefined) metrics.impressions = metricFromApi(impressions);
+    if (reach !== undefined) metrics.reach = metricFromApi(reach);
+
+    if (reactionBreakdownTotal !== undefined && likes === undefined) {
+      metrics.likes = metricFromApi(reactionBreakdownTotal);
     }
-    if (insights.post_impressions_unique !== undefined) {
-      metrics.reach = metricFromApi(insights.post_impressions_unique);
-    }
-    if (insights.post_engaged_users !== undefined) {
-      metrics.engagement = metricFromApi(insights.post_engaged_users);
+
+    if (engagedUsers !== undefined) {
+      metrics.engagement = metricFromApi(engagedUsers);
     } else if (likes !== undefined || comments !== undefined || shares !== undefined) {
       metrics.engagement = metricFromApi((likes ?? 0) + (comments ?? 0) + (shares ?? 0));
     }
 
     metrics.engagementRate = computeEngagementRate(metrics);
+    metrics.raw = raw;
     return metrics;
   }
 
@@ -425,7 +535,7 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     ctx: AdapterContext,
     externalPostId: string,
     metrics: string[],
-  ): Promise<Record<string, number>> {
+  ): Promise<Record<string, unknown>> {
     try {
       const response = await this.client.getPostInsights({
         externalPostId,
@@ -434,7 +544,7 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
       });
       return Object.fromEntries(
         response.data.flatMap((item) => {
-          const value = readFacebookInsightNumber(item.values?.at(-1)?.value);
+          const value = readFacebookInsightValue(item.values?.at(-1)?.value);
           return value === undefined ? [] : [[item.name, value]];
         }),
       );
@@ -448,11 +558,126 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
       return {};
     }
   }
+
+  private async readAvailablePostInsights(
+    ctx: AdapterContext,
+    externalPostId: string,
+    metrics: readonly string[],
+  ): Promise<Record<string, unknown>> {
+    const entries = await Promise.all(
+      metrics.map(async (metric) => {
+        const result = await this.readPostInsights(ctx, externalPostId, [metric]);
+        return [metric, result[metric]] as const;
+      }),
+    );
+    return Object.fromEntries(entries.filter(([, value]) => value !== undefined));
+  }
+
+  private async readPageInsights(
+    ctx: AdapterContext,
+    metrics: readonly string[],
+  ): Promise<Record<string, unknown>> {
+    try {
+      const response = await this.client.getPageInsights({
+        pageAccessToken: ctx.accessToken,
+        metrics: [...metrics],
+      });
+      return Object.fromEntries(
+        response.data.flatMap((item) => {
+          const value = readFacebookInsightValue(item.values?.at(-1)?.value);
+          return value === undefined ? [] : [[item.name, value]];
+        }),
+      );
+    } catch (error) {
+      ctx.logger?.debug('Facebook page insights unavailable', {
+        correlationId: ctx.correlationId,
+        metrics,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
+  }
+
+  private async readAvailablePageInsights(
+    ctx: AdapterContext,
+    metrics: readonly string[],
+  ): Promise<Record<string, unknown>> {
+    const entries = await Promise.all(
+      metrics.map(async (metric) => {
+        const result = await this.readPageInsights(ctx, [metric]);
+        return [metric, result[metric]] as const;
+      }),
+    );
+    return Object.fromEntries(entries.filter(([, value]) => value !== undefined));
+  }
 }
+
+function emptyFacebookAccountMetrics(): AccountMetrics {
+  const metric = { value: null, source: 'UNSUPPORTED' as const };
+  return {
+    followers: { ...metric },
+    followersGained: { ...metric },
+    reach: { ...metric },
+    impressions: { ...metric },
+    profileViews: { ...metric },
+  };
+}
+
+const FACEBOOK_POST_METRICS = [
+  'post_media_view',
+  'post_total_media_view_unique',
+  'post_media_view_paid',
+  'post_media_view_organic',
+  'post_media_view_followers',
+  'post_impressions',
+  'post_impressions_unique',
+  'post_impressions_paid',
+  'post_impressions_organic',
+  'post_impressions_fan',
+  'post_impressions_fan_paid',
+  'post_engaged_users',
+  'post_clicks',
+  'post_clicks_by_type',
+  'post_reactions_by_type_total',
+  'post_negative_feedback',
+  'post_negative_feedback_by_type',
+  'post_video_views',
+  'post_video_views_unique',
+  'post_video_views_15s',
+  'post_video_views_60s_excludes_shorter',
+  'post_video_complete_views_30s',
+  'post_video_complete_views_30s_unique',
+  'post_video_avg_time_watched',
+  'post_video_view_time',
+] as const;
+
+const FACEBOOK_PAGE_METRICS = [
+  'page_media_view',
+  'page_total_media_view_unique',
+  'page_media_view_paid',
+  'page_media_view_organic',
+  'page_media_view_followers',
+  'page_impressions',
+  'page_impressions_unique',
+  'page_post_engagements',
+  'page_follows',
+  'page_fan_adds',
+  'page_fan_removes',
+  'page_views_total',
+  'page_video_views',
+  'page_video_complete_views_30s',
+] as const;
 
 function fileNameFromMediaUrl(value: string, fallback: string): string {
   const clean = value.split('?')[0]?.split('/').pop();
   return clean && clean.includes('.') ? clean : fallback;
+}
+
+function readFacebookInsightValue(value: unknown): unknown {
+  const number = readFacebookInsightNumber(value);
+  if (number !== undefined) return number;
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  return undefined;
 }
 
 function readFacebookInsightNumber(value: unknown): number | undefined {
@@ -462,4 +687,75 @@ function readFacebookInsightNumber(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+function firstNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const value = readFacebookInsightNumber(record[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function numberRecord(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const result: Record<string, number> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const number = readFacebookInsightNumber(item);
+    if (number !== undefined) result[key] = number;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function sumRecordValues(record: Record<string, number> | undefined): number | undefined {
+  if (!record) return undefined;
+  return Object.values(record).reduce((total, value) => total + value, 0);
+}
+
+function facebookPlatformMetrics(record: Record<string, unknown>): PlatformMetricMap {
+  const metrics: PlatformMetricMap = {};
+  for (const [key, value] of Object.entries(record)) {
+    const primitive = facebookMetricPrimitive(value);
+    if (primitive === null && value !== null) continue;
+    metrics[key] = {
+      key,
+      label: facebookMetricLabel(key),
+      value: primitive,
+      unit: facebookMetricUnit(key),
+      group: facebookMetricGroup(key),
+      source: primitive === null ? 'NOT_SYNCED' : 'PLATFORM_API',
+    };
+  }
+  return metrics;
+}
+
+function facebookMetricPrimitive(value: unknown): PlatformMetricValue['value'] {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (value === null || value === undefined) return null;
+  return null;
+}
+
+function facebookMetricLabel(key: string): string {
+  return key
+    .replace(/^post_/, '')
+    .replace(/^page_/, '')
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function facebookMetricUnit(key: string): PlatformMetricValue['unit'] {
+  if (key.includes('rate')) return 'percent';
+  return 'count';
+}
+
+function facebookMetricGroup(key: string): string {
+  if (key.includes('video') || key.includes('media_view') || key === 'views') return 'Video';
+  if (key.includes('reaction') || key.includes('comment') || key.includes('share')) {
+    return 'Engagement';
+  }
+  if (key.includes('click')) return 'Traffic';
+  if (key.includes('fan') || key.includes('follow') || key.includes('profile')) return 'Page';
+  return 'Distribution';
 }

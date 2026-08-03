@@ -385,6 +385,21 @@ export class FacebookGraphClient {
     );
   }
 
+  async getPageInsights(input: {
+    pageAccessToken: string;
+    metrics: string[];
+  }): Promise<FacebookInsightsResponse> {
+    return this.get(
+      '/me/insights',
+      {
+        access_token: input.pageAccessToken,
+        metric: input.metrics.join(','),
+        period: 'day',
+      },
+      facebookInsightsResponseSchema,
+    );
+  }
+
   private async get<T>(
     path: string,
     params: Record<string, string>,

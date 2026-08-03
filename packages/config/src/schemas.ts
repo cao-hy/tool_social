@@ -52,7 +52,7 @@ const observabilitySchema = z.object({
 
 const syncSchema = z.object({
   EXTERNAL_POST_SYNC_CUTOFF_DAYS: z.coerce.number().int().min(1).default(365),
-  EXTERNAL_POST_SYNC_MANUAL_COOLDOWN_HOURS: z.coerce.number().int().min(0).default(24),
+  EXTERNAL_POST_SYNC_MANUAL_COOLDOWN_HOURS: z.coerce.number().int().min(0).default(2),
 });
 
 /**

@@ -7,6 +7,7 @@ import {
   type MetricSource,
   type MetricValue,
   type Platform,
+  type PlatformMetricValue,
   type QueueName,
   type QueuePayload,
 } from '@socialhub/shared';
@@ -68,6 +69,11 @@ export class AnalyticsService implements OnModuleDestroy {
           contentPost: { select: { id: true, title: true, body: true, publishedAt: true } },
           socialAccount: { select: { id: true, platform: true, name: true, username: true } },
           metric: true,
+          metricSnapshots: {
+            orderBy: { capturedAt: 'desc' },
+            take: 1,
+            select: { raw: true, capturedAt: true },
+          },
         },
         orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
         take: 500,
@@ -302,12 +308,20 @@ function buildPlatformBreakdown(
   platformPosts: Array<{
     platform: Platform;
     metric: MetricRecord | null;
+    metricSnapshots?: Array<{ raw: Prisma.JsonValue | null }>;
   }>,
 ) {
   const map = new Map<
     Platform,
-    { platform: Platform; targets: number; syncedTargets: number; metrics: MetricBag }
+    {
+      platform: Platform;
+      targets: number;
+      syncedTargets: number;
+      metrics: MetricBag;
+      platformMetrics: PlatformMetricView[];
+    }
   >();
+  const platformMetricMap = new Map<Platform, Map<string, PlatformMetricView>>();
   for (const post of platformPosts) {
     const current =
       map.get(post.platform) ??
@@ -316,16 +330,32 @@ function buildPlatformBreakdown(
         targets: 0,
         syncedTargets: 0,
         metrics: emptyMetricBag(),
+        platformMetrics: [],
       } satisfies {
         platform: Platform;
         targets: number;
         syncedTargets: number;
         metrics: MetricBag;
+        platformMetrics: PlatformMetricView[];
       });
     current.targets += 1;
     if (post.metric?.lastSyncedAt) current.syncedTargets += 1;
     current.metrics = mergeMetricBags(current.metrics, metricsFromPostMetric(post.metric));
+    const extracted = extractPlatformMetrics(post.metricSnapshots?.[0]?.raw);
+    if (extracted.length > 0) {
+      const bucket = platformMetricMap.get(post.platform) ?? new Map<string, PlatformMetricView>();
+      for (const metric of extracted) {
+        const existing = bucket.get(metric.key);
+        bucket.set(metric.key, mergePlatformMetric(existing, metric));
+      }
+      platformMetricMap.set(post.platform, bucket);
+    }
     map.set(post.platform, current);
+  }
+  for (const item of map.values()) {
+    item.platformMetrics = [...(platformMetricMap.get(item.platform)?.values() ?? [])].sort(
+      comparePlatformMetrics,
+    );
   }
   return [...map.values()].sort((left, right) => left.platform.localeCompare(right.platform));
 }
@@ -461,6 +491,7 @@ function buildAllPosts(
     contentPost: { id: string; title: string | null; body: string | null };
     socialAccount: { name: string };
     metric: MetricRecord | null;
+    metricSnapshots?: Array<{ raw: Prisma.JsonValue | null; capturedAt: Date }>;
   }>,
 ) {
   return platformPosts
@@ -476,11 +507,97 @@ function buildAllPosts(
         externalUrl: post.externalUrl,
         publishedAt: post.publishedAt?.toISOString() ?? null,
         metrics,
+        platformMetrics: extractPlatformMetrics(post.metricSnapshots?.[0]?.raw),
+        platformMetricsCapturedAt: post.metricSnapshots?.[0]?.capturedAt.toISOString() ?? null,
         score,
       };
     })
     .sort((left, right) => (right.score ?? 0) - (left.score ?? 0))
     .map(({ score: _score, ...post }) => post);
+}
+
+type PlatformMetricView = {
+  key: string;
+  label: string;
+  value: PlatformMetricValue['value'];
+  unit?: PlatformMetricValue['unit'];
+  group?: string;
+  source?: MetricSource;
+  description?: string;
+};
+
+function extractPlatformMetrics(raw: Prisma.JsonValue | null | undefined): PlatformMetricView[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+  const platformMetrics = (raw as Record<string, unknown>).platformMetrics;
+  if (!platformMetrics || typeof platformMetrics !== 'object' || Array.isArray(platformMetrics)) {
+    return [];
+  }
+  return Object.entries(platformMetrics)
+    .flatMap(([fallbackKey, value]) => normalizePlatformMetric(fallbackKey, value))
+    .sort(comparePlatformMetrics);
+}
+
+function normalizePlatformMetric(fallbackKey: string, value: unknown): PlatformMetricView[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const record = value as Record<string, unknown>;
+  const metricValue = record.value;
+  if (!isPlatformMetricPrimitive(metricValue)) return [];
+  return [
+    {
+      key: typeof record.key === 'string' ? record.key : fallbackKey,
+      label:
+        typeof record.label === 'string'
+          ? record.label
+          : fallbackKey
+              .split(/[_-]/)
+              .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+              .join(' '),
+      value: metricValue,
+      unit: readPlatformMetricUnit(record.unit),
+      group: typeof record.group === 'string' ? record.group : undefined,
+      source: readMetricSource(record.source),
+      description: typeof record.description === 'string' ? record.description : undefined,
+    },
+  ];
+}
+
+function mergePlatformMetric(
+  left: PlatformMetricView | undefined,
+  right: PlatformMetricView,
+): PlatformMetricView {
+  if (!left) return right;
+  if (typeof left.value === 'number' && typeof right.value === 'number') {
+    return { ...left, value: left.value + right.value, source: 'DERIVED' };
+  }
+  return left.value === null ? right : left;
+}
+
+function comparePlatformMetrics(left: PlatformMetricView, right: PlatformMetricView): number {
+  const group = (left.group ?? '').localeCompare(right.group ?? '');
+  return group === 0 ? left.label.localeCompare(right.label) : group;
+}
+
+function isPlatformMetricPrimitive(value: unknown): value is PlatformMetricValue['value'] {
+  return (
+    value === null ||
+    typeof value === 'number' ||
+    typeof value === 'string' ||
+    typeof value === 'boolean'
+  );
+}
+
+function readPlatformMetricUnit(value: unknown): PlatformMetricView['unit'] {
+  const allowed = ['count', 'percent', 'ratio', 'seconds', 'minutes', 'milliseconds', 'text'];
+  return typeof value === 'string' && allowed.includes(value)
+    ? (value as PlatformMetricView['unit'])
+    : undefined;
+}
+
+function readMetricSource(value: unknown): MetricSource | undefined {
+  const allowed: MetricSource[] = ['PLATFORM_API', 'DERIVED', 'UNSUPPORTED', 'NOT_SYNCED'];
+  return typeof value === 'string' && allowed.includes(value as MetricSource)
+    ? (value as MetricSource)
+    : undefined;
 }
 
 type MetricRecord = {

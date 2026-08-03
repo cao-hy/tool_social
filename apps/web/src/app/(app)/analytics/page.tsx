@@ -12,6 +12,7 @@ import type {
   AnalyticsMetricKey,
   BackgroundJobView,
   MetricValueView,
+  PlatformMetricView,
   SocialAccountView,
 } from '@/lib/types';
 import { useToast } from '@/components/toast-provider';
@@ -562,6 +563,37 @@ export default function AnalyticsPage() {
             </div>
           </section>
 
+          <section className="rounded-lg border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 p-5">
+              <h2 className="text-lg font-semibold text-slate-950">Metric riêng theo nền tảng</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Những chỉ số nền tảng có nhưng bảng chung không ép cộng ngang, ví dụ watch time,
+                click rate, processing status, category hoặc breakdown engagement.
+              </p>
+            </div>
+            <div className="grid gap-4 p-5 lg:grid-cols-2">
+              {dashboard.byPlatform
+                .filter((row) => row.platformMetrics.length > 0)
+                .map((row) => (
+                  <article key={row.platform} className="rounded-lg border border-slate-200 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="font-semibold text-slate-950">{row.platform}</h3>
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                        {row.platformMetrics.length} metric
+                      </span>
+                    </div>
+                    <PlatformMetricGrid metrics={row.platformMetrics.slice(0, 12)} />
+                  </article>
+                ))}
+              {dashboard.byPlatform.every((row) => row.platformMetrics.length === 0) ? (
+                <p className="text-sm text-slate-600">
+                  Chưa có metric riêng. Bấm Sync metrics sau khi bài đã publish hoặc kéo bài ngoài
+                  tool về DB.
+                </p>
+              ) : null}
+            </div>
+          </section>
+
           <section className="grid gap-6 xl:grid-cols-[1fr_420px]">
             <div className="rounded-lg border border-slate-200 bg-white">
               <div className="border-b border-slate-200 p-5">
@@ -671,6 +703,7 @@ export default function AnalyticsPage() {
                                   {new Date(post.publishedAt).toLocaleString('vi-VN')}
                                 </p>
                               ) : null}
+                              <PlatformMetricBadges metrics={post.platformMetrics.slice(0, 4)} />
                             </div>
                           </td>
                           <td className="px-5 py-4">
@@ -1000,6 +1033,57 @@ function MetricCell({ metric, percent = false }: { metric: MetricValueView; perc
       <p className="mt-1 text-xs text-slate-500">{metricSourceLabel(metric.source)}</p>
     </div>
   );
+}
+
+function PlatformMetricGrid({ metrics }: { metrics: PlatformMetricView[] }) {
+  if (metrics.length === 0) {
+    return <p className="mt-3 text-sm text-slate-500">Chưa có metric riêng.</p>;
+  }
+  return (
+    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+      {metrics.map((metric) => (
+        <div key={metric.key} className="rounded-md bg-slate-50 p-3">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs font-semibold uppercase text-slate-500">{metric.label}</p>
+            {metric.group ? (
+              <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                {metric.group}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 break-words font-semibold text-slate-950">
+            {formatPlatformMetricValue(metric)}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PlatformMetricBadges({ metrics }: { metrics: PlatformMetricView[] }) {
+  if (metrics.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {metrics.map((metric) => (
+        <span
+          key={metric.key}
+          className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-600"
+        >
+          {metric.label}: {formatPlatformMetricValue(metric)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function formatPlatformMetricValue(metric: PlatformMetricView): string {
+  if (metric.value === null) return '—';
+  if (typeof metric.value === 'boolean') return metric.value ? 'Có' : 'Không';
+  if (typeof metric.value === 'string') return metric.value;
+  if (metric.unit === 'percent') return `${metric.value.toLocaleString('en-US')}%`;
+  if (metric.unit === 'seconds') return `${metric.value.toLocaleString('en-US')}s`;
+  if (metric.unit === 'milliseconds') return `${metric.value.toLocaleString('en-US')}ms`;
+  return metric.value.toLocaleString('en-US');
 }
 
 function MiniMetric({ label, metric }: { label: string; metric: MetricValueView }) {

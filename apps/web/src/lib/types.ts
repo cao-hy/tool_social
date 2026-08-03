@@ -117,6 +117,16 @@ export type AnalyticsMetricKey =
 
 export type AnalyticsMetricBag = Record<AnalyticsMetricKey, MetricValueView>;
 
+export interface PlatformMetricView {
+  key: string;
+  label: string;
+  value: number | string | boolean | null;
+  unit?: string;
+  group?: string;
+  source?: string;
+  description?: string;
+}
+
 export interface AnalyticsDashboardView {
   generatedAt: string;
   range: { from: string; to: string; timezone: string };
@@ -131,6 +141,7 @@ export interface AnalyticsDashboardView {
     targets: number;
     syncedTargets: number;
     metrics: AnalyticsMetricBag;
+    platformMetrics: PlatformMetricView[];
   }>;
   timeSeries: Array<{
     date: string;
@@ -146,6 +157,8 @@ export interface AnalyticsDashboardView {
     externalUrl: string | null;
     publishedAt: string | null;
     metrics: AnalyticsMetricBag;
+    platformMetrics: PlatformMetricView[];
+    platformMetricsCapturedAt: string | null;
   }>;
   followerGrowth: Array<{
     socialAccountId: string;

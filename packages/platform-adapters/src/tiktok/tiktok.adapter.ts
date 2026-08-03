@@ -1,4 +1,11 @@
-import { computeEngagementRate, emptyPostMetrics, metricFromApi } from '@socialhub/shared';
+import {
+  computeEngagementRate,
+  emptyPostMetrics,
+  metricFromApi,
+  type AccountMetrics,
+  type PlatformMetricMap,
+  type PlatformMetricValue,
+} from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
@@ -90,6 +97,19 @@ export class TikTokAdapter implements SocialPlatformAdapter {
   async getAccountProfile(ctx: AdapterContext): Promise<SocialAccountProfile> {
     const profile = await this.client.getUserInfo(ctx.accessToken);
     return mapTikTokProfile(profile.data.user);
+  }
+
+  async getAccountMetrics(ctx: AdapterContext): Promise<AccountMetrics> {
+    const profile = await this.client.getUserInfo(ctx.accessToken);
+    const metrics = emptyTikTokAccountMetrics();
+    if (profile.data.user.follower_count !== undefined) {
+      metrics.followers = metricFromApi(profile.data.user.follower_count);
+    }
+    metrics.raw = {
+      profile: profile.data.user,
+      platformMetrics: tiktokAccountPlatformMetrics(profile.data.user),
+    };
+    return metrics;
   }
 
   async queryCreatorInfo(ctx: AdapterContext): Promise<TikTokCreatorInfo> {
@@ -230,6 +250,10 @@ export class TikTokAdapter implements SocialPlatformAdapter {
       (video.like_count ?? 0) + (video.comment_count ?? 0) + (video.share_count ?? 0),
     );
     metrics.engagementRate = computeEngagementRate(metrics);
+    metrics.raw = {
+      video,
+      platformMetrics: tiktokVideoPlatformMetrics(video),
+    };
     return metrics;
   }
 
@@ -242,6 +266,123 @@ function tiktokCaption(input: PublishPostInput): string {
   return [input.caption, input.hashtags?.map((tag) => `#${tag.replace(/^#/, '')}`).join(' ')]
     .filter(Boolean)
     .join('\n\n');
+}
+
+function emptyTikTokAccountMetrics(): AccountMetrics {
+  const blank = { value: null, source: 'NOT_SYNCED' as const };
+  return {
+    followers: { ...blank },
+    followersGained: { ...blank },
+    reach: { ...blank },
+    impressions: { ...blank },
+    profileViews: { ...blank },
+  };
+}
+
+function tiktokVideoPlatformMetrics(video: {
+  view_count?: number;
+  like_count?: number;
+  comment_count?: number;
+  share_count?: number;
+  duration?: number;
+  width?: number;
+  height?: number;
+}): PlatformMetricMap {
+  const metrics: PlatformMetricMap = {};
+  addTikTokPlatformMetric(
+    metrics,
+    'view_count',
+    'Views',
+    video.view_count ?? null,
+    'count',
+    'Video',
+  );
+  addTikTokPlatformMetric(
+    metrics,
+    'like_count',
+    'Likes',
+    video.like_count ?? null,
+    'count',
+    'Engagement',
+  );
+  addTikTokPlatformMetric(
+    metrics,
+    'comment_count',
+    'Comments',
+    video.comment_count ?? null,
+    'count',
+    'Engagement',
+  );
+  addTikTokPlatformMetric(
+    metrics,
+    'share_count',
+    'Shares',
+    video.share_count ?? null,
+    'count',
+    'Engagement',
+  );
+  addTikTokPlatformMetric(
+    metrics,
+    'duration',
+    'Duration',
+    video.duration ?? null,
+    'seconds',
+    'Video',
+  );
+  addTikTokPlatformMetric(metrics, 'width', 'Width', video.width ?? null, 'count', 'Video');
+  addTikTokPlatformMetric(metrics, 'height', 'Height', video.height ?? null, 'count', 'Video');
+  return metrics;
+}
+
+function tiktokAccountPlatformMetrics(profile: {
+  follower_count?: number;
+  display_name?: string;
+  username?: string;
+}): PlatformMetricMap {
+  const metrics: PlatformMetricMap = {};
+  addTikTokPlatformMetric(
+    metrics,
+    'follower_count',
+    'Followers',
+    profile.follower_count ?? null,
+    'count',
+    'Profile',
+  );
+  addTikTokPlatformMetric(
+    metrics,
+    'display_name',
+    'Display name',
+    profile.display_name ?? null,
+    'text',
+    'Profile',
+  );
+  addTikTokPlatformMetric(
+    metrics,
+    'username',
+    'Username',
+    profile.username ?? null,
+    'text',
+    'Profile',
+  );
+  return metrics;
+}
+
+function addTikTokPlatformMetric(
+  target: PlatformMetricMap,
+  key: string,
+  label: string,
+  value: PlatformMetricValue['value'],
+  unit: PlatformMetricValue['unit'],
+  group: string,
+): void {
+  target[key] = {
+    key,
+    label,
+    value,
+    unit,
+    group,
+    source: value === null ? 'NOT_SYNCED' : 'PLATFORM_API',
+  };
 }
 
 function tiktokPublishOptions(options: Record<string, unknown> | undefined): {

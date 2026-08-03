@@ -84,7 +84,7 @@ export const instagramInsightSchema = z.object({
   name: z.string(),
   values: z.array(
     z.object({
-      value: z.number().optional(),
+      value: z.unknown().optional(),
     }),
   ),
 });

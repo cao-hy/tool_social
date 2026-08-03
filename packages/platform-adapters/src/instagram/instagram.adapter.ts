@@ -2,7 +2,10 @@ import {
   computeEngagementRate,
   emptyPostMetrics,
   metricFromApi,
+  type AccountMetrics,
   type Paginated,
+  type PlatformMetricMap,
+  type PlatformMetricValue,
 } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported, createPlatformError } from '../core/platform-error';
@@ -42,6 +45,48 @@ export const INSTAGRAM_OAUTH_SCOPES = [
   'instagram_manage_insights',
   'pages_show_list',
   'pages_read_engagement',
+] as const;
+
+const INSTAGRAM_MEDIA_INSIGHT_METRICS = [
+  'impressions',
+  'reach',
+  'saved',
+  'shares',
+  'plays',
+  'video_views',
+  'views',
+  'likes',
+  'comments',
+  'replies',
+  'total_interactions',
+  'navigation',
+  'follows',
+  'profile_visits',
+  'profile_activity',
+  'ig_reels_video_view_total_time',
+  'ig_reels_avg_watch_time',
+  'clips_replays_count',
+  'ig_reels_aggregated_all_plays_count',
+  'reels_skip_rate',
+  'facebook_views',
+  'crossposted_views',
+] as const;
+
+const INSTAGRAM_ACCOUNT_INSIGHT_METRICS = [
+  'reach',
+  'follower_count',
+  'website_clicks',
+  'profile_views',
+  'accounts_engaged',
+  'total_interactions',
+  'likes',
+  'comments',
+  'shares',
+  'saves',
+  'replies',
+  'follows_and_unfollows',
+  'profile_links_taps',
+  'views',
 ] as const;
 
 export class InstagramAdapter implements SocialPlatformAdapter {
@@ -261,23 +306,35 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     if (media.comments_count !== undefined) metrics.comments = metricFromApi(media.comments_count);
 
     const insightValues = await this.readAvailableInsights(ctx, externalPostId, [
-      'impressions',
-      'reach',
-      'saved',
-      'shares',
-      'plays',
-      'video_views',
+      ...INSTAGRAM_MEDIA_INSIGHT_METRICS,
     ]);
 
-    if (insightValues.impressions !== undefined) {
-      metrics.impressions = metricFromApi(insightValues.impressions);
+    const impressions = readInsightNumber(insightValues.impressions);
+    const reach = readInsightNumber(insightValues.reach);
+    const saved = readInsightNumber(insightValues.saved);
+    const shares = readInsightNumber(insightValues.shares);
+    const views = firstInsightNumber(insightValues, [
+      'views',
+      'plays',
+      'video_views',
+      'ig_reels_aggregated_all_plays_count',
+    ]);
+    const insightLikes = readInsightNumber(insightValues.likes);
+    const insightComments = readInsightNumber(insightValues.comments);
+    const totalInteractions = readInsightNumber(insightValues.total_interactions);
+
+    if (impressions !== undefined) {
+      metrics.impressions = metricFromApi(impressions);
     }
-    if (insightValues.reach !== undefined) metrics.reach = metricFromApi(insightValues.reach);
-    if (insightValues.saved !== undefined) metrics.saves = metricFromApi(insightValues.saved);
-    if (insightValues.shares !== undefined) metrics.shares = metricFromApi(insightValues.shares);
-    if (insightValues.plays !== undefined) metrics.views = metricFromApi(insightValues.plays);
-    if (insightValues.video_views !== undefined) {
-      metrics.views = metricFromApi(insightValues.video_views);
+    if (reach !== undefined) metrics.reach = metricFromApi(reach);
+    if (saved !== undefined) metrics.saves = metricFromApi(saved);
+    if (shares !== undefined) metrics.shares = metricFromApi(shares);
+    if (views !== undefined) metrics.views = metricFromApi(views);
+    if (insightLikes !== undefined && media.like_count === undefined) {
+      metrics.likes = metricFromApi(insightLikes);
+    }
+    if (insightComments !== undefined && media.comments_count === undefined) {
+      metrics.comments = metricFromApi(insightComments);
     }
 
     const engagement =
@@ -285,7 +342,9 @@ export class InstagramAdapter implements SocialPlatformAdapter {
       (metrics.comments.value ?? 0) +
       (metrics.shares.value ?? 0) +
       (metrics.saves.value ?? 0);
-    if (
+    if (totalInteractions !== undefined) {
+      metrics.engagement = metricFromApi(totalInteractions);
+    } else if (
       metrics.likes.value !== null ||
       metrics.comments.value !== null ||
       metrics.shares.value !== null ||
@@ -294,6 +353,39 @@ export class InstagramAdapter implements SocialPlatformAdapter {
       metrics.engagement = metricFromApi(engagement);
     }
     metrics.engagementRate = computeEngagementRate(metrics);
+    metrics.raw = {
+      media,
+      insights: insightValues,
+      platformMetrics: instagramPostPlatformMetrics(media, insightValues),
+    };
+    return metrics;
+  }
+
+  async getAccountMetrics(ctx: AdapterContext): Promise<AccountMetrics> {
+    const profile = await this.client.getInstagramProfile(ctx.externalAccountId, ctx.accessToken);
+    const metrics = emptyInstagramAccountMetrics();
+    if (profile.followers_count !== undefined)
+      metrics.followers = metricFromApi(profile.followers_count);
+
+    const insightValues = await this.readAvailableAccountInsights(ctx, [
+      ...INSTAGRAM_ACCOUNT_INSIGHT_METRICS,
+    ]);
+    const reach = readInsightNumber(insightValues.reach);
+    const views = readInsightNumber(insightValues.views);
+    const profileViews =
+      readInsightNumber(insightValues.profile_views) ??
+      readInsightNumber(insightValues.profile_links_taps);
+    const followerCount = readInsightNumber(insightValues.follower_count);
+
+    if (followerCount !== undefined) metrics.followers = metricFromApi(followerCount);
+    if (reach !== undefined) metrics.reach = metricFromApi(reach);
+    if (views !== undefined) metrics.impressions = metricFromApi(views);
+    if (profileViews !== undefined) metrics.profileViews = metricFromApi(profileViews);
+    metrics.raw = {
+      profile,
+      insights: insightValues,
+      platformMetrics: instagramAccountPlatformMetrics(profile, insightValues),
+    };
     return metrics;
   }
 
@@ -381,8 +473,8 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     ctx: AdapterContext,
     externalPostId: string,
     metrics: string[],
-  ): Promise<Record<string, number>> {
-    const result: Record<string, number> = {};
+  ): Promise<Record<string, unknown>> {
+    const result: Record<string, unknown> = {};
 
     await Promise.all(
       metrics.map(async (metric) => {
@@ -393,7 +485,7 @@ export class InstagramAdapter implements SocialPlatformAdapter {
             metrics: [metric],
           });
           const value = response.data[0]?.values[0]?.value;
-          if (typeof value === 'number') result[metric] = value;
+          if (value !== undefined) result[metric] = value;
         } catch (error) {
           ctx.logger?.debug('Instagram insight metric unavailable', {
             correlationId: ctx.correlationId,
@@ -405,6 +497,34 @@ export class InstagramAdapter implements SocialPlatformAdapter {
       }),
     );
 
+    return result;
+  }
+
+  private async readAvailableAccountInsights(
+    ctx: AdapterContext,
+    metrics: string[],
+  ): Promise<Record<string, unknown>> {
+    const result: Record<string, unknown> = {};
+    await Promise.all(
+      metrics.map(async (metric) => {
+        try {
+          const response = await this.client.getUserInsights({
+            igAccountId: ctx.externalAccountId,
+            accessToken: ctx.accessToken,
+            metrics: [metric],
+            period: 'day',
+          });
+          const value = response.data[0]?.values[0]?.value;
+          if (value !== undefined) result[metric] = value;
+        } catch (error) {
+          ctx.logger?.debug('Instagram account insight metric unavailable', {
+            correlationId: ctx.correlationId,
+            metric,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
+    );
     return result;
   }
 }
@@ -454,6 +574,153 @@ function instagramContainerError(containerId: string, status: InstagramContainer
       raw: { containerId, status },
     },
   );
+}
+
+function emptyInstagramAccountMetrics(): AccountMetrics {
+  const blank = { value: null, source: 'NOT_SYNCED' as const };
+  return {
+    followers: { ...blank },
+    followersGained: { ...blank },
+    reach: { ...blank },
+    impressions: { ...blank },
+    profileViews: { ...blank },
+  };
+}
+
+function instagramPostPlatformMetrics(
+  media: { like_count?: number; comments_count?: number; media_type?: string },
+  insights: Record<string, unknown>,
+): PlatformMetricMap {
+  const metrics: PlatformMetricMap = {};
+  addPlatformMetric(
+    metrics,
+    'media_type',
+    'Media type',
+    media.media_type ?? null,
+    'text',
+    'Content',
+  );
+  addPlatformMetric(
+    metrics,
+    'like_count',
+    'Likes',
+    media.like_count ?? null,
+    'count',
+    'Engagement',
+  );
+  addPlatformMetric(
+    metrics,
+    'comments_count',
+    'Comments',
+    media.comments_count ?? null,
+    'count',
+    'Engagement',
+  );
+  for (const [key, value] of Object.entries(insights)) {
+    addPlatformMetric(
+      metrics,
+      key,
+      instagramMetricLabel(key),
+      metricPrimitive(value),
+      instagramMetricUnit(key),
+      instagramMetricGroup(key),
+    );
+  }
+  return metrics;
+}
+
+function instagramAccountPlatformMetrics(
+  profile: { followers_count?: number; username?: string },
+  insights: Record<string, unknown>,
+): PlatformMetricMap {
+  const metrics: PlatformMetricMap = {};
+  addPlatformMetric(
+    metrics,
+    'followers_count',
+    'Followers',
+    profile.followers_count ?? null,
+    'count',
+    'Profile',
+  );
+  addPlatformMetric(metrics, 'username', 'Username', profile.username ?? null, 'text', 'Profile');
+  for (const [key, value] of Object.entries(insights)) {
+    addPlatformMetric(
+      metrics,
+      key,
+      instagramMetricLabel(key),
+      metricPrimitive(value),
+      instagramMetricUnit(key),
+      instagramMetricGroup(key),
+    );
+  }
+  return metrics;
+}
+
+function addPlatformMetric(
+  target: PlatformMetricMap,
+  key: string,
+  label: string,
+  value: PlatformMetricValue['value'],
+  unit: PlatformMetricValue['unit'],
+  group: string,
+): void {
+  target[key] = {
+    key,
+    label,
+    value,
+    unit,
+    group,
+    source: value === null ? 'NOT_SYNCED' : 'PLATFORM_API',
+  };
+}
+
+function metricPrimitive(value: unknown): PlatformMetricValue['value'] {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (value === null || value === undefined) return null;
+  return JSON.stringify(value);
+}
+
+function readInsightNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function firstInsightNumber(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): number | undefined {
+  for (const key of keys) {
+    const value = readInsightNumber(record[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function instagramMetricLabel(key: string): string {
+  return key
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function instagramMetricUnit(key: string): PlatformMetricValue['unit'] {
+  if (key.includes('rate')) return 'percent';
+  if (key.includes('time')) return 'milliseconds';
+  return 'count';
+}
+
+function instagramMetricGroup(key: string): string {
+  if (['likes', 'comments', 'shares', 'saves', 'replies', 'total_interactions'].includes(key)) {
+    return 'Engagement';
+  }
+  if (key.includes('profile') || key.includes('follower') || key === 'follows') return 'Profile';
+  if (key.includes('reels') || key.includes('plays') || key.includes('views')) return 'Video';
+  return 'Distribution';
 }
 
 function sleep(ms: number): Promise<void> {

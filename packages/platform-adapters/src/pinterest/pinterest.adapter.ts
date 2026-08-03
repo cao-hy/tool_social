@@ -1,4 +1,10 @@
-import { computeEngagementRate, emptyPostMetrics, metricFromApi } from '@socialhub/shared';
+import {
+  computeEngagementRate,
+  emptyPostMetrics,
+  metricFromApi,
+  type PlatformMetricMap,
+  type PlatformMetricValue,
+} from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
@@ -43,13 +49,19 @@ const VIDEO_UPLOAD_POLL_INTERVAL_MS = 5000;
 const PINTEREST_ANALYTICS_METRICS = [
   'IMPRESSION',
   'SAVE',
+  'SAVE_RATE',
   'PIN_CLICK',
+  'PIN_CLICK_RATE',
   'OUTBOUND_CLICK',
+  'OUTBOUND_CLICK_RATE',
   'ENGAGEMENT',
   'ENGAGEMENT_RATE',
   'TOTAL_REACTIONS',
   'VIDEO_MRC_VIEW',
   'VIDEO_10S_VIEW',
+  'VIDEO_AVG_WATCH_TIME',
+  'VIDEO_V50_WATCH_TIME',
+  'VIDEO_V95_WATCHED',
 ] as const;
 
 export class PinterestAdapter implements SocialPlatformAdapter {
@@ -444,6 +456,21 @@ function mapPinterestMetrics(
   if (videoViews !== undefined) metrics.views = metricFromApi(videoViews);
   if (engagement !== undefined) metrics.engagement = metricFromApi(engagement);
   metrics.engagementRate = computeEngagementRate(metrics);
+  metrics.raw = {
+    pin,
+    analytics,
+    normalized: {
+      impressions: impressions ?? null,
+      saves: saves ?? null,
+      pinClicks: pinClicks ?? null,
+      outboundClicks: outboundClicks ?? null,
+      reactions: reactions ?? null,
+      comments: comments ?? null,
+      videoViews: videoViews ?? null,
+      engagement: engagement ?? null,
+    },
+    platformMetrics: pinterestPlatformMetrics(summary, lifetime, rolling90d),
+  };
 
   return metrics;
 }
@@ -465,6 +492,66 @@ function sumNumbers(values: Array<number | undefined>): number | undefined {
   const usable = values.filter((value): value is number => value !== undefined);
   if (usable.length === 0) return undefined;
   return usable.reduce((sum, value) => sum + value, 0);
+}
+
+function pinterestPlatformMetrics(
+  summary: Record<string, number>,
+  lifetime: Record<string, number> | undefined,
+  rolling90d: Record<string, number> | undefined,
+): PlatformMetricMap {
+  const metrics: PlatformMetricMap = {};
+  for (const [key, value] of Object.entries({ ...rolling90d, ...lifetime, ...summary })) {
+    addPinterestPlatformMetric(
+      metrics,
+      key,
+      pinterestMetricLabel(key),
+      value,
+      pinterestMetricUnit(key),
+      pinterestMetricGroup(key),
+    );
+  }
+  return metrics;
+}
+
+function addPinterestPlatformMetric(
+  target: PlatformMetricMap,
+  key: string,
+  label: string,
+  value: PlatformMetricValue['value'],
+  unit: PlatformMetricValue['unit'],
+  group: string,
+): void {
+  target[key] = {
+    key,
+    label,
+    value,
+    unit,
+    group,
+    source: value === null ? 'NOT_SYNCED' : 'PLATFORM_API',
+  };
+}
+
+function pinterestMetricLabel(key: string): string {
+  return key
+    .toLowerCase()
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function pinterestMetricUnit(key: string): PlatformMetricValue['unit'] {
+  if (key.includes('RATE')) return 'percent';
+  if (key.includes('WATCH_TIME')) return 'seconds';
+  return 'count';
+}
+
+function pinterestMetricGroup(key: string): string {
+  if (key.includes('VIDEO')) return 'Video';
+  if (key.includes('CLICK')) return 'Traffic';
+  if (key.includes('SAVE') || key.includes('REACTION') || key.includes('ENGAGEMENT')) {
+    return 'Engagement';
+  }
+  return 'Distribution';
 }
 
 function pinterestLast90Days(): { startDate: string; endDate: string } {

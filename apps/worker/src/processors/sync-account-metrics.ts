@@ -1,5 +1,5 @@
 import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
-import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
+import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import type { AccountMetrics, MetricSource, QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
@@ -122,6 +122,7 @@ async function syncAccountMetrics(
       reach: metrics.reach.value,
       impressions: metrics.impressions.value,
       source: dominantSource(metrics),
+      raw: rawMetrics(metrics),
     },
     update: {
       capturedAt: now,
@@ -129,6 +130,7 @@ async function syncAccountMetrics(
       reach: metrics.reach.value,
       impressions: metrics.impressions.value,
       source: dominantSource(metrics),
+      raw: rawMetrics(metrics),
     },
   });
 
@@ -151,11 +153,21 @@ function emptyAccountMetrics(source: MetricSource): AccountMetrics {
 }
 
 function dominantSource(metrics: AccountMetrics): MetricSource {
-  const values = Object.values(metrics);
+  const values = [
+    metrics.followers,
+    metrics.followersGained,
+    metrics.reach,
+    metrics.impressions,
+    metrics.profileViews,
+  ];
   if (values.some((metric) => metric.source === 'PLATFORM_API')) return 'PLATFORM_API';
   if (values.some((metric) => metric.source === 'DERIVED')) return 'DERIVED';
   if (values.every((metric) => metric.source === 'UNSUPPORTED')) return 'UNSUPPORTED';
   return 'NOT_SYNCED';
+}
+
+function rawMetrics(metrics: AccountMetrics): Prisma.InputJsonValue | undefined {
+  return metrics.raw === undefined ? undefined : (metrics.raw as Prisma.InputJsonValue);
 }
 
 function metricDate(date: Date, timezone: string): Date {

@@ -39,6 +39,7 @@ describe('YouTubeAdapter', () => {
       'https://www.googleapis.com/auth/youtube.upload',
       'https://www.googleapis.com/auth/youtube.readonly',
       'https://www.googleapis.com/auth/youtube.force-ssl',
+      'https://www.googleapis.com/auth/yt-analytics.readonly',
     ]);
     expect(url.searchParams.get('access_type')).toBe('offline');
     expect(url.searchParams.get('prompt')).toBe('consent');
@@ -357,6 +358,20 @@ describe('YouTubeAdapter', () => {
           ],
         });
       }
+      if (url.hostname === 'youtubeanalytics.googleapis.com' && url.pathname === '/v2/reports') {
+        expect(url.searchParams.get('ids')).toBe('channel==MINE');
+        expect(url.searchParams.get('filters')).toBe('video==video-1');
+        expect(url.searchParams.get('metrics')).toContain('estimatedMinutesWatched');
+        return jsonResponse({
+          columnHeaders: [
+            { name: 'views', columnType: 'METRIC', dataType: 'INTEGER' },
+            { name: 'estimatedMinutesWatched', columnType: 'METRIC', dataType: 'INTEGER' },
+            { name: 'averageViewDuration', columnType: 'METRIC', dataType: 'INTEGER' },
+            { name: 'shares', columnType: 'METRIC', dataType: 'INTEGER' },
+          ],
+          rows: [[140, 72, 31, 4]],
+        });
+      }
       throw new Error(`Unexpected request: ${url.toString()}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -376,10 +391,11 @@ describe('YouTubeAdapter', () => {
         'video-1',
       ),
     ).resolves.toMatchObject({
-      views: { value: 120, source: 'PLATFORM_API' },
+      views: { value: 140, source: 'PLATFORM_API' },
       likes: { value: 9, source: 'PLATFORM_API' },
       comments: { value: 3, source: 'PLATFORM_API' },
-      engagement: { value: 12, source: 'PLATFORM_API' },
+      shares: { value: 4, source: 'PLATFORM_API' },
+      engagement: { value: 16, source: 'PLATFORM_API' },
     });
   });
 

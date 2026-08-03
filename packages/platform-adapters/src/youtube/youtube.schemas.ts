@@ -205,3 +205,17 @@ export const youtubeCommentThreadsResponseSchema = z.object({
 });
 
 export type YouTubeCommentThreadsResponse = z.infer<typeof youtubeCommentThreadsResponseSchema>;
+
+export const youtubeAnalyticsReportSchema = z.object({
+  kind: z.string().optional(),
+  columnHeaders: z.array(
+    z.object({
+      name: z.string(),
+      columnType: z.string().optional(),
+      dataType: z.string().optional(),
+    }),
+  ),
+  rows: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).optional(),
+});
+
+export type YouTubeAnalyticsReport = z.infer<typeof youtubeAnalyticsReportSchema>;
