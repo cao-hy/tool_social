@@ -1,6 +1,7 @@
 import { AdapterRegistry, isPlatformError, type ExternalPost } from '@socialhub/platform-adapters';
 import { Prisma, type Platform, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
+import type { QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { getFreshAccessToken } from './token-refresh';
@@ -12,6 +13,8 @@ const syncExternalPostsPayloadSchema = z.object({
   cutoffDays: z.number().int().min(1).default(365),
   resumeFromJobId: z.string().optional(),
 });
+
+type SyncExternalPostsPayload = QueuePayload<'sync-external-posts'>;
 
 export function createSyncExternalPostsProcessor(input: {
   prisma: PrismaClientInstance;
@@ -25,7 +28,10 @@ export function createSyncExternalPostsProcessor(input: {
     attemptsMade?: number;
     opts?: { attempts?: number };
   }) => {
-    const payload = syncExternalPostsPayloadSchema.parse(job.data);
+    const payload = syncExternalPostsPayloadSchema.parse(job.data) as SyncExternalPostsPayload;
+    const jobName = job.name ?? 'sync-external-posts';
+    const jobId = job.id ?? `sync-external-posts-${payload.socialAccountId}`;
+    const startedAt = new Date();
     const syncJobId = payload.resumeFromJobId;
 
     if (!syncJobId) {
@@ -40,6 +46,8 @@ export function createSyncExternalPostsProcessor(input: {
     if (!syncJob || syncJob.status === 'COMPLETED' || syncJob.status === 'FAILED') {
       return; // Already done or dead
     }
+
+    await markBackgroundJob(input.prisma, jobName, jobId, payload, job, 'RUNNING', syncJob.id);
 
     try {
       await input.prisma.externalPostSyncJob.update({
@@ -57,6 +65,7 @@ export function createSyncExternalPostsProcessor(input: {
           ...result,
         },
       });
+      await finishBackgroundJob(input.prisma, jobName, jobId, startedAt, 'COMPLETED');
 
       return result;
     } catch (error) {
@@ -74,6 +83,19 @@ export function createSyncExternalPostsProcessor(input: {
           },
         });
       }
+      await finishBackgroundJob(
+        input.prisma,
+        jobName,
+        jobId,
+        startedAt,
+        isDead ? 'DEAD' : 'FAILED',
+        {
+          errorCode: isPlatformError(error) ? error.kind : 'UNKNOWN',
+          errorMessage:
+            error instanceof Error ? error.message : 'Lỗi không xác định khi kéo bài ngoại lai.',
+          isDead,
+        },
+      );
       throw error;
     }
   };
@@ -284,4 +306,64 @@ function errorToJson(error: unknown): Prisma.InputJsonValue {
   if (isPlatformError(error)) return error.toLogObject() as Prisma.InputJsonValue;
   if (error instanceof Error) return { message: error.message };
   return { message: 'Lỗi không xác định' };
+}
+
+async function markBackgroundJob(
+  prisma: PrismaClientInstance,
+  queueName: string,
+  jobId: string,
+  payload: SyncExternalPostsPayload,
+  job: { attemptsMade?: number; opts?: { attempts?: number } },
+  status: 'RUNNING',
+  correlationId: string,
+) {
+  await prisma.backgroundJob.upsert({
+    where: { queueName_jobId: { queueName, jobId } },
+    create: {
+      workspaceId: payload.workspaceId,
+      queueName,
+      jobId,
+      status,
+      payload: payload as Prisma.InputJsonValue,
+      attempts: (job.attemptsMade ?? 0) + 1,
+      maxAttempts: job.opts?.attempts ?? 1,
+      startedAt: new Date(),
+      correlationId,
+    },
+    update: {
+      status,
+      payload: payload as Prisma.InputJsonValue,
+      attempts: (job.attemptsMade ?? 0) + 1,
+      maxAttempts: job.opts?.attempts ?? 1,
+      startedAt: new Date(),
+      finishedAt: null,
+      durationMs: null,
+      errorCode: null,
+      errorMessage: null,
+      isDead: false,
+      correlationId,
+    },
+  });
+}
+
+async function finishBackgroundJob(
+  prisma: PrismaClientInstance,
+  queueName: string,
+  jobId: string,
+  startedAt: Date,
+  status: 'COMPLETED' | 'FAILED' | 'DEAD',
+  error?: { errorCode?: string; errorMessage?: string; isDead?: boolean },
+) {
+  const finishedAt = new Date();
+  await prisma.backgroundJob.update({
+    where: { queueName_jobId: { queueName, jobId } },
+    data: {
+      status,
+      finishedAt,
+      durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+      errorCode: error?.errorCode,
+      errorMessage: error?.errorMessage,
+      isDead: error?.isDead ?? status === 'DEAD',
+    },
+  });
 }

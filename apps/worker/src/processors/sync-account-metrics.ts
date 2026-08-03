@@ -9,6 +9,7 @@ import { getFreshAccessToken } from './token-refresh';
 const syncAccountMetricsPayloadSchema = z.object({
   socialAccountId: z.string().min(1),
   workspaceId: z.string().min(1),
+  syncRunId: z.string().min(1).optional(),
 });
 
 type SyncAccountMetricsPayload = QueuePayload<'sync-account-metrics'>;

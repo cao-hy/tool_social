@@ -11,6 +11,7 @@ import {
   type TikTokCreatorInfo,
   type TokenSet,
 } from '@socialhub/platform-adapters';
+import type { Prisma } from '@socialhub/db';
 import type { Platform } from '@socialhub/shared';
 import { buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import {
@@ -794,6 +795,33 @@ export class SocialAccountsService implements OnModuleDestroy {
     };
     const jobId = buildJobId('sync-external-posts', payload);
     const opts = buildQueueJobOptions('sync-external-posts', jobId);
+    await this.prisma.backgroundJob.upsert({
+      where: { queueName_jobId: { queueName: 'sync-external-posts', jobId } },
+      create: {
+        workspaceId,
+        queueName: 'sync-external-posts',
+        jobId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        correlationId: syncJob.id,
+      },
+      update: {
+        workspaceId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        errorCode: null,
+        errorMessage: null,
+        isDead: false,
+        correlationId: syncJob.id,
+      },
+    });
 
     await this.syncExternalPostsQueue.add('sync-external-posts', payload, opts);
 

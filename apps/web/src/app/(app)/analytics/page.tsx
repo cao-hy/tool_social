@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { analyticsApi, socialAccountsApi } from '@/lib/api-client';
+import { analyticsApi, jobsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import { formatMetricNumber, metricSourceLabel } from '@/lib/post-metrics';
 import type {
   AnalyticsDashboardView,
   AnalyticsMetricKey,
+  BackgroundJobView,
   MetricValueView,
   SocialAccountView,
 } from '@/lib/types';
@@ -28,6 +29,19 @@ const METRICS: Array<{ key: AnalyticsMetricKey; label: string; percent?: boolean
 ];
 
 const ITEMS_PER_PAGE = 10;
+const TERMINAL_JOB_STATUSES = new Set<BackgroundJobView['status']>(['COMPLETED', 'FAILED', 'DEAD']);
+
+interface SyncProgressState {
+  active: boolean;
+  total: number;
+  postMetricsQueued: number;
+  accountMetricsQueued: number;
+  jobIds: string[];
+  items: BackgroundJobView[];
+  startedAt: string;
+  lastUpdatedAt: string | null;
+  error: string | null;
+}
 
 export default function AnalyticsPage() {
   const { activeWorkspace } = useAuth();
@@ -47,6 +61,7 @@ export default function AnalyticsPage() {
   });
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [tablePlatformFilter, setTablePlatformFilter] = useState<string>('ALL');
@@ -80,6 +95,62 @@ export default function AnalyticsPage() {
     void load();
   }, [load]);
 
+  const syncJobKey = useMemo(() => syncProgress?.jobIds.join('|') ?? '', [syncProgress?.jobIds]);
+
+  useEffect(() => {
+    if (!activeWorkspace || !syncProgress?.active || syncProgress.jobIds.length === 0) return;
+
+    let cancelled = false;
+    const workspaceId = activeWorkspace.id;
+    const jobIds = syncProgress.jobIds;
+    const totalJobs = syncProgress.total;
+
+    async function poll() {
+      try {
+        const status = await jobsApi.status(workspaceId, jobIds);
+        if (cancelled) return;
+        const doneCount = status.items.filter((job) =>
+          TERMINAL_JOB_STATUSES.has(job.status),
+        ).length;
+        const failedCount = status.items.filter(
+          (job) => job.status === 'FAILED' || job.status === 'DEAD',
+        ).length;
+        const isDone = doneCount >= totalJobs;
+        setSyncProgress((current) =>
+          current
+            ? {
+                ...current,
+                active: !isDone,
+                items: status.items,
+                lastUpdatedAt: status.generatedAt,
+                error: null,
+              }
+            : current,
+        );
+        if (isDone) {
+          if (failedCount > 0) {
+            toast.error(`Sync metrics xong nhưng có ${failedCount} job lỗi.`);
+          } else {
+            toast.success('Sync metrics đã hoàn tất.');
+          }
+          void load();
+        }
+      } catch (pollError) {
+        if (cancelled) return;
+        setSyncProgress((current) =>
+          current ? { ...current, error: getErrorMessage(pollError) } : current,
+        );
+      }
+    }
+
+    void poll();
+    const interval = setInterval(() => void poll(), 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeWorkspace, load, syncJobKey, syncProgress?.active, syncProgress?.total, toast]);
+
   const platforms = useMemo(
     () => Array.from(new Set(accounts.map((account) => account.platform))).sort(),
     [accounts],
@@ -104,10 +175,25 @@ export default function AnalyticsPage() {
         platform: filters.platform || undefined,
         socialAccountId: filters.account || undefined,
       });
+      if (result.queued === 0) {
+        toast.info('Không có metric nào cần đưa vào queue trong bộ lọc hiện tại.');
+        await load();
+        return;
+      }
+      setSyncProgress({
+        active: true,
+        total: result.queued,
+        postMetricsQueued: result.postMetricsQueued,
+        accountMetricsQueued: result.accountMetricsQueued,
+        jobIds: result.jobs.map((job) => job.id),
+        items: [],
+        startedAt: new Date().toISOString(),
+        lastUpdatedAt: null,
+        error: null,
+      });
       toast.success(
         `Đã đưa ${result.queued} job vào queue: ${result.postMetricsQueued} bài, ${result.accountMetricsQueued} tài khoản.`,
       );
-      await load();
     } catch (syncError) {
       toast.error(getErrorMessage(syncError));
     } finally {
@@ -128,14 +214,18 @@ export default function AnalyticsPage() {
         </div>
         <button
           className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-          disabled={syncing}
+          disabled={syncing || !!syncProgress?.active}
           onClick={syncMetrics}
           type="button"
         >
-          <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-          Sync metrics
+          <RefreshCw
+            className={`h-4 w-4 ${syncing || syncProgress?.active ? 'animate-spin' : ''}`}
+          />
+          {syncProgress?.active ? 'Đang sync' : 'Sync metrics'}
         </button>
       </header>
+
+      {syncProgress ? <AnalyticsSyncProgress progress={syncProgress} /> : null}
 
       <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-4">
         <FilterInput
@@ -469,6 +559,103 @@ export default function AnalyticsPage() {
   );
 }
 
+function AnalyticsSyncProgress({ progress }: { progress: SyncProgressState }) {
+  const doneCount = progress.items.filter((job) => TERMINAL_JOB_STATUSES.has(job.status)).length;
+  const failedCount = progress.items.filter(
+    (job) => job.status === 'FAILED' || job.status === 'DEAD',
+  ).length;
+  const runningCount = progress.items.filter((job) => job.status === 'RUNNING').length;
+  const knownQueuedCount = progress.items.filter((job) => job.status === 'QUEUED').length;
+  const unseenCount = Math.max(0, progress.total - progress.items.length);
+  const queuedCount = knownQueuedCount + unseenCount;
+  const percent = progress.total > 0 ? Math.round((doneCount / progress.total) * 100) : 0;
+  const recentJobs = progress.items.slice(0, 5);
+  const queuedTooLong =
+    progress.active &&
+    runningCount === 0 &&
+    doneCount === 0 &&
+    Date.now() - new Date(progress.startedAt).getTime() > 15_000;
+
+  return (
+    <section
+      className={`rounded-lg border p-4 ${
+        failedCount > 0
+          ? 'border-amber-200 bg-amber-50'
+          : progress.active
+            ? 'border-brand-200 bg-brand-50'
+            : 'border-emerald-200 bg-emerald-50'
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-950">
+            {progress.active ? 'Đang sync metrics' : 'Sync metrics đã xong'}
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            {progress.postMetricsQueued} job bài viết, {progress.accountMetricsQueued} job tài
+            khoản.
+          </p>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-slate-700">
+          {doneCount}/{progress.total} xong
+        </span>
+      </div>
+
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
+        <div
+          className={`h-full rounded-full transition-all ${
+            failedCount > 0 ? 'bg-amber-500' : 'bg-brand-600'
+          }`}
+          style={{ width: `${Math.max(progress.active ? 8 : 100, percent)}%` }}
+        />
+      </div>
+
+      <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-4">
+        <span>Đang chờ: {queuedCount}</span>
+        <span>Đang chạy: {runningCount}</span>
+        <span>Hoàn tất: {doneCount}</span>
+        <span>Lỗi: {failedCount}</span>
+      </div>
+
+      {progress.error ? (
+        <p className="mt-3 rounded-md bg-white px-3 py-2 text-sm text-amber-700">
+          {progress.error}
+        </p>
+      ) : null}
+
+      {queuedTooLong ? (
+        <p className="mt-3 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-amber-700">
+          Worker chưa nhận job sau hơn 15 giây. Kiểm tra worker đang chạy và Redis có kết nối đúng
+          không.
+        </p>
+      ) : null}
+
+      {recentJobs.length > 0 ? (
+        <div className="mt-4 grid gap-2">
+          {recentJobs.map((job) => (
+            <div
+              key={job.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-white px-3 py-2 text-sm"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-slate-900">
+                  {job.label ?? job.queueName}
+                </p>
+                {job.details ? (
+                  <p className="truncate text-xs text-slate-500">{job.details}</p>
+                ) : null}
+              </div>
+              <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                {jobStatusLabel(job.status)}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function FilterInput({
   label,
   value,
@@ -491,6 +678,21 @@ function FilterInput({
       />
     </label>
   );
+}
+
+function jobStatusLabel(status: BackgroundJobView['status']): string {
+  switch (status) {
+    case 'QUEUED':
+      return 'Đang chờ';
+    case 'RUNNING':
+      return 'Đang chạy';
+    case 'COMPLETED':
+      return 'Xong';
+    case 'FAILED':
+      return 'Retry';
+    case 'DEAD':
+      return 'Lỗi';
+  }
 }
 
 function SummaryCard({ label, value }: { label: string; value: number }) {

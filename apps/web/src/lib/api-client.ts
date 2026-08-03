@@ -4,6 +4,7 @@ import type {
   AnalyticsDashboardView,
   AuthPayload,
   JobActivityView,
+  JobStatusListView,
   OAuthStartResult,
   CommentTagView,
   CommentNoteView,
@@ -274,8 +275,17 @@ export const jobsApi = {
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
     return apiFetch<JobActivityView>(`/workspaces/${workspaceId}/jobs/activity${suffix}`);
   },
+  status: (workspaceId: string, ids: string[]) => {
+    const params = new URLSearchParams();
+    params.set('ids', ids.join(','));
+    return apiFetch<JobStatusListView>(`/workspaces/${workspaceId}/jobs/status?${params}`);
+  },
   clearFailed: (workspaceId: string) =>
     apiFetch<{ cleared: true }>(`/workspaces/${workspaceId}/jobs/failed`, { method: 'DELETE' }),
+  clearStaleQueued: (workspaceId: string) =>
+    apiFetch<{ cleared: number }>(`/workspaces/${workspaceId}/jobs/stale-queued`, {
+      method: 'DELETE',
+    }),
 };
 
 export const analyticsApi = {
@@ -295,13 +305,15 @@ export const analyticsApi = {
     workspaceId: string,
     input?: { platformPostIds?: string[]; platform?: string; socialAccountId?: string },
   ) =>
-    apiFetch<{ queued: number; postMetricsQueued: number; accountMetricsQueued: number }>(
-      `/workspaces/${workspaceId}/analytics/sync`,
-      {
-        method: 'POST',
-        body: JSON.stringify(input ?? {}),
-      },
-    ),
+    apiFetch<{
+      queued: number;
+      postMetricsQueued: number;
+      accountMetricsQueued: number;
+      jobs: Array<{ id: string; queueName: string; jobId: string; label: string }>;
+    }>(`/workspaces/${workspaceId}/analytics/sync`, {
+      method: 'POST',
+      body: JSON.stringify(input ?? {}),
+    }),
 };
 
 export const mediaApi = {

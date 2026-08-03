@@ -60,8 +60,8 @@ export interface QueuePayloads {
     workspaceId: string;
     since?: string;
   };
-  'sync-post-metrics': { platformPostId: string; workspaceId: string };
-  'sync-account-metrics': { socialAccountId: string; workspaceId: string };
+  'sync-post-metrics': { platformPostId: string; workspaceId: string; syncRunId?: string };
+  'sync-account-metrics': { socialAccountId: string; workspaceId: string; syncRunId?: string };
   'refresh-social-token': { socialAccountId: string; workspaceId: string };
   'process-webhook': { webhookEventId: string };
   'retry-failed-post': { platformPostId: string; workspaceId: string; requestedByUserId: string };
@@ -104,10 +104,14 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
       const p = payload as QueuePayloads['sync-comments'];
       return jobId(queue, p.platformPostId ?? p.socialAccountId, p.since ?? 'all');
     }
-    case 'sync-post-metrics':
-      return jobId(queue, (payload as QueuePayloads['sync-post-metrics']).platformPostId);
-    case 'sync-account-metrics':
-      return jobId(queue, (payload as QueuePayloads['sync-account-metrics']).socialAccountId);
+    case 'sync-post-metrics': {
+      const p = payload as QueuePayloads['sync-post-metrics'];
+      return jobId(queue, p.platformPostId, p.syncRunId ?? 'latest');
+    }
+    case 'sync-account-metrics': {
+      const p = payload as QueuePayloads['sync-account-metrics'];
+      return jobId(queue, p.socialAccountId, p.syncRunId ?? 'latest');
+    }
     case 'refresh-social-token':
       return jobId(queue, (payload as QueuePayloads['refresh-social-token']).socialAccountId);
     case 'process-webhook':

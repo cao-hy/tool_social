@@ -86,6 +86,16 @@ export interface JobActivityView {
   generatedAt: string;
   activeCount: number;
   failedCount: number;
+  staleQueuedCount: number;
+  items: BackgroundJobView[];
+}
+
+export interface JobStatusListView {
+  generatedAt: string;
+  doneCount: number;
+  activeCount: number;
+  failedCount: number;
+  staleQueuedCount: number;
   items: BackgroundJobView[];
 }
 
@@ -369,6 +379,16 @@ export interface BackgroundJobView {
   createdAt: string;
   updatedAt: string;
   label?: string;
+  details?: string | null;
+  isStaleQueued?: boolean;
+  progress?: {
+    mode: 'KNOWN' | 'INDETERMINATE';
+    current: number;
+    total: number | null;
+    percent: number | null;
+    label: string;
+    counts?: Record<string, number>;
+  } | null;
 }
 
 export interface CommentTagView {

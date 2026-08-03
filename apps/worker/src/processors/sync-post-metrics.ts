@@ -1,7 +1,12 @@
-import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
+import { AdapterRegistry, isPlatformError, type PlatformError } from '@socialhub/platform-adapters';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import type { MetricSource, PostMetrics, QueuePayload } from '@socialhub/shared';
+import {
+  emptyPostMetrics,
+  type MetricSource,
+  type PostMetrics,
+  type QueuePayload,
+} from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { getFreshAccessToken } from './token-refresh';
@@ -9,6 +14,7 @@ import { getFreshAccessToken } from './token-refresh';
 const syncPostMetricsPayloadSchema = z.object({
   platformPostId: z.string().min(1),
   workspaceId: z.string().min(1),
+  syncRunId: z.string().min(1).optional(),
 });
 
 type SyncPostMetricsPayload = QueuePayload<'sync-post-metrics'>;
@@ -39,19 +45,28 @@ export function createSyncPostMetricsProcessor(input: {
     } catch (error) {
       const attempt = (job.attemptsMade ?? 0) + 1;
       const maxAttempts = job.opts?.attempts ?? 1;
-      await finishJob(
-        input.prisma,
-        jobName,
-        jobId,
-        startedAt,
-        attempt >= maxAttempts ? 'DEAD' : 'FAILED',
-        {
-          errorCode: isPlatformError(error) ? error.kind : 'UNKNOWN',
-          errorMessage:
-            error instanceof Error ? error.message : 'Lỗi không xác định khi sync metrics.',
-          isDead: attempt >= maxAttempts,
-        },
-      );
+      const platformError = isPlatformError(error) ? error : null;
+      const isDead = platformError
+        ? !platformError.retryable || attempt >= maxAttempts
+        : attempt >= maxAttempts;
+      await finishJob(input.prisma, jobName, jobId, startedAt, isDead ? 'DEAD' : 'FAILED', {
+        errorCode: platformError?.kind ?? 'UNKNOWN',
+        errorMessage:
+          error instanceof Error ? error.message : 'Lỗi không xác định khi sync metrics.',
+        isDead,
+      });
+      if (platformError && !platformError.retryable) {
+        logger.warn(
+          {
+            platformPostId: payload.platformPostId,
+            workspaceId: payload.workspaceId,
+            kind: platformError.kind,
+            message: platformError.message,
+          },
+          'Bỏ retry sync metrics vì lỗi platform không thể tự khắc phục',
+        );
+        return { synced: false, reason: platformError.kind };
+      }
       throw error;
     }
   };
@@ -105,71 +120,131 @@ async function syncPostMetrics(
     },
   });
 
-  const metrics = await adapter.getPostMetrics(
-    {
-      accessToken,
-      externalAccountId: account.externalAccountId,
-      externalPageId: account.externalPageId ?? undefined,
-      correlationId: `sync-post-metrics-${platformPost.id}`,
-    },
-    platformPost.externalPostId,
-  );
-  const now = new Date();
-  const today = metricDate(now, workspace?.timezone ?? 'UTC');
-
-  await input.prisma.$transaction([
-    input.prisma.postMetric.upsert({
-      where: { platformPostId: platformPost.id },
-      create: {
+  let metrics: PostMetrics;
+  try {
+    metrics = await adapter.getPostMetrics(
+      {
+        accessToken,
+        externalAccountId: account.externalAccountId,
+        externalPageId: account.externalPageId ?? undefined,
+        correlationId: `sync-post-metrics-${platformPost.id}`,
+      },
+      platformPost.externalPostId,
+    );
+  } catch (error) {
+    const metricUnavailableError = platformMetricUnavailableError(error);
+    if (metricUnavailableError) {
+      const fallbackMetrics = emptyPostMetrics('UNSUPPORTED');
+      await persistPostMetrics({
+        prisma: input.prisma,
         workspaceId: payload.workspaceId,
-        platformPostId: platformPost.id,
-        ...postMetricWrite(metrics),
-        lastSyncedAt: now,
-      },
-      update: {
-        ...postMetricWrite(metrics),
-        lastSyncedAt: now,
-      },
-    }),
-    input.prisma.metricSnapshot.upsert({
-      where: {
-        platformPostId_metricDate: {
+        platformPost,
+        timezone: workspace?.timezone ?? 'UTC',
+        metrics: fallbackMetrics,
+        errorCode: metricUnavailableError.kind,
+        errorMessage: metricUnavailableError.message,
+      });
+      logger.warn(
+        {
           platformPostId: platformPost.id,
-          metricDate: today,
+          platform: platformPost.platform,
+          kind: metricUnavailableError.kind,
+          message: metricUnavailableError.message,
         },
-      },
-      create: {
-        workspaceId: payload.workspaceId,
+        'Metric bài không lấy được; đã ghi UNSUPPORTED thay vì retry',
+      );
+      return {
+        synced: false,
+        reason: metricUnavailableError.kind,
         platformPostId: platformPost.id,
-        capturedAt: now,
-        metricDate: today,
-        ...snapshotWrite(metrics),
-        source: dominantSource(metrics),
-      },
-      update: {
-        capturedAt: now,
-        ...snapshotWrite(metrics),
-        source: dominantSource(metrics),
-      },
-    }),
-    input.prisma.platformPost.update({
-      where: { id: platformPost.id },
-      data: {
-        platformState: mergeMetricsState(
-          platformPost.platformState,
-          metrics,
-        ) as unknown as Prisma.InputJsonValue,
-        errorCode: null,
-        errorMessage: null,
-      },
-    }),
-  ]);
+      };
+    }
+    throw error;
+  }
+
+  await persistPostMetrics({
+    prisma: input.prisma,
+    workspaceId: payload.workspaceId,
+    platformPost,
+    timezone: workspace?.timezone ?? 'UTC',
+    metrics,
+  });
 
   logger.info(
     { platformPostId: platformPost.id, platform: platformPost.platform },
     'Đã sync post metrics',
   );
   return { synced: true, platformPostId: platformPost.id };
+}
+
+async function persistPostMetrics(input: {
+  prisma: PrismaClientInstance;
+  workspaceId: string;
+  platformPost: NonNullable<Awaited<ReturnType<PrismaClientInstance['platformPost']['findFirst']>>>;
+  timezone: string;
+  metrics: PostMetrics;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+}) {
+  const now = new Date();
+  const today = metricDate(now, input.timezone);
+
+  await input.prisma.$transaction([
+    input.prisma.postMetric.upsert({
+      where: { platformPostId: input.platformPost.id },
+      create: {
+        workspaceId: input.workspaceId,
+        platformPostId: input.platformPost.id,
+        ...postMetricWrite(input.metrics),
+        lastSyncedAt: now,
+      },
+      update: {
+        ...postMetricWrite(input.metrics),
+        lastSyncedAt: now,
+      },
+    }),
+    input.prisma.metricSnapshot.upsert({
+      where: {
+        platformPostId_metricDate: {
+          platformPostId: input.platformPost.id,
+          metricDate: today,
+        },
+      },
+      create: {
+        workspaceId: input.workspaceId,
+        platformPostId: input.platformPost.id,
+        capturedAt: now,
+        metricDate: today,
+        ...snapshotWrite(input.metrics),
+        source: dominantSource(input.metrics),
+      },
+      update: {
+        capturedAt: now,
+        ...snapshotWrite(input.metrics),
+        source: dominantSource(input.metrics),
+      },
+    }),
+    input.prisma.platformPost.update({
+      where: { id: input.platformPost.id },
+      data: {
+        platformState: mergeMetricsState(
+          input.platformPost.platformState,
+          input.metrics,
+        ) as unknown as Prisma.InputJsonValue,
+        errorCode: input.errorCode ?? null,
+        errorMessage: input.errorMessage ?? null,
+      },
+    }),
+  ]);
+}
+
+function platformMetricUnavailableError(error: unknown): PlatformError | null {
+  if (!isPlatformError(error)) return null;
+  return error.kind === 'PERMISSION_DENIED' ||
+    error.kind === 'NOT_FOUND' ||
+    error.kind === 'CAPABILITY_UNSUPPORTED'
+    ? error
+    : null;
 }
 
 function postMetricWrite(metrics: PostMetrics) {

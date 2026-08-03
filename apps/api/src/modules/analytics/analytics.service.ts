@@ -7,9 +7,11 @@ import {
   type MetricSource,
   type MetricValue,
   type Platform,
+  type QueueName,
   type QueuePayload,
 } from '@socialhub/shared';
 import { Queue } from 'bullmq';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import type { AnalyticsQuery, SyncAnalyticsInput } from './analytics.schemas';
@@ -116,6 +118,7 @@ export class AnalyticsService implements OnModuleDestroy {
   }
 
   async enqueueSync(workspaceId: string, input: SyncAnalyticsInput) {
+    const syncRunId = randomUUID();
     const targetIds = input.platformPostIds?.length
       ? input.platformPostIds
       : (
@@ -132,14 +135,28 @@ export class AnalyticsService implements OnModuleDestroy {
         ).map((item) => item.id);
 
     let postMetricsQueued = 0;
+    const jobs: Array<{
+      id: string;
+      queueName: QueueName;
+      jobId: string;
+      label: string;
+    }> = [];
     for (const platformPostId of targetIds) {
-      const payload: QueuePayload<'sync-post-metrics'> = { platformPostId, workspaceId };
+      const payload: QueuePayload<'sync-post-metrics'> = {
+        platformPostId,
+        workspaceId,
+        syncRunId,
+      };
       const jobId = buildJobId('sync-post-metrics', payload);
-      await this.postMetricsQueue.add(
-        'sync-post-metrics',
-        payload,
-        buildQueueJobOptions('sync-post-metrics', jobId),
-      );
+      const record = await this.ensureQueuedBackgroundJob('sync-post-metrics', jobId, payload);
+      const opts = buildQueueJobOptions('sync-post-metrics', jobId);
+      await this.postMetricsQueue.add('sync-post-metrics', payload, opts);
+      jobs.push({
+        id: record.id,
+        queueName: 'sync-post-metrics',
+        jobId,
+        label: 'Đồng bộ metric bài',
+      });
       postMetricsQueued += 1;
     }
 
@@ -156,13 +173,21 @@ export class AnalyticsService implements OnModuleDestroy {
 
     let accountMetricsQueued = 0;
     for (const socialAccountId of accountIds) {
-      const payload: QueuePayload<'sync-account-metrics'> = { socialAccountId, workspaceId };
+      const payload: QueuePayload<'sync-account-metrics'> = {
+        socialAccountId,
+        workspaceId,
+        syncRunId,
+      };
       const jobId = buildJobId('sync-account-metrics', payload);
-      await this.accountMetricsQueue.add(
-        'sync-account-metrics',
-        payload,
-        buildQueueJobOptions('sync-account-metrics', jobId),
-      );
+      const record = await this.ensureQueuedBackgroundJob('sync-account-metrics', jobId, payload);
+      const opts = buildQueueJobOptions('sync-account-metrics', jobId);
+      await this.accountMetricsQueue.add('sync-account-metrics', payload, opts);
+      jobs.push({
+        id: record.id,
+        queueName: 'sync-account-metrics',
+        jobId,
+        label: 'Đồng bộ metric tài khoản',
+      });
       accountMetricsQueued += 1;
     }
 
@@ -170,7 +195,44 @@ export class AnalyticsService implements OnModuleDestroy {
       queued: postMetricsQueued + accountMetricsQueued,
       postMetricsQueued,
       accountMetricsQueued,
+      jobs,
+      syncRunId,
     };
+  }
+
+  private ensureQueuedBackgroundJob<Q extends 'sync-post-metrics' | 'sync-account-metrics'>(
+    queueName: Q,
+    jobId: string,
+    payload: QueuePayload<Q>,
+  ) {
+    const opts = buildQueueJobOptions(queueName, jobId);
+    return this.prisma.backgroundJob.upsert({
+      where: { queueName_jobId: { queueName, jobId } },
+      create: {
+        workspaceId: payload.workspaceId,
+        queueName,
+        jobId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        correlationId: jobId,
+      },
+      update: {
+        workspaceId: payload.workspaceId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        errorCode: null,
+        errorMessage: null,
+        isDead: false,
+        correlationId: jobId,
+      },
+    });
   }
 }
 
