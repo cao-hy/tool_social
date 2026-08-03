@@ -795,7 +795,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     };
     const jobId = buildJobId('sync-external-posts', payload);
     const opts = buildQueueJobOptions('sync-external-posts', jobId);
-    await this.prisma.backgroundJob.upsert({
+    const backgroundJob = await this.prisma.backgroundJob.upsert({
       where: { queueName_jobId: { queueName: 'sync-external-posts', jobId } },
       create: {
         workspaceId,
@@ -827,6 +827,7 @@ export class SocialAccountsService implements OnModuleDestroy {
 
     return {
       jobId: syncJob.id,
+      backgroundJobId: backgroundJob.id,
       status: 'QUEUED',
       message: 'Đã đưa job đồng bộ lịch sử vào queue.',
     };

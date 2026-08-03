@@ -107,7 +107,7 @@ export const pinterestPinSchema = z
       })
       .passthrough()
       .optional(),
-    pin_metrics: pinterestPinMetricsSchema.optional(),
+    pin_metrics: pinterestPinMetricsSchema.nullable().optional(),
   })
   .passthrough();
 

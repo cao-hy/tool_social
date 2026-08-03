@@ -229,7 +229,7 @@ export const socialAccountsApi = {
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/pinterest/boards/${encodeURIComponent(boardId)}/sections`,
     ),
   syncPosts: (workspaceId: string, socialAccountId: string) =>
-    apiFetch<{ jobId: string; status: 'QUEUED'; message: string }>(
+    apiFetch<{ jobId: string; backgroundJobId?: string; status: 'QUEUED'; message: string }>(
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/sync-posts`,
       { method: 'POST' },
     ),

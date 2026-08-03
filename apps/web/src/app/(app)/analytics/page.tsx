@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CloudDownload, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { analyticsApi, jobsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
@@ -43,6 +43,16 @@ interface SyncProgressState {
   error: string | null;
 }
 
+interface ExternalSyncProgressState {
+  active: boolean;
+  total: number;
+  jobIds: string[];
+  items: BackgroundJobView[];
+  startedAt: string;
+  lastUpdatedAt: string | null;
+  error: string | null;
+}
+
 export default function AnalyticsPage() {
   const { activeWorkspace } = useAuth();
   const toast = useToast();
@@ -61,7 +71,10 @@ export default function AnalyticsPage() {
   });
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [externalSyncing, setExternalSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null);
+  const [externalSyncProgress, setExternalSyncProgress] =
+    useState<ExternalSyncProgressState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [tablePlatformFilter, setTablePlatformFilter] = useState<string>('ALL');
@@ -96,6 +109,10 @@ export default function AnalyticsPage() {
   }, [load]);
 
   const syncJobKey = useMemo(() => syncProgress?.jobIds.join('|') ?? '', [syncProgress?.jobIds]);
+  const externalSyncJobKey = useMemo(
+    () => externalSyncProgress?.jobIds.join('|') ?? '',
+    [externalSyncProgress?.jobIds],
+  );
 
   useEffect(() => {
     if (!activeWorkspace || !syncProgress?.active || syncProgress.jobIds.length === 0) return;
@@ -151,6 +168,76 @@ export default function AnalyticsPage() {
     };
   }, [activeWorkspace, load, syncJobKey, syncProgress?.active, syncProgress?.total, toast]);
 
+  useEffect(() => {
+    if (
+      !activeWorkspace ||
+      !externalSyncProgress?.active ||
+      externalSyncProgress.jobIds.length === 0
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const workspaceId = activeWorkspace.id;
+    const jobIds = externalSyncProgress.jobIds;
+    const totalJobs = externalSyncProgress.total;
+
+    async function poll() {
+      try {
+        const status = await jobsApi.status(workspaceId, jobIds);
+        if (cancelled) return;
+        const doneCount = status.items.filter((job) =>
+          TERMINAL_JOB_STATUSES.has(job.status),
+        ).length;
+        const failedJobs = status.items.filter(
+          (job) => job.status === 'FAILED' || job.status === 'DEAD',
+        );
+        const isDone = doneCount >= totalJobs;
+        setExternalSyncProgress((current) =>
+          current
+            ? {
+                ...current,
+                active: !isDone,
+                items: status.items,
+                lastUpdatedAt: status.generatedAt,
+                error: null,
+              }
+            : current,
+        );
+        if (isDone) {
+          if (failedJobs.length > 0) {
+            toast.error(
+              failedJobs[0]?.errorMessage ?? `Có ${failedJobs.length} job kéo bài ngoài tool lỗi.`,
+              'Kéo bài ngoài tool lỗi',
+            );
+          } else {
+            toast.success('Kéo bài ngoài tool đã hoàn tất.');
+          }
+          void load();
+        }
+      } catch (pollError) {
+        if (cancelled) return;
+        setExternalSyncProgress((current) =>
+          current ? { ...current, error: getErrorMessage(pollError) } : current,
+        );
+      }
+    }
+
+    void poll();
+    const interval = setInterval(() => void poll(), 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [
+    activeWorkspace,
+    externalSyncJobKey,
+    externalSyncProgress?.active,
+    externalSyncProgress?.total,
+    load,
+    toast,
+  ]);
+
   const platforms = useMemo(
     () => Array.from(new Set(accounts.map((account) => account.platform))).sort(),
     [accounts],
@@ -160,6 +247,17 @@ export default function AnalyticsPage() {
     if (!dashboard) return [];
     return Array.from(new Set(dashboard.posts.map((p) => p.platform))).sort();
   }, [dashboard]);
+
+  const externalSyncAccounts = useMemo(
+    () =>
+      accounts.filter(
+        (account) =>
+          account.status === 'CONNECTED' &&
+          (!filters.platform || account.platform === filters.platform) &&
+          (!filters.account || account.id === filters.account),
+      ),
+    [accounts, filters.account, filters.platform],
+  );
 
   const filteredPosts = useMemo(() => {
     if (!dashboard) return [];
@@ -201,6 +299,56 @@ export default function AnalyticsPage() {
     }
   }
 
+  async function syncExternalPosts() {
+    if (!activeWorkspace) return;
+    if (externalSyncAccounts.length === 0) {
+      toast.warning('Không có tài khoản đã kết nối nào khớp bộ lọc hiện tại.');
+      return;
+    }
+
+    setExternalSyncing(true);
+    try {
+      const results = await Promise.allSettled(
+        externalSyncAccounts.map((account) =>
+          socialAccountsApi.syncPosts(activeWorkspace.id, account.id),
+        ),
+      );
+      const failed = results.filter((result) => result.status === 'rejected');
+      const succeeded = results.length - failed.length;
+
+      if (succeeded > 0) {
+        toast.success(
+          `Đã đưa ${succeeded} tài khoản vào queue kéo bài ngoài tool. Xem Server activity để theo dõi.`,
+        );
+      }
+      if (failed.length > 0) {
+        toast.error(
+          failed[0]?.status === 'rejected'
+            ? getErrorMessage(failed[0].reason)
+            : `${failed.length} tài khoản không đưa được vào queue.`,
+          'Kéo bài ngoài tool lỗi',
+        );
+      }
+      const jobIds = results
+        .filter((result) => result.status === 'fulfilled' && result.value.backgroundJobId)
+        .map((result) => (result.status === 'fulfilled' ? result.value.backgroundJobId : null))
+        .filter((id): id is string => Boolean(id));
+      if (jobIds.length > 0) {
+        setExternalSyncProgress({
+          active: true,
+          total: jobIds.length,
+          jobIds,
+          items: [],
+          startedAt: new Date().toISOString(),
+          lastUpdatedAt: null,
+          error: null,
+        });
+      }
+    } finally {
+      setExternalSyncing(false);
+    }
+  }
+
   if (!activeWorkspace) return null;
 
   return (
@@ -212,20 +360,45 @@ export default function AnalyticsPage() {
             Metrics theo nguồn dữ liệu, không cộng gộp mù giữa các nền tảng.
           </p>
         </div>
-        <button
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-          disabled={syncing || !!syncProgress?.active}
-          onClick={syncMetrics}
-          type="button"
-        >
-          <RefreshCw
-            className={`h-4 w-4 ${syncing || syncProgress?.active ? 'animate-spin' : ''}`}
-          />
-          {syncProgress?.active ? 'Đang sync' : 'Sync metrics'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+            disabled={externalSyncing || !!externalSyncProgress?.active}
+            onClick={() => void syncExternalPosts()}
+            type="button"
+          >
+            <CloudDownload
+              className={`h-4 w-4 ${externalSyncing || externalSyncProgress?.active ? 'animate-pulse' : ''}`}
+            />
+            {externalSyncing || externalSyncProgress?.active
+              ? 'Đang kéo bài'
+              : 'Kéo bài ngoài tool'}
+          </button>
+          <button
+            className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            disabled={syncing || !!syncProgress?.active}
+            onClick={syncMetrics}
+            type="button"
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${syncing || syncProgress?.active ? 'animate-spin' : ''}`}
+            />
+            {syncProgress?.active ? 'Đang sync' : 'Sync metrics'}
+          </button>
+        </div>
       </header>
 
       {syncProgress ? <AnalyticsSyncProgress progress={syncProgress} /> : null}
+      {externalSyncProgress ? <ExternalSyncProgress progress={externalSyncProgress} /> : null}
+
+      <section className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+        <p className="font-semibold">Luồng dữ liệu Analytics</p>
+        <p className="mt-1">
+          Bài đăng tạo ngoài SocialHub phải chạy <strong>Kéo bài ngoài tool</strong> trước để nhập
+          vào DB. Sau khi có bài trong danh sách, bấm <strong>Sync metrics</strong> để lấy số liệu
+          view, reach, comment và các chỉ số nền tảng hỗ trợ.
+        </p>
+      </section>
 
       <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-4">
         <FilterInput
@@ -379,7 +552,8 @@ export default function AnalyticsPage() {
                   {dashboard.byPlatform.length === 0 ? (
                     <tr>
                       <td className="px-5 py-8 text-slate-600" colSpan={METRICS.length + 2}>
-                        Chưa có bài publish trong bộ lọc này.
+                        Chưa có bài publish trong bộ lọc này. Nếu bài được đăng trực tiếp trên nền
+                        tảng, hãy bấm Kéo bài ngoài tool trước.
                       </td>
                     </tr>
                   ) : null}
@@ -520,7 +694,8 @@ export default function AnalyticsPage() {
                     {filteredPosts.length === 0 ? (
                       <tr>
                         <td className="px-5 py-8 text-slate-600 text-center" colSpan={6}>
-                          Không có bài viết nào phù hợp.
+                          Không có bài viết nào phù hợp. Với bài đăng ngoài tool, hãy kéo bài về DB
+                          rồi mới sync metrics.
                         </td>
                       </tr>
                     ) : null}
@@ -656,6 +831,103 @@ function AnalyticsSyncProgress({ progress }: { progress: SyncProgressState }) {
   );
 }
 
+function ExternalSyncProgress({ progress }: { progress: ExternalSyncProgressState }) {
+  const doneCount = progress.items.filter((job) => TERMINAL_JOB_STATUSES.has(job.status)).length;
+  const failedCount = progress.items.filter(
+    (job) => job.status === 'FAILED' || job.status === 'DEAD',
+  ).length;
+  const runningCount = progress.items.filter((job) => job.status === 'RUNNING').length;
+  const knownQueuedCount = progress.items.filter((job) => job.status === 'QUEUED').length;
+  const unseenCount = Math.max(0, progress.total - progress.items.length);
+  const queuedCount = knownQueuedCount + unseenCount;
+  const percent = progress.total > 0 ? Math.round((doneCount / progress.total) * 100) : 0;
+  const recentJobs = progress.items.slice(0, 5);
+
+  return (
+    <section
+      className={`rounded-lg border p-4 ${
+        failedCount > 0
+          ? 'border-rose-200 bg-rose-50'
+          : progress.active
+            ? 'border-sky-200 bg-sky-50'
+            : 'border-emerald-200 bg-emerald-50'
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-950">
+            {progress.active ? 'Đang kéo bài ngoài tool' : 'Kéo bài ngoài tool đã xong'}
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            {progress.total} tài khoản đang được import bài đăng lịch sử vào DB.
+          </p>
+        </div>
+        <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-slate-700">
+          {doneCount}/{progress.total} xong
+        </span>
+      </div>
+
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white">
+        <div
+          className={`h-full rounded-full transition-all ${
+            failedCount > 0 ? 'bg-rose-500' : 'bg-sky-600'
+          }`}
+          style={{ width: `${Math.max(progress.active ? 8 : 100, percent)}%` }}
+        />
+      </div>
+
+      <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600 sm:grid-cols-4">
+        <span>Đang chờ: {queuedCount}</span>
+        <span>Đang chạy: {runningCount}</span>
+        <span>Hoàn tất: {doneCount}</span>
+        <span>Lỗi: {failedCount}</span>
+      </div>
+
+      {progress.error ? (
+        <p className="mt-3 rounded-md bg-white px-3 py-2 text-sm text-amber-700">
+          {progress.error}
+        </p>
+      ) : null}
+
+      {recentJobs.length > 0 ? (
+        <div className="mt-4 grid gap-2">
+          {recentJobs.map((job) => (
+            <div key={job.id} className="grid gap-2 rounded-md bg-white px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-slate-900">
+                    {job.label ?? job.queueName}
+                  </p>
+                  {job.details ? (
+                    <p className="truncate text-xs text-slate-500">{job.details}</p>
+                  ) : null}
+                </div>
+                <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                  {jobStatusLabel(job.status)}
+                </span>
+              </div>
+              {job.errorMessage ? (
+                <p className="rounded-md bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                  {job.errorMessage}
+                </p>
+              ) : null}
+              {job.progress?.counts ? (
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                  {Object.entries(job.progress.counts).map(([key, value]) => (
+                    <span key={key}>
+                      {countLabel(key)}: {value}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function FilterInput({
   label,
   value,
@@ -692,6 +964,23 @@ function jobStatusLabel(status: BackgroundJobView['status']): string {
       return 'Retry';
     case 'DEAD':
       return 'Lỗi';
+  }
+}
+
+function countLabel(key: string): string {
+  switch (key) {
+    case 'scanned':
+      return 'quét';
+    case 'imported':
+      return 'mới';
+    case 'updated':
+      return 'cập nhật';
+    case 'skipped':
+      return 'bỏ qua';
+    case 'failed':
+      return 'lỗi';
+    default:
+      return key;
   }
 }
 
