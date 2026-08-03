@@ -588,7 +588,7 @@ function PlatformOptions({
   if (account.platform === 'INSTAGRAM') {
     return (
       <div className="grid gap-3 md:grid-cols-2">
-        <Field label="Vị trí Instagram">
+        <Field label="Kiểu đăng Instagram">
           <SelectInput
             disabled={disabled}
             value={draft.instagramPlacement}
@@ -616,6 +616,68 @@ function PlatformOptions({
           />
           Share Reels lên feed
         </label>
+        <Field label="Location ID">
+          <TextInput
+            disabled={
+              disabled ||
+              (draft.instagramPlacement !== 'FEED' && draft.instagramPlacement !== 'CAROUSEL')
+            }
+            inputMode="numeric"
+            placeholder="Ví dụ 1234567890"
+            value={draft.instagramLocationId}
+            onChange={(event) =>
+              onChange(account.id, { instagramLocationId: event.target.value.trim() })
+            }
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            {draft.instagramPlacement === 'FEED' || draft.instagramPlacement === 'CAROUSEL'
+              ? 'Nhập Facebook Page/Place ID có địa chỉ lat/lng. Không phải tên địa điểm tự do.'
+              : 'Instagram Graph API chỉ áp dụng location_id cho Feed/Carousel trong luồng hiện tại.'}
+          </p>
+        </Field>
+        <Field label="Alt text Instagram">
+          <TextInput
+            disabled={
+              disabled ||
+              draft.instagramPlacement === 'REELS' ||
+              draft.instagramPlacement === 'STORY'
+            }
+            placeholder="Mô tả ảnh/video cho accessibility"
+            value={draft.instagramAltText}
+            onChange={(event) => onChange(account.id, { instagramAltText: event.target.value })}
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Áp dụng cho Feed/Carousel khi Meta hỗ trợ field alt_text trên media container.
+          </p>
+        </Field>
+        <Field label="Collaborators">
+          <TextInput
+            disabled={disabled}
+            placeholder="username1, username2"
+            value={draft.instagramCollaborators}
+            onChange={(event) =>
+              onChange(account.id, { instagramCollaborators: event.target.value })
+            }
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Nhập Instagram username, phân tách bằng dấu phẩy. Tài khoản được mời phải đủ điều kiện
+            collaborator.
+          </p>
+        </Field>
+        <Field label="User tags JSON">
+          <textarea
+            className="min-h-24 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+            disabled={disabled || draft.instagramPlacement === 'REELS'}
+            placeholder={'[{ "username": "brand", "x": 0.5, "y": 0.5 }]'}
+            value={draft.instagramUserTagsJson}
+            onChange={(event) =>
+              onChange(account.id, { instagramUserTagsJson: event.target.value })
+            }
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Dành cho tag người dùng trên media. x/y là vị trí tương đối từ 0 đến 1.
+          </p>
+        </Field>
         {draft.instagramPlacement === 'REELS' ? (
           <div className="md:col-span-2">
             <CoverThumbnailSelector
@@ -739,6 +801,37 @@ function FacebookOptionsPanel({
           publish.
         </p>
       </Field>
+
+      <div className="grid gap-3 md:grid-cols-3">
+        <Field label="Facebook Place ID">
+          <TextInput
+            disabled={disabled}
+            inputMode="numeric"
+            placeholder="Ví dụ 1234567890"
+            value={draft.facebookPlaceId}
+            onChange={(event) => onChange(account.id, { facebookPlaceId: event.target.value })}
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Gắn địa điểm nếu Page/API chấp nhận tham số place.
+          </p>
+        </Field>
+        <Field label="Alt text ảnh">
+          <TextInput
+            disabled={disabled}
+            placeholder="Mô tả ảnh cho accessibility"
+            value={draft.facebookPhotoAltText}
+            onChange={(event) => onChange(account.id, { facebookPhotoAltText: event.target.value })}
+          />
+        </Field>
+        <Field label="Tiêu đề video">
+          <TextInput
+            disabled={disabled}
+            placeholder="Dùng riêng cho video"
+            value={draft.facebookVideoTitle}
+            onChange={(event) => onChange(account.id, { facebookVideoTitle: event.target.value })}
+          />
+        </Field>
+      </div>
 
       <CoverThumbnailSelector
         account={account}
@@ -886,6 +979,42 @@ function PinterestOptionsPanel({
             <option value="GENERATIVE_AI">Có nội dung AI-generated</option>
           </SelectInput>
         </Field>
+
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.pinterestIsStandard}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange(account.id, { pinterestIsStandard: event.target.checked })
+            }
+          />
+          Media standard
+        </label>
+
+        <Field label="Ad account ID">
+          <TextInput
+            disabled={disabled}
+            placeholder="Chỉ dùng khi publish Pin theo ad account"
+            value={draft.pinterestAdAccountId}
+            onChange={(event) => onChange(account.id, { pinterestAdAccountId: event.target.value })}
+          />
+        </Field>
+
+        <Field label="Product tags JSON">
+          <textarea
+            className="min-h-24 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+            disabled={disabled}
+            placeholder={'[{ "product_id": "123", "x": 0.5, "y": 0.5 }]'}
+            value={draft.pinterestProductTagsJson}
+            onChange={(event) =>
+              onChange(account.id, { pinterestProductTagsJson: event.target.value })
+            }
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Field nâng cao cho product tagging. Nếu JSON sai định dạng, hệ thống sẽ bỏ qua khi gửi.
+          </p>
+        </Field>
       </div>
 
       <CoverThumbnailSelector
@@ -970,6 +1099,81 @@ function YouTubeOptionsPanel({
             Category ID là mã danh mục video của YouTube Data API. Mặc định 22 là People & Blogs.
           </p>
         </Field>
+        <Field label="Tags YouTube">
+          <TextInput
+            disabled={disabled}
+            placeholder="tag 1, tag 2, tag 3"
+            value={draft.youtubeTags}
+            onChange={(event) => onChange(account.id, { youtubeTags: event.target.value })}
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Nếu để trống, hệ thống dùng hashtag chung làm tags.
+          </p>
+        </Field>
+        <Field label="License">
+          <SelectInput
+            disabled={disabled}
+            value={draft.youtubeLicense}
+            onChange={(event) =>
+              onChange(account.id, {
+                youtubeLicense: event.target.value as PlatformOverrideDraft['youtubeLicense'],
+              })
+            }
+          >
+            <option value="youtube">Standard YouTube License</option>
+            <option value="creativeCommon">Creative Commons</option>
+          </SelectInput>
+        </Field>
+        <Field label="Ngôn ngữ metadata">
+          <TextInput
+            disabled={disabled}
+            placeholder="vi, en, en-US..."
+            value={draft.youtubeDefaultLanguage}
+            onChange={(event) =>
+              onChange(account.id, { youtubeDefaultLanguage: event.target.value })
+            }
+          />
+        </Field>
+        <Field label="Ngôn ngữ audio">
+          <TextInput
+            disabled={disabled}
+            placeholder="vi, en, en-US..."
+            value={draft.youtubeDefaultAudioLanguage}
+            onChange={(event) =>
+              onChange(account.id, { youtubeDefaultAudioLanguage: event.target.value })
+            }
+          />
+        </Field>
+        <Field label="Recording date">
+          <TextInput
+            disabled={disabled}
+            placeholder="2026-08-03T10:00:00Z"
+            value={draft.youtubeRecordingDate}
+            onChange={(event) => onChange(account.id, { youtubeRecordingDate: event.target.value })}
+          />
+        </Field>
+        <Field label="Recording location">
+          <div className="grid gap-2 md:grid-cols-2">
+            <TextInput
+              disabled={disabled}
+              inputMode="decimal"
+              placeholder="Latitude"
+              value={draft.youtubeRecordingLatitude}
+              onChange={(event) =>
+                onChange(account.id, { youtubeRecordingLatitude: event.target.value })
+              }
+            />
+            <TextInput
+              disabled={disabled}
+              inputMode="decimal"
+              placeholder="Longitude"
+              value={draft.youtubeRecordingLongitude}
+              onChange={(event) =>
+                onChange(account.id, { youtubeRecordingLongitude: event.target.value })
+              }
+            />
+          </div>
+        </Field>
         <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
           <input
             checked={draft.youtubeMadeForKids}
@@ -989,6 +1193,37 @@ function YouTubeOptionsPanel({
             }
           />
           Có synthetic media
+        </label>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.youtubeNotifySubscribers}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange(account.id, { youtubeNotifySubscribers: event.target.checked })
+            }
+          />
+          Notify subscribers
+        </label>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.youtubeEmbeddable}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) => onChange(account.id, { youtubeEmbeddable: event.target.checked })}
+          />
+          Cho embed video
+        </label>
+        <label className="flex min-h-11 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700">
+          <input
+            checked={draft.youtubePublicStatsViewable}
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange(account.id, { youtubePublicStatsViewable: event.target.checked })
+            }
+          />
+          Hiện thống kê public
         </label>
       </div>
 
@@ -1497,6 +1732,29 @@ function TikTokOptionsPanel({
             ))}
           </SelectInput>
         </Field>
+        {images.length > 0 ? (
+          <>
+            <Field label="Photo title TikTok">
+              <TextInput
+                disabled={disabled}
+                placeholder="Nếu trống dùng tiêu đề target"
+                value={draft.tiktokPhotoTitle}
+                onChange={(event) => onChange(account.id, { tiktokPhotoTitle: event.target.value })}
+              />
+            </Field>
+            <Field label="Photo description TikTok">
+              <textarea
+                className="min-h-24 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100"
+                disabled={disabled}
+                placeholder="Nếu trống dùng caption + hashtag của target"
+                value={draft.tiktokPhotoDescription}
+                onChange={(event) =>
+                  onChange(account.id, { tiktokPhotoDescription: event.target.value })
+                }
+              />
+            </Field>
+          </>
+        ) : null}
       </div>
 
       {directPost ? (

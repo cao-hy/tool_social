@@ -158,6 +158,11 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         shareToFeed: mediaType === 'REELS' ? options.shareToFeed : undefined,
         coverUrl:
           media.type === 'VIDEO' && mediaType === 'REELS' ? input.thumbnail?.url : undefined,
+        locationId:
+          mediaType !== 'REELS' && mediaType !== 'STORIES' ? options.locationId : undefined,
+        altText: mediaType !== 'REELS' && mediaType !== 'STORIES' ? options.altText : undefined,
+        collaborators: options.collaborators,
+        userTags: mediaType !== 'REELS' ? options.userTags : undefined,
       });
       if (media.type === 'VIDEO') {
         await this.waitUntilContainerReady(ctx, creationId, 'video');
@@ -209,6 +214,10 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         mediaType: 'CAROUSEL',
         children: childrenIds,
         caption: message,
+        locationId: options.locationId,
+        altText: options.altText,
+        collaborators: options.collaborators,
+        userTags: options.userTags,
       });
       await this.waitUntilContainerReady(ctx, carouselCreationId, 'carousel');
 
@@ -566,6 +575,7 @@ function mapInstagramComment(input: {
 
 function instagramPublishOptions(options: Record<string, unknown> | undefined): {
   mediaType?: 'FEED' | 'CAROUSEL' | 'REELS' | 'STORIES';
+  locationId?: string;
   shareToFeed?: boolean;
 } {
   const rawMediaType = options?.mediaType;
@@ -575,6 +585,8 @@ function instagramPublishOptions(options: Record<string, unknown> | undefined): 
       : readEnum(rawMediaType, ['FEED', 'CAROUSEL', 'REELS', 'STORIES'], undefined);
   return {
     mediaType,
+    locationId:
+      typeof options?.locationId === 'string' ? options.locationId.trim() || undefined : undefined,
     shareToFeed: options?.shareToFeed === true,
   };
 }

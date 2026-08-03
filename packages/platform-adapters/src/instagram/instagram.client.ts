@@ -121,6 +121,10 @@ export class InstagramGraphClient {
     children?: string[];
     shareToFeed?: boolean;
     coverUrl?: string;
+    locationId?: string;
+    altText?: string;
+    collaborators?: string[];
+    userTags?: unknown[];
   }): Promise<string> {
     const body: Record<string, string> = {
       access_token: input.accessToken,
@@ -133,6 +137,10 @@ export class InstagramGraphClient {
     }
     if (input.caption) body.caption = input.caption;
     if (input.coverUrl) body.cover_url = input.coverUrl;
+    if (input.locationId) body.location_id = input.locationId;
+    if (input.altText) body.alt_text = input.altText;
+    if (input.collaborators?.length) body.collaborators = input.collaborators.join(',');
+    if (input.userTags?.length) body.user_tags = JSON.stringify(input.userTags);
     if (input.isCarouselItem) body.is_carousel_item = 'true';
     if (input.mediaType === 'REELS' || input.mediaType === 'STORIES') {
       body.media_type = input.mediaType;

@@ -8,20 +8,42 @@ export interface PlatformOverrideDraft {
   linkUrl: string;
   mediaAssetIds: string[];
   facebookPostType: 'AUTO' | 'TEXT_LINK' | 'PHOTO' | 'VIDEO';
+  facebookPlaceId: string;
+  facebookPhotoAltText: string;
+  facebookVideoTitle: string;
   instagramPlacement: 'FEED' | 'CAROUSEL' | 'REELS' | 'STORY';
   instagramShareToFeed: boolean;
+  instagramLocationId: string;
+  instagramAltText: string;
+  instagramCollaborators: string;
+  instagramUserTagsJson: string;
   pinterestBoardId: string;
   pinterestBoardSectionId: string;
   pinterestAltText: string;
   pinterestDominantColor: string;
   pinterestAiDisclosure: 'NONE' | 'GENERATIVE_AI';
+  pinterestIsStandard: boolean;
+  pinterestAdAccountId: string;
+  pinterestProductTagsJson: string;
   thumbnailMode: 'AUTO' | 'GENERATED' | 'MEDIA_ASSET';
   thumbnailMediaAssetId: string;
   youtubePrivacyStatus: 'public' | 'unlisted' | 'private';
   youtubeCategoryId: string;
+  youtubeTags: string;
+  youtubeNotifySubscribers: boolean;
+  youtubeLicense: 'youtube' | 'creativeCommon';
+  youtubeEmbeddable: boolean;
+  youtubePublicStatsViewable: boolean;
+  youtubeDefaultLanguage: string;
+  youtubeDefaultAudioLanguage: string;
+  youtubeRecordingDate: string;
+  youtubeRecordingLatitude: string;
+  youtubeRecordingLongitude: string;
   youtubeMadeForKids: boolean;
   youtubeContainsSyntheticMedia: boolean;
   tiktokPostMode: 'DIRECT_POST' | 'MEDIA_UPLOAD';
+  tiktokPhotoTitle: string;
+  tiktokPhotoDescription: string;
   tiktokPrivacyLevel:
     '' | 'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'FOLLOWER_OF_CREATOR' | 'SELF_ONLY';
   tiktokDisableComment: boolean;
@@ -45,20 +67,42 @@ export const EMPTY_PLATFORM_OVERRIDE: PlatformOverrideDraft = {
   linkUrl: '',
   mediaAssetIds: [],
   facebookPostType: 'AUTO',
+  facebookPlaceId: '',
+  facebookPhotoAltText: '',
+  facebookVideoTitle: '',
   instagramPlacement: 'FEED',
   instagramShareToFeed: false,
+  instagramLocationId: '',
+  instagramAltText: '',
+  instagramCollaborators: '',
+  instagramUserTagsJson: '',
   pinterestBoardId: '',
   pinterestBoardSectionId: '',
   pinterestAltText: '',
   pinterestDominantColor: '',
   pinterestAiDisclosure: 'NONE',
+  pinterestIsStandard: true,
+  pinterestAdAccountId: '',
+  pinterestProductTagsJson: '',
   thumbnailMode: 'AUTO',
   thumbnailMediaAssetId: '',
   youtubePrivacyStatus: 'public',
   youtubeCategoryId: '22',
+  youtubeTags: '',
+  youtubeNotifySubscribers: true,
+  youtubeLicense: 'youtube',
+  youtubeEmbeddable: true,
+  youtubePublicStatsViewable: true,
+  youtubeDefaultLanguage: '',
+  youtubeDefaultAudioLanguage: '',
+  youtubeRecordingDate: '',
+  youtubeRecordingLatitude: '',
+  youtubeRecordingLongitude: '',
   youtubeMadeForKids: false,
   youtubeContainsSyntheticMedia: false,
   tiktokPostMode: 'MEDIA_UPLOAD',
+  tiktokPhotoTitle: '',
+  tiktokPhotoDescription: '',
   tiktokPrivacyLevel: '',
   tiktokDisableComment: true,
   tiktokDisableDuet: true,
@@ -173,8 +217,15 @@ export function platformOverrideFromOptions(input: {
     linkUrl: input.linkUrl ?? '',
     mediaAssetIds: input.mediaAssetIds ?? [],
     facebookPostType: readEnum(options.postType, ['AUTO', 'TEXT_LINK', 'PHOTO', 'VIDEO'], 'AUTO'),
+    facebookPlaceId: readString(options.placeId),
+    facebookPhotoAltText: readString(options.photoAltText),
+    facebookVideoTitle: readString(options.videoTitle),
     instagramPlacement: readEnum(options.mediaType, ['FEED', 'CAROUSEL', 'REELS', 'STORY'], 'FEED'),
     instagramShareToFeed: readBoolean(options.shareToFeed, false),
+    instagramLocationId: readString(options.locationId),
+    instagramAltText: readString(options.altText),
+    instagramCollaborators: readCsv(options.collaborators),
+    instagramUserTagsJson: readJsonText(options.userTags),
     pinterestBoardId: readString(options.boardId),
     pinterestBoardSectionId: readString(options.boardSectionId),
     pinterestAltText: readString(options.altText),
@@ -183,6 +234,9 @@ export function platformOverrideFromOptions(input: {
       Array.isArray(options.aiDisclosures) && options.aiDisclosures.length > 0
         ? 'GENERATIVE_AI'
         : 'NONE',
+    pinterestIsStandard: readBoolean(options.isStandard, true),
+    pinterestAdAccountId: readString(options.adAccountId),
+    pinterestProductTagsJson: readJsonText(options.productTags),
     thumbnailMode: readEnum(options.thumbnailMode, ['AUTO', 'GENERATED', 'MEDIA_ASSET'], 'AUTO'),
     thumbnailMediaAssetId: readString(options.thumbnailMediaAssetId),
     youtubePrivacyStatus: readEnum(
@@ -191,9 +245,21 @@ export function platformOverrideFromOptions(input: {
       'public',
     ),
     youtubeCategoryId: readString(options.categoryId) || '22',
+    youtubeTags: readCsv(options.tags),
+    youtubeNotifySubscribers: readBoolean(options.notifySubscribers, true),
+    youtubeLicense: readEnum(options.license, ['youtube', 'creativeCommon'], 'youtube'),
+    youtubeEmbeddable: readBoolean(options.embeddable, true),
+    youtubePublicStatsViewable: readBoolean(options.publicStatsViewable, true),
+    youtubeDefaultLanguage: readString(options.defaultLanguage),
+    youtubeDefaultAudioLanguage: readString(options.defaultAudioLanguage),
+    youtubeRecordingDate: readString(options.recordingDate),
+    youtubeRecordingLatitude: readString(options.recordingLatitude),
+    youtubeRecordingLongitude: readString(options.recordingLongitude),
     youtubeMadeForKids: readBoolean(options.selfDeclaredMadeForKids, false),
     youtubeContainsSyntheticMedia: readBoolean(options.containsSyntheticMedia, false),
     tiktokPostMode: readEnum(options.postMode, ['DIRECT_POST', 'MEDIA_UPLOAD'], 'MEDIA_UPLOAD'),
+    tiktokPhotoTitle: readString(options.photoTitle),
+    tiktokPhotoDescription: readString(options.photoDescription),
     tiktokPrivacyLevel: readEnum(
       options.privacyLevel,
       ['', 'PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],
@@ -225,12 +291,25 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
     case 'FACEBOOK':
       return compactOptions({
         postType: draft.facebookPostType === 'AUTO' ? undefined : draft.facebookPostType,
+        placeId: draft.facebookPlaceId.trim() || undefined,
+        photoAltText: draft.facebookPhotoAltText.trim() || undefined,
+        videoTitle: draft.facebookVideoTitle.trim() || undefined,
         ...thumbnail,
       });
     case 'INSTAGRAM':
       return compactOptions({
         mediaType: draft.instagramPlacement,
         shareToFeed: draft.instagramPlacement === 'REELS' ? draft.instagramShareToFeed : undefined,
+        locationId:
+          draft.instagramPlacement === 'FEED' || draft.instagramPlacement === 'CAROUSEL'
+            ? draft.instagramLocationId.trim() || undefined
+            : undefined,
+        altText:
+          draft.instagramPlacement !== 'REELS' && draft.instagramPlacement !== 'STORY'
+            ? draft.instagramAltText.trim() || undefined
+            : undefined,
+        collaborators: splitCsv(draft.instagramCollaborators),
+        userTags: parseJsonArray(draft.instagramUserTagsJson),
         ...thumbnail,
       });
     case 'PINTEREST':
@@ -241,12 +320,25 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
         dominantColor: draft.pinterestDominantColor.trim() || undefined,
         aiDisclosures:
           draft.pinterestAiDisclosure === 'GENERATIVE_AI' ? ['GENERATIVE_AI'] : undefined,
+        isStandard: draft.pinterestIsStandard,
+        adAccountId: draft.pinterestAdAccountId.trim() || undefined,
+        productTags: parseJsonArray(draft.pinterestProductTagsJson),
         ...thumbnail,
       });
     case 'YOUTUBE':
       return compactOptions({
         privacyStatus: draft.youtubePrivacyStatus,
         categoryId: draft.youtubeCategoryId.trim() || '22',
+        tags: splitCsv(draft.youtubeTags),
+        notifySubscribers: draft.youtubeNotifySubscribers,
+        license: draft.youtubeLicense,
+        embeddable: draft.youtubeEmbeddable,
+        publicStatsViewable: draft.youtubePublicStatsViewable,
+        defaultLanguage: draft.youtubeDefaultLanguage.trim() || undefined,
+        defaultAudioLanguage: draft.youtubeDefaultAudioLanguage.trim() || undefined,
+        recordingDate: draft.youtubeRecordingDate.trim() || undefined,
+        recordingLatitude: draft.youtubeRecordingLatitude.trim() || undefined,
+        recordingLongitude: draft.youtubeRecordingLongitude.trim() || undefined,
         selfDeclaredMadeForKids: draft.youtubeMadeForKids,
         containsSyntheticMedia: draft.youtubeContainsSyntheticMedia,
         ...thumbnail,
@@ -255,6 +347,8 @@ export function platformOptions(platform: Platform, draft: PlatformOverrideDraft
       const directPost = draft.tiktokPostMode === 'DIRECT_POST';
       return compactOptions({
         postMode: draft.tiktokPostMode,
+        photoTitle: draft.tiktokPhotoTitle.trim() || undefined,
+        photoDescription: draft.tiktokPhotoDescription.trim() || undefined,
         privacyLevel: directPost ? draft.tiktokPrivacyLevel : undefined,
         disableComment: directPost ? draft.tiktokDisableComment : undefined,
         disableDuet: directPost ? draft.tiktokDisableDuet : undefined,
@@ -328,10 +422,41 @@ function readString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function readCsv(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string').join(', ')
+    : readString(value);
+}
+
+function readJsonText(value: unknown): string {
+  return Array.isArray(value) || (value && typeof value === 'object')
+    ? JSON.stringify(value, null, 2)
+    : '';
+}
+
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
 function readEnum<const T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === 'string' && allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+function splitCsv(value: string): string[] | undefined {
+  const items = value
+    .split(',')
+    .map((item) => item.trim().replace(/^#/, ''))
+    .filter(Boolean);
+  return items.length ? items : undefined;
+}
+
+function parseJsonArray(value: string): unknown[] | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }

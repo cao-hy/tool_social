@@ -147,6 +147,7 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     const message = [input.caption, input.hashtags?.map((tag) => `#${tag}`).join(' ')]
       .filter(Boolean)
       .join('\n\n');
+    const options = facebookPublishOptions(input.options);
     const images = input.media.filter((item) => item.type === 'IMAGE');
     const videos = input.media.filter((item) => item.type === 'VIDEO');
 
@@ -167,8 +168,9 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
         bytes: video.bytes ?? new Uint8Array(),
         fileName: fileNameFromMediaUrl(video.url, 'video.mp4'),
         mimeType: video.mimeType,
-        title: input.title,
+        title: options.videoTitle ?? input.title,
         description: message || input.description,
+        placeId: options.placeId,
         thumbnail: input.thumbnail
           ? {
               bytes: input.thumbnail.bytes ?? new Uint8Array(),
@@ -225,6 +227,8 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
         fileName: fileNameFromMediaUrl(image.url, 'image-1.jpg'),
         mimeType: image.mimeType,
         caption: message || undefined,
+        altText: options.photoAltText ?? image.altText,
+        placeId: options.placeId,
         published: true,
       });
 
@@ -255,6 +259,7 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
                 bytes: image.bytes ?? new Uint8Array(),
                 fileName: fileNameFromMediaUrl(image.url, `image-${index + 1}.jpg`),
                 mimeType: image.mimeType,
+                altText: options.photoAltText ?? image.altText,
                 published: false,
               });
               return uploaded.id;
@@ -268,6 +273,7 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
       message: message || undefined,
       link: attachedMediaIds?.length ? undefined : input.linkUrl,
       attachedMediaIds,
+      placeId: options.placeId,
     });
 
     return {
@@ -727,6 +733,22 @@ function numberRecord(value: unknown): Record<string, number> | undefined {
 function sumRecordValues(record: Record<string, number> | undefined): number | undefined {
   if (!record) return undefined;
   return Object.values(record).reduce((total, value) => total + value, 0);
+}
+
+function facebookPublishOptions(options: Record<string, unknown> | undefined): {
+  placeId?: string;
+  photoAltText?: string;
+  videoTitle?: string;
+} {
+  return {
+    placeId: readOptionalString(options?.placeId),
+    photoAltText: readOptionalString(options?.photoAltText),
+    videoTitle: readOptionalString(options?.videoTitle),
+  };
+}
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function facebookPlatformMetrics(record: Record<string, unknown>): PlatformMetricMap {

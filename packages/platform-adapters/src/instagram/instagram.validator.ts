@@ -8,6 +8,8 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
   const hasVideo = input.media.some((m) => m.type === 'VIDEO');
   const requestedMediaType =
     typeof input.options?.mediaType === 'string' ? input.options.mediaType : undefined;
+  const locationId =
+    typeof input.options?.locationId === 'string' ? input.options.locationId.trim() : '';
   const usesReelsCover =
     Boolean(input.thumbnail) &&
     input.media.length === 1 &&
@@ -99,6 +101,23 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
       message: 'Nội dung (bao gồm hashtag) vượt quá 2200 ký tự.',
       limit: 2200,
     });
+  }
+
+  if (locationId) {
+    if (!/^\d+$/.test(locationId)) {
+      issues.push({
+        field: 'options.locationId',
+        message: 'Instagram location_id phải là Facebook Page/Place ID dạng số.',
+      });
+    }
+
+    if (requestedMediaType === 'REELS' || requestedMediaType === 'STORY') {
+      issues.push({
+        field: 'options.locationId',
+        message:
+          'Instagram location_id chỉ áp dụng cho Feed/Carousel trong luồng publish hiện tại.',
+      });
+    }
   }
 
   return { valid: issues.length === 0, issues };

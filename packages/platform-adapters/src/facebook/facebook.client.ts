@@ -144,6 +144,7 @@ export class FacebookGraphClient {
     message?: string;
     link?: string;
     attachedMediaIds?: string[];
+    placeId?: string;
   }): Promise<FacebookPublishPostResponse> {
     const body: Record<string, string> = {
       access_token: input.pageAccessToken,
@@ -151,6 +152,7 @@ export class FacebookGraphClient {
     };
     if (input.message) body.message = input.message;
     if (input.link) body.link = input.link;
+    if (input.placeId) body.place = input.placeId;
     input.attachedMediaIds?.forEach((mediaId, index) => {
       body[`attached_media[${index}]`] = JSON.stringify({ media_fbid: mediaId });
     });
@@ -165,11 +167,15 @@ export class FacebookGraphClient {
     fileName: string;
     mimeType: string;
     caption?: string;
+    altText?: string;
+    placeId?: string;
     published?: boolean;
     temporary?: boolean;
   }): Promise<FacebookPhotoUploadResponse> {
     const form = encodeMultipartForm([
       ...(input.caption ? [{ name: 'caption', value: input.caption }] : []),
+      ...(input.altText ? [{ name: 'alt_text_custom', value: input.altText }] : []),
+      ...(input.placeId ? [{ name: 'place', value: input.placeId }] : []),
       { name: 'published', value: input.published === false ? '0' : '1' },
       ...(input.temporary !== undefined
         ? [{ name: 'temporary', value: String(input.temporary) }]
@@ -197,6 +203,7 @@ export class FacebookGraphClient {
     mimeType: string;
     title?: string;
     description?: string;
+    placeId?: string;
     thumbnail?: {
       bytes: Uint8Array;
       fileName: string;
@@ -206,6 +213,7 @@ export class FacebookGraphClient {
     const form = encodeMultipartForm([
       ...(input.title ? [{ name: 'title', value: input.title }] : []),
       ...(input.description ? [{ name: 'description', value: input.description }] : []),
+      ...(input.placeId ? [{ name: 'place', value: input.placeId }] : []),
       { name: 'published', value: '1' },
       ...(input.thumbnail
         ? [
