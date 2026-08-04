@@ -69,12 +69,14 @@ export function DashboardCharts({ posts }: { posts: DashboardPost[] }) {
     { name: string; Views: number; Engagement: number; Comments: number }
   > = {};
   posts.forEach((p) => {
-    if (!platformStats[p.platform]) {
-      platformStats[p.platform] = { name: p.platform, Views: 0, Engagement: 0, Comments: 0 };
+    let stat = platformStats[p.platform];
+    if (!stat) {
+      stat = { name: p.platform, Views: 0, Engagement: 0, Comments: 0 };
+      platformStats[p.platform] = stat;
     }
-    platformStats[p.platform].Views += p.metrics.views?.value ?? 0;
-    platformStats[p.platform].Engagement += p.metrics.engagement?.value ?? 0;
-    platformStats[p.platform].Comments += p.metrics.comments?.value ?? 0;
+    stat.Views += p.metrics.views?.value ?? 0;
+    stat.Engagement += p.metrics.engagement?.value ?? 0;
+    stat.Comments += p.metrics.comments?.value ?? 0;
   });
   const platformComparisonData = Object.values(platformStats);
 
@@ -88,8 +90,11 @@ export function DashboardCharts({ posts }: { posts: DashboardPost[] }) {
   posts.forEach((p) => {
     if (p.publishedAt) {
       const dateStr = new Date(p.publishedAt).toLocaleDateString('vi-VN');
-      if (!dailyViews[dateStr]) dailyViews[dateStr] = 0;
-      dailyViews[dateStr] += p.metrics.views.value ?? 0;
+      let viewsForDate = dailyViews[dateStr];
+      if (typeof viewsForDate !== 'number') {
+        viewsForDate = 0;
+      }
+      dailyViews[dateStr] = viewsForDate + (p.metrics.views?.value ?? 0);
     }
   });
   const dailyViewsData = Object.entries(dailyViews)
