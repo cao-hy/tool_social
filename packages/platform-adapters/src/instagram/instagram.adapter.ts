@@ -577,6 +577,9 @@ function instagramPublishOptions(options: Record<string, unknown> | undefined): 
   mediaType?: 'FEED' | 'CAROUSEL' | 'REELS' | 'STORIES';
   locationId?: string;
   shareToFeed?: boolean;
+  altText?: string;
+  collaborators?: string[];
+  userTags?: unknown[];
 } {
   const rawMediaType = options?.mediaType;
   const mediaType =
@@ -588,6 +591,11 @@ function instagramPublishOptions(options: Record<string, unknown> | undefined): 
     locationId:
       typeof options?.locationId === 'string' ? options.locationId.trim() || undefined : undefined,
     shareToFeed: options?.shareToFeed === true,
+    altText: typeof options?.altText === 'string' ? options.altText : undefined,
+    collaborators: Array.isArray(options?.collaborators)
+      ? (options.collaborators as string[])
+      : undefined,
+    userTags: Array.isArray(options?.userTags) ? options.userTags : undefined,
   };
 }
 

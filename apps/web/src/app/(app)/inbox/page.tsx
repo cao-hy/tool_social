@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   Clock3,
   CloudDownload,
+  ExternalLink,
   MessageSquare,
   Eye,
   EyeOff,
@@ -35,12 +36,19 @@ import {
   TextInput,
 } from '@/components/form-controls';
 import { useToast } from '@/components/toast-provider';
-import { commentsApi, platformsApi, socialAccountsApi, workspaceApi } from '@/lib/api-client';
+import {
+  commentsApi,
+  platformsApi,
+  socialAccountsApi,
+  workspaceApi,
+  postsApi,
+} from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import type {
   CommentTagView,
   CommentView,
+  ContentPostView,
   PlatformCapabilitiesView,
   ReplyTemplateView,
   SocialAccountView,
@@ -70,6 +78,7 @@ export default function InboxPage() {
   const toast = useToast();
   const workspace = auth.activeWorkspace;
   const [comments, setComments] = useState<CommentView[]>([]);
+  const [posts, setPosts] = useState<ContentPostView[]>([]);
   const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [tags, setTags] = useState<CommentTagView[]>([]);
@@ -89,6 +98,7 @@ export default function InboxPage() {
   const [publicCommentBody, setPublicCommentBody] = useState('');
   const [bulkPostCommentBody, setBulkPostCommentBody] = useState('');
   const [bulkReplyBody, setBulkReplyBody] = useState('');
+  const [activeThreadCommentBody, setActiveThreadCommentBody] = useState('');
   const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(() => new Set());
   const [selectedCommentIds, setSelectedCommentIds] = useState<Set<string>>(() => new Set());
   const [newTagName, setNewTagName] = useState('');
@@ -96,6 +106,7 @@ export default function InboxPage() {
   const [newTemplateName, setNewTemplateName] = useState('');
   const [newTemplateBody, setNewTemplateBody] = useState('');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,8 +128,16 @@ export default function InboxPage() {
     setLoading(true);
     setError(null);
     try {
-      const commentResult = await commentsApi.list(workspace.id, filters);
+      const [commentResult, postResult] = await Promise.all([
+        commentsApi.list(workspace.id, filters),
+        postsApi.list(workspace.id, {
+          platform: filters.platform,
+          q: filters.q,
+          limit: 100,
+        }),
+      ]);
       setComments(commentResult.items);
+      setPosts(postResult.items);
       keepSelectedComment(commentResult.items);
     } catch (loadError) {
       setError(getErrorMessage(loadError));
@@ -181,7 +200,10 @@ export default function InboxPage() {
   }, [workspace, filters]);
 
   const rootComments = useMemo(() => comments.filter((comment) => !comment.parentId), [comments]);
-  const postThreads = useMemo(() => buildPostThreads(comments), [comments]);
+  const postThreads = useMemo(
+    () => buildPostThreads(posts, comments, filters),
+    [posts, comments, filters],
+  );
   const counts = useMemo(() => statusCounts(comments), [comments]);
 
   if (!workspace) {
@@ -261,6 +283,9 @@ export default function InboxPage() {
     ? comments.filter((comment) => comment.parentId === selected.id)
     : [];
   const activeThread =
+    (activeThreadId
+      ? postThreads.find((thread) => thread.platformPostId === activeThreadId)
+      : null) ??
     (selected
       ? postThreads.find((thread) => thread.platformPostId === selected.platformPostId)
       : null) ??
@@ -403,6 +428,63 @@ export default function InboxPage() {
     }
   }
 
+  async function createPublicCommentForActiveThread() {
+    if (!workspace || !activeThread) return;
+    const message = activeThreadCommentBody.trim();
+    if (!message) {
+      toast.warning('Nhập nội dung comment trước khi gửi.');
+      return;
+    }
+    if (createCommentBlockReason) {
+      toast.warning(createCommentBlockReason);
+      return;
+    }
+
+    setBusy('create-thread-comment');
+    setError(null);
+    try {
+      await commentsApi.createPlatformComment(workspace.id, activeThread.platformPostId, message);
+
+      const account = accounts.find((a) => a.id === activeThread.rootComments[0]?.socialAccountId);
+      const fakeComment: CommentView = {
+        id: `fake-${Date.now()}`,
+        platform: activeThread.platform,
+        socialAccountId: activeThread.rootComments[0]?.socialAccountId ?? '',
+        socialAccountName: account?.name ?? '',
+        platformPostId: activeThread.rootComments[0]?.platformPostId ?? '',
+        contentPostId: activeThread.rootComments[0]?.contentPostId ?? '',
+        contentPostTitle: activeThread.rootComments[0]?.contentPostTitle ?? '',
+        externalCommentId: `fake-${Date.now()}`,
+        parentId: null,
+        authorExternalId: null,
+        authorName: account?.name ?? 'SocialHub',
+        authorAvatarUrl: account?.profileUrl ?? null,
+        message: message.trim(),
+        likeCount: 0,
+        status: 'RESOLVED',
+        isHidden: false,
+        assignment: null,
+        tags: [],
+        notes: [],
+        replies: [],
+        postedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        isFromPage: true,
+      };
+      setComments((prev) => [...prev, fakeComment]);
+
+      setActiveThreadCommentBody('');
+      toast.info(`${PLATFORM_LABELS[activeThread.platform]}: đã đưa comment công khai vào queue.`);
+      scheduleCommentReloads();
+      await loadComments();
+    } catch (actionError) {
+      toast.error(`${PLATFORM_LABELS[activeThread.platform]}: ${getErrorMessage(actionError)}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function bulkCreatePublicComments() {
     const message = bulkPostCommentBody.trim();
     const platformPostIds = [...selectedPostIds];
@@ -480,6 +562,62 @@ export default function InboxPage() {
     setTagId('');
     setQuery('');
     setDebouncedQuery('');
+  }
+
+  async function handleInlineReply(parentId: string, message: string) {
+    if (!workspace) return;
+    setBusy(`reply-${parentId}`);
+    setError(null);
+    try {
+      await commentsApi.reply(workspace.id, parentId, message.trim());
+
+      const parent = comments.find((c) => c.id === parentId);
+      if (parent) {
+        const account = accounts.find((a) => a.id === parent.socialAccountId);
+        const fakeReply: CommentView = {
+          id: `fake-${Date.now()}`,
+          platform: parent.platform,
+          socialAccountId: parent.socialAccountId,
+          socialAccountName: parent.socialAccountName,
+          platformPostId: parent.platformPostId,
+          contentPostId: parent.contentPostId,
+          contentPostTitle: parent.contentPostTitle,
+          externalCommentId: `fake-${Date.now()}`,
+          parentId: parentId,
+          authorExternalId: null,
+          authorName: account?.name ?? 'SocialHub',
+          authorAvatarUrl: account?.profileUrl ?? null,
+          message: message.trim(),
+          likeCount: 0,
+          status: 'RESOLVED',
+          isHidden: false,
+          assignment: null,
+          tags: [],
+          notes: [],
+          replies: [],
+          postedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          isFromPage: true,
+        };
+        setComments((prev) => [...prev, fakeReply]);
+      }
+
+      scheduleCommentReloads();
+      toast.success('Đã gửi phản hồi');
+    } catch (actionError) {
+      toast.error(getErrorMessage(actionError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function handleDeleteComment(commentId: string, deleteFromPlatform: boolean) {
+    if (!workspace) return;
+    void mutateComment('delete-comment', async () => {
+      await commentsApi.delete(workspace.id, commentId, deleteFromPlatform);
+      if (commentId === selectedId) setSelectedId(null);
+    });
   }
 
   return (
@@ -608,14 +746,14 @@ export default function InboxPage() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <div className="rounded-md border border-slate-200 bg-white">
-          <div className="border-b border-slate-200 px-4 py-3">
-            <p className="text-sm font-semibold text-slate-950">Bài đang có hội thoại</p>
+        <div className="flex h-[calc(100vh-220px)] min-h-[560px] flex-col rounded-md border border-slate-200 bg-white">
+          <div className="shrink-0 border-b border-slate-200 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-950">Danh sách bài đăng</p>
             <p className="mt-1 text-xs text-slate-500">
               Chọn nhiều bài để gửi cùng một comment công khai.
             </p>
           </div>
-          <div className="max-h-[520px] overflow-y-auto p-3">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-3">
             {postThreads.map((thread) => (
               <div
                 key={thread.platformPostId}
@@ -634,7 +772,12 @@ export default function InboxPage() {
                 />
                 <button
                   className="min-w-0 flex-1 text-left"
-                  onClick={() => setSelectedId(thread.rootComments[0]?.id ?? null)}
+                  onClick={() => {
+                    setActiveThreadId(thread.platformPostId);
+                    if (!thread.rootComments.some((c) => c.id === selectedId)) {
+                      setSelectedId(thread.rootComments[0]?.id ?? null);
+                    }
+                  }}
                   type="button"
                 >
                   <div className="flex items-center gap-2">
@@ -642,6 +785,18 @@ export default function InboxPage() {
                       {platformShortLabel(thread.platform)}
                     </span>
                     <span className="truncate text-xs text-slate-500">{thread.accountName}</span>
+                    {thread.externalUrl ? (
+                      <a
+                        href={thread.externalUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ml-auto text-slate-400 hover:text-brand-600"
+                        onClick={(e) => e.stopPropagation()}
+                        title="Mở bài đăng"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    ) : null}
                   </div>
                   <p className="mt-2 line-clamp-2 text-sm font-semibold text-slate-950">
                     {thread.title}
@@ -658,8 +813,8 @@ export default function InboxPage() {
           </div>
         </div>
 
-        <div className="rounded-md border border-slate-200 bg-white">
-          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div className="flex h-[calc(100vh-220px)] min-h-[560px] flex-col rounded-md border border-slate-200 bg-white">
+          <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
             <div>
               <p className="text-sm font-semibold text-slate-950">
                 {activeThread?.title ?? 'Chọn một bài đăng'}
@@ -678,35 +833,61 @@ export default function InboxPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="space-y-3">
-              {activeThread?.rootComments.map((comment) => (
-                <ThreadCommentTree
-                  key={comment.id}
-                  busy={busy}
-                  childrenByParentId={activeThread.childrenByParentId}
-                  comment={comment}
-                  isSelected={selectedCommentIds.has(comment.id)}
-                  onOpenComment={setSelectedId}
-                  onToggleSelected={() => toggleCommentSelection(comment.id)}
-                  selectedCommentIds={selectedCommentIds}
-                  toggleCommentSelection={toggleCommentSelection}
-                />
-              ))}
-              {activeThread && activeThread.rootComments.length === 0 ? (
-                <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
-                  Bài này chưa có comment nào trong SocialHub.
-                </p>
-              ) : null}
-              {!activeThread ? (
-                <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
-                  Chưa có thread comment để hiển thị.
-                </p>
+          <div className="grid flex-1 gap-4 overflow-hidden p-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="flex min-h-0 flex-col">
+              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto custom-scrollbar pr-2">
+                {activeThread?.rootComments.map((comment) => (
+                  <ThreadCommentTree
+                    key={comment.id}
+                    busy={busy}
+                    childrenByParentId={activeThread.childrenByParentId}
+                    comment={comment}
+                    isSelected={selectedCommentIds.has(comment.id)}
+                    onOpenComment={setSelectedId}
+                    onToggleSelected={() => toggleCommentSelection(comment.id)}
+                    selectedCommentIds={selectedCommentIds}
+                    toggleCommentSelection={toggleCommentSelection}
+                    onInlineReply={handleInlineReply}
+                    onDeleteComment={handleDeleteComment}
+                  />
+                ))}
+                {activeThread && activeThread.rootComments.length === 0 ? (
+                  <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
+                    Bài này chưa có comment nào trong SocialHub.
+                  </p>
+                ) : null}
+                {!activeThread ? (
+                  <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
+                    Chưa có thread comment để hiển thị.
+                  </p>
+                ) : null}
+              </div>
+
+              {activeThread ? (
+                <div className="mt-4 shrink-0 rounded-md border border-slate-200 bg-white p-3 shadow-sm">
+                  <textarea
+                    value={activeThreadCommentBody}
+                    onChange={(e) => setActiveThreadCommentBody(e.target.value)}
+                    placeholder="Viết bình luận mới cho bài đăng này..."
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    rows={2}
+                  />
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={!activeThreadCommentBody.trim() || busy !== null}
+                      onClick={createPublicCommentForActiveThread}
+                      className="rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+                    >
+                      {busy === 'create-thread-comment' ? 'Đang gửi...' : 'Gửi comment mới'}
+                    </button>
+                  </div>
+                </div>
               ) : null}
             </div>
 
-            <div className="space-y-3">
-              <section className="rounded-md border border-slate-200 p-3">
+            <div className="flex min-h-0 flex-col space-y-3 overflow-y-auto custom-scrollbar pr-1">
+              <section className="shrink-0 rounded-md border border-slate-200 p-3">
                 <p className="text-sm font-semibold text-slate-950">Comment nhiều bài</p>
                 <textarea
                   className="mt-3 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
@@ -730,7 +911,7 @@ export default function InboxPage() {
                 </PrimaryButton>
               </section>
 
-              <section className="rounded-md border border-slate-200 p-3">
+              <section className="shrink-0 rounded-md border border-slate-200 p-3">
                 <p className="text-sm font-semibold text-slate-950">Reply nhiều comment</p>
                 <SelectInput
                   className="mt-3"
@@ -960,12 +1141,7 @@ export default function InboxPage() {
               commentsApi.deleteTemplate(workspace.id, templateId),
             )
           }
-          onDeleteComment={(commentId, deleteFromPlatform) =>
-            void mutateComment('delete-comment', async () => {
-              await commentsApi.delete(workspace.id, commentId, deleteFromPlatform);
-              if (commentId === selected.id) setSelectedId(null);
-            })
-          }
+          onDeleteComment={handleDeleteComment}
           onEditComment={(commentId, message) =>
             void mutateComment('edit-comment', () =>
               commentsApi.updateMessage(workspace.id, commentId, {
@@ -1169,7 +1345,7 @@ function CommentDrawer({
           </IconButton>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
           <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_300px]">
             <main className="space-y-5 p-5">
               <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1612,6 +1788,8 @@ function ThreadCommentTree({
   onToggleSelected,
   selectedCommentIds,
   toggleCommentSelection,
+  onInlineReply,
+  onDeleteComment,
 }: {
   busy: string | null;
   childrenByParentId: Map<string, CommentView[]>;
@@ -1622,21 +1800,26 @@ function ThreadCommentTree({
   onToggleSelected: () => void;
   selectedCommentIds: Set<string>;
   toggleCommentSelection: (commentId: string) => void;
+  onInlineReply?: (parentId: string, message: string) => Promise<void>;
+  onDeleteComment?: (commentId: string, deleteFromPlatform: boolean) => void;
 }) {
   const childComments = childrenByParentId.get(comment.id) ?? [];
   const nested = depth > 0;
+  const [showReply, setShowReply] = useState(false);
+  const [replyMessage, setReplyMessage] = useState('');
+  const isReplying = busy === `reply-${comment.id}`;
 
   return (
     <div
-      className={`rounded-md border p-3 ${
-        nested ? 'border-slate-200 bg-white' : 'border-slate-200 bg-slate-50'
+      className={`rounded-lg p-2 ${
+        nested ? 'bg-transparent' : 'border border-slate-200 bg-white shadow-sm'
       }`}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2">
         <input
           aria-label={`Chọn comment ${comment.id}`}
           checked={isSelected}
-          className="mt-1 h-4 w-4 rounded border-slate-300"
+          className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300"
           onChange={onToggleSelected}
           type="checkbox"
         />
@@ -1645,27 +1828,93 @@ function ThreadCommentTree({
           onClick={() => onOpenComment(comment.id)}
           type="button"
         >
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-semibold text-slate-950">
+          <div className="flex flex-wrap items-baseline gap-1.5">
+            <span className="text-[12px] font-semibold text-slate-900">
               {comment.authorName ?? 'Unknown author'}
-            </p>
+            </span>
             {comment.isFromPage ? (
-              <span className="rounded bg-white px-1.5 py-0.5 text-[11px] font-semibold text-brand-700">
+              <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-brand-700">
                 Page
               </span>
             ) : null}
+            <span className="text-[11px] text-slate-500">{formatDateTime(comment.postedAt)}</span>
             <StatusBadge status={comment.status} />
           </div>
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">
+          <p className="mt-0.5 whitespace-pre-wrap text-[12px] text-slate-700 leading-snug">
             {comment.message ?? 'Không có nội dung.'}
           </p>
-          <p className="mt-2 text-xs text-slate-500">{formatDateTime(comment.postedAt)}</p>
+          <div className="mt-1 flex items-center gap-3">
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowReply(!showReply);
+              }}
+              className="text-[11px] font-semibold text-slate-500 hover:text-brand-600 transition cursor-pointer"
+            >
+              Phản hồi
+            </span>
+            {onDeleteComment && (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (
+                    confirm('Bạn có chắc muốn xóa comment này khỏi hệ thống và nền tảng gốc không?')
+                  ) {
+                    onDeleteComment(comment.id, true);
+                  }
+                }}
+                className="text-[11px] font-semibold text-slate-500 hover:text-red-600 transition cursor-pointer"
+              >
+                Xóa
+              </span>
+            )}
+          </div>
         </button>
       </div>
 
+      {showReply && (
+        <div className="mt-1.5 ml-5 flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <textarea
+            value={replyMessage}
+            onChange={(e) => setReplyMessage(e.target.value)}
+            placeholder={`Phản hồi ${comment.authorName ?? 'comment'}...`}
+            className="w-full rounded border border-slate-300 px-2 py-1.5 text-[12px] focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+            rows={1}
+          />
+          <div className="flex justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setShowReply(false);
+                setReplyMessage('');
+              }}
+              className="rounded px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-100"
+              disabled={isReplying}
+            >
+              Hủy
+            </button>
+            <button
+              type="button"
+              disabled={!replyMessage.trim() || isReplying}
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (onInlineReply) {
+                  await onInlineReply(comment.id, replyMessage);
+                  setShowReply(false);
+                  setReplyMessage('');
+                }
+              }}
+              className="rounded bg-brand-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              {isReplying ? 'Đang gửi...' : 'Gửi'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {childComments.length > 0 ? (
         <div
-          className={`mt-3 space-y-2 border-l-2 border-slate-200 ${depth >= 3 ? 'pl-3' : 'pl-4'}`}
+          className={`mt-2 space-y-1.5 border-l-[1.5px] border-slate-200 ${depth >= 3 ? 'pl-2.5' : 'pl-3'}`}
         >
           {childComments.map((child) => (
             <ThreadCommentTree
@@ -1679,6 +1928,8 @@ function ThreadCommentTree({
               onToggleSelected={() => toggleCommentSelection(child.id)}
               selectedCommentIds={selectedCommentIds}
               toggleCommentSelection={toggleCommentSelection}
+              onInlineReply={onInlineReply}
+              onDeleteComment={onDeleteComment}
             />
           ))}
         </div>
@@ -1941,13 +2192,39 @@ interface PostThread {
   accountName: string;
   commentCount: number;
   latestAt: string;
+  externalUrl: string | null;
   rootComments: CommentView[];
   childrenByParentId: Map<string, CommentView[]>;
 }
 
-function buildPostThreads(comments: CommentView[]): PostThread[] {
+function buildPostThreads(
+  posts: ContentPostView[],
+  comments: CommentView[],
+  filters: { status?: string; assignedToId?: string; tagId?: string; platform?: string },
+): PostThread[] {
   const threadMap = new Map<string, PostThread>();
   const childrenByPost = new Map<string, Map<string, CommentView[]>>();
+
+  for (const post of posts) {
+    if (!post.platformPosts) continue;
+    for (const pPost of post.platformPosts) {
+      if (filters.platform && pPost.platform !== filters.platform) continue;
+      if (pPost.status !== 'PUBLISHED') continue;
+
+      threadMap.set(pPost.id, {
+        platformPostId: pPost.id,
+        contentPostId: post.id,
+        title: post.title ?? pPost.title ?? pPost.caption ?? pPost.description ?? post.id,
+        platform: pPost.platform,
+        accountName: pPost.socialAccountName,
+        commentCount: 0,
+        latestAt: pPost.publishedAt ?? post.createdAt,
+        externalUrl: pPost.externalUrl ?? null,
+        rootComments: [],
+        childrenByParentId: new Map(),
+      });
+    }
+  }
 
   for (const comment of comments) {
     const children = childrenByPost.get(comment.platformPostId) ?? new Map<string, CommentView[]>();
@@ -1959,10 +2236,6 @@ function buildPostThreads(comments: CommentView[]): PostThread[] {
     }
 
     const current = threadMap.get(comment.platformPostId);
-    const latestAt =
-      current && new Date(current.latestAt).getTime() > new Date(comment.postedAt).getTime()
-        ? current.latestAt
-        : comment.postedAt;
     if (!current) {
       threadMap.set(comment.platformPostId, {
         platformPostId: comment.platformPostId,
@@ -1971,15 +2244,21 @@ function buildPostThreads(comments: CommentView[]): PostThread[] {
         platform: comment.platform,
         accountName: comment.socialAccountName,
         commentCount: 1,
-        latestAt,
+        latestAt: comment.postedAt,
+        externalUrl: null,
         rootComments: comment.parentId ? [] : [comment],
         childrenByParentId: children,
       });
     } else {
       current.commentCount += 1;
-      current.latestAt = latestAt;
+      current.latestAt =
+        new Date(current.latestAt).getTime() > new Date(comment.postedAt).getTime()
+          ? current.latestAt
+          : comment.postedAt;
+      if (!comment.parentId) {
+        current.rootComments.push(comment);
+      }
       current.childrenByParentId = children;
-      if (!comment.parentId) current.rootComments.push(comment);
     }
   }
 
@@ -1990,7 +2269,13 @@ function buildPostThreads(comments: CommentView[]): PostThread[] {
     }
   }
 
-  return [...threadMap.values()].sort((a, b) => {
+  let result = Array.from(threadMap.values());
+  const hasCommentFilter = Boolean(filters.status || filters.assignedToId || filters.tagId);
+  if (hasCommentFilter) {
+    result = result.filter((t) => t.commentCount > 0);
+  }
+
+  return result.sort((a, b) => {
     return new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime();
   });
 }

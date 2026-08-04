@@ -357,45 +357,71 @@ export class CommentsService implements OnModuleDestroy {
       this.ensureCommentActionScopes(comment, action);
       const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
 
-      if (usesModerationDelete) {
-        if (!adapter.hideComment) {
-          throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+      try {
+        if (usesModerationDelete) {
+          if (!adapter.hideComment) {
+            throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+          }
+          await adapter.hideComment(
+            {
+              accessToken,
+              externalAccountId: comment.socialAccount.externalAccountId,
+              externalPageId: comment.socialAccount.externalPageId ?? undefined,
+              correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
+            },
+            comment.externalCommentId,
+            true,
+          );
+        } else {
+          if (!adapter.deleteComment) {
+            throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
+          }
+          await adapter.deleteComment(
+            {
+              accessToken,
+              externalAccountId: comment.socialAccount.externalAccountId,
+              externalPageId: comment.socialAccount.externalPageId ?? undefined,
+              correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
+            },
+            comment.externalCommentId,
+          );
         }
-        await adapter.hideComment(
-          {
-            accessToken,
-            externalAccountId: comment.socialAccount.externalAccountId,
-            externalPageId: comment.socialAccount.externalPageId ?? undefined,
-            correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
-          },
-          comment.externalCommentId,
-          true,
-        );
-      } else {
-        if (!adapter.deleteComment) {
-          throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
+      } catch (error) {
+        let shouldIgnore = false;
+        if (isPlatformError(error) && error.kind === 'NOT_FOUND') {
+          shouldIgnore = true;
+        } else if (
+          error instanceof Error &&
+          (error.message.includes('does not exist') ||
+            error.message.includes('not found') ||
+            error.message.includes('Unsupported delete request') ||
+            error.message.includes('cannot be loaded'))
+        ) {
+          shouldIgnore = true;
         }
-        await adapter.deleteComment(
-          {
-            accessToken,
-            externalAccountId: comment.socialAccount.externalAccountId,
-            externalPageId: comment.socialAccount.externalPageId ?? undefined,
-            correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
-          },
-          comment.externalCommentId,
-        );
-      }
-    }
 
-    const deletedAt = new Date();
-    await this.prisma.comment.updateMany({
-      where: {
-        workspaceId,
-        deletedAt: null,
-        OR: [{ id: comment.id }, { parentId: comment.id }],
-      },
-      data: { deletedAt },
-    });
+        if (!shouldIgnore) {
+          throw error;
+        }
+      }
+
+      await this.prisma.comment.deleteMany({
+        where: {
+          workspaceId,
+          OR: [{ id: comment.id }, { parentId: comment.id }],
+        },
+      });
+    } else {
+      const deletedAt = new Date();
+      await this.prisma.comment.updateMany({
+        where: {
+          workspaceId,
+          deletedAt: null,
+          OR: [{ id: comment.id }, { parentId: comment.id }],
+        },
+        data: { deletedAt },
+      });
+    }
 
     await this.audit.record({
       ...auditContext,
@@ -504,15 +530,49 @@ export class CommentsService implements OnModuleDestroy {
         targetExternalCommentId,
         input.message,
       );
-
-      await this.prisma.commentReply.update({
-        where: { id: reply.id },
-        data: { status: 'SENT', externalReplyId: result.externalReplyId, sentAt: result.sentAt },
-      });
-      await this.prisma.comment.update({
-        where: { id: comment.id },
-        data: { status: 'RESOLVED' },
-      });
+      await this.prisma.$transaction([
+        this.prisma.commentReply.update({
+          where: { id: reply.id },
+          data: { status: 'SENT', externalReplyId: result.externalReplyId, sentAt: result.sentAt },
+        }),
+        this.prisma.comment.update({
+          where: { id: comment.id },
+          data: { status: 'RESOLVED' },
+        }),
+        this.prisma.comment.upsert({
+          where: {
+            socialAccountId_externalCommentId: {
+              socialAccountId: comment.socialAccountId,
+              externalCommentId: result.externalReplyId,
+            },
+          },
+          create: {
+            workspaceId,
+            platformPostId: comment.platformPostId,
+            socialAccountId: comment.socialAccountId,
+            platform: comment.platform,
+            externalCommentId: result.externalReplyId,
+            parentId: comment.id,
+            authorExternalId:
+              comment.socialAccount.externalPageId ?? comment.socialAccount.externalAccountId,
+            authorName: comment.socialAccount.name,
+            authorAvatarUrl: comment.socialAccount.avatarUrl,
+            message: input.message,
+            likeCount: 0,
+            postedAt: result.sentAt,
+            status: 'RESOLVED',
+            isHidden: false,
+            isFromPage: true,
+          },
+          update: {
+            parentId: comment.id,
+            message: input.message,
+            postedAt: result.sentAt,
+            isFromPage: true,
+            deletedAt: null,
+          },
+        }),
+      ]);
       await this.audit.record({
         ...auditContext,
         actorUserId,

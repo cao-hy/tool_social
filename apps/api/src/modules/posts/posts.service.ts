@@ -1110,6 +1110,24 @@ export class PostsService implements OnModuleDestroy {
           platformPost: { workspaceId, contentPostId },
         },
       }),
+      this.prisma.comment.deleteMany({
+        where: {
+          platformPostId: { in: platformPostIds },
+          workspaceId,
+        },
+      }),
+      this.prisma.postMetric.deleteMany({
+        where: {
+          platformPostId: { in: platformPostIds },
+          workspaceId,
+        },
+      }),
+      this.prisma.metricSnapshot.deleteMany({
+        where: {
+          platformPostId: { in: platformPostIds },
+          workspaceId,
+        },
+      }),
       this.prisma.platformPost.updateMany({
         where: {
           id: { in: platformPostIds },

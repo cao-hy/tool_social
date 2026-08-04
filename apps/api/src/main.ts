@@ -43,3 +43,5 @@ void main().catch((error: unknown) => {
   console.error('Khởi động API thất bại:', error);
   process.exit(1);
 });
+
+// trigger restart
