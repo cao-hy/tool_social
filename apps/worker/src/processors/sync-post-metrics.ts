@@ -267,6 +267,16 @@ function postMetricWrite(metrics: PostMetrics) {
     savesSource: metrics.saves.source,
     engagementRate: metrics.engagementRate.value,
     engagementRateSource: metrics.engagementRate.source,
+    watchTime: metrics.watchTime.value,
+    watchTimeSource: metrics.watchTime.source,
+    avgWatchTime: metrics.avgWatchTime.value,
+    avgWatchTimeSource: metrics.avgWatchTime.source,
+    completionRate: metrics.completionRate.value,
+    completionRateSource: metrics.completionRate.source,
+    clicks: metrics.clicks.value,
+    clicksSource: metrics.clicks.source,
+    linkClicks: metrics.linkClicks.value,
+    linkClicksSource: metrics.linkClicks.source,
   };
 }
 
@@ -279,6 +289,11 @@ function snapshotWrite(metrics: PostMetrics) {
     reach: metrics.reach.value,
     impressions: metrics.impressions.value,
     saves: metrics.saves.value,
+    watchTime: metrics.watchTime.value,
+    avgWatchTime: metrics.avgWatchTime.value,
+    completionRate: metrics.completionRate.value,
+    clicks: metrics.clicks.value,
+    linkClicks: metrics.linkClicks.value,
   };
 }
 
@@ -301,6 +316,11 @@ function postMetricValues(metrics: PostMetrics) {
     metrics.saves,
     metrics.engagement,
     metrics.engagementRate,
+    metrics.watchTime,
+    metrics.avgWatchTime,
+    metrics.completionRate,
+    metrics.clicks,
+    metrics.linkClicks,
   ];
 }
 

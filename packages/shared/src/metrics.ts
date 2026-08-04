@@ -96,6 +96,11 @@ export interface PostMetrics {
   saves: MetricValue;
   engagement: MetricValue;
   engagementRate: MetricValue;
+  watchTime: MetricValue;
+  avgWatchTime: MetricValue;
+  completionRate: MetricValue;
+  clicks: MetricValue;
+  linkClicks: MetricValue;
   raw?: Record<string, unknown>;
 }
 
@@ -120,6 +125,11 @@ export function emptyPostMetrics(source: MetricSource = 'NOT_SYNCED'): PostMetri
     saves: { ...blank },
     engagement: { ...blank },
     engagementRate: { ...blank },
+    watchTime: { ...blank },
+    avgWatchTime: { ...blank },
+    completionRate: { ...blank },
+    clicks: { ...blank },
+    linkClicks: { ...blank },
   };
 }
 

@@ -455,6 +455,15 @@ function mapPinterestMetrics(
   if (comments !== undefined) metrics.comments = metricFromApi(comments);
   if (videoViews !== undefined) metrics.views = metricFromApi(videoViews);
   if (engagement !== undefined) metrics.engagement = metricFromApi(engagement);
+
+  if (pinClicks !== undefined) metrics.clicks = metricFromApi(pinClicks);
+  if (outboundClicks !== undefined) metrics.linkClicks = metricFromApi(outboundClicks);
+
+  const avgWatchTimeMs =
+    metricValue(summary, 'VIDEO_AVG_WATCH_TIME') ?? metricValue(lifetime, 'video_avg_watch_time');
+  if (avgWatchTimeMs !== undefined)
+    metrics.avgWatchTime = metricFromApi(Math.round(avgWatchTimeMs / 1000));
+
   metrics.engagementRate = computeEngagementRate(metrics);
   metrics.raw = {
     pin,

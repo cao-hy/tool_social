@@ -16,6 +16,7 @@ import type {
   SocialAccountView,
 } from '@/lib/types';
 import { useToast } from '@/components/toast-provider';
+import { DashboardCharts } from './charts';
 
 const METRICS: Array<{ key: AnalyticsMetricKey; label: string; percent?: boolean }> = [
   { key: 'views', label: 'Views' },
@@ -27,6 +28,11 @@ const METRICS: Array<{ key: AnalyticsMetricKey; label: string; percent?: boolean
   { key: 'saves', label: 'Saves' },
   { key: 'engagement', label: 'Engagement' },
   { key: 'engagementRate', label: 'Eng. rate', percent: true },
+  { key: 'watchTime', label: 'Watch Time (s)' },
+  { key: 'avgWatchTime', label: 'Avg Watch Time (s)' },
+  { key: 'completionRate', label: 'Completion', percent: true },
+  { key: 'clicks', label: 'Clicks' },
+  { key: 'linkClicks', label: 'Link Clicks' },
 ];
 
 const ITEMS_PER_PAGE = 10;
@@ -594,6 +600,8 @@ export default function AnalyticsPage() {
             </div>
           </section>
 
+          <DashboardCharts posts={dashboard.posts} />
+
           <section className="grid gap-6 xl:grid-cols-[1fr_420px]">
             <div className="rounded-lg border border-slate-200 bg-white">
               <div className="border-b border-slate-200 p-5">
@@ -683,6 +691,11 @@ export default function AnalyticsPage() {
                       <th className="px-5 py-3">Tương tác</th>
                       <th className="px-5 py-3">Bình luận</th>
                       <th className="px-5 py-3">Chia sẻ</th>
+                      <th className="px-5 py-3">Watch Time</th>
+                      <th className="px-5 py-3">Avg WT</th>
+                      <th className="px-5 py-3">Hoàn thành</th>
+                      <th className="px-5 py-3">Clicks</th>
+                      <th className="px-5 py-3">Link Clicks</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -722,11 +735,26 @@ export default function AnalyticsPage() {
                           <td className="px-5 py-4">
                             <MetricCell metric={post.metrics.shares} />
                           </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.watchTime} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.avgWatchTime} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.completionRate} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.clicks} />
+                          </td>
+                          <td className="px-5 py-4">
+                            <MetricCell metric={post.metrics.linkClicks} />
+                          </td>
                         </tr>
                       ))}
                     {filteredPosts.length === 0 ? (
                       <tr>
-                        <td className="px-5 py-8 text-slate-600 text-center" colSpan={6}>
+                        <td className="px-5 py-8 text-slate-600 text-center" colSpan={11}>
                           Không có bài viết nào phù hợp. Với bài đăng ngoài tool, hãy kéo bài về DB
                           rồi mới sync metrics.
                         </td>

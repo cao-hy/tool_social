@@ -288,6 +288,20 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
       metrics.comments = metricFromApi(video.statistics.commentCount);
     }
     if (analyticsShares !== undefined) metrics.shares = metricFromApi(analyticsShares);
+
+    const analyticsWatchTimeMins = metricNumber(analyticsRecord.estimatedMinutesWatched);
+    const analyticsAvgWatchTimeSec = metricNumber(analyticsRecord.averageViewDuration);
+    const analyticsCompletionRate = metricNumber(analyticsRecord.averageViewPercentage);
+
+    if (analyticsWatchTimeMins !== undefined) {
+      metrics.watchTime = metricFromApi(Math.round(analyticsWatchTimeMins * 60));
+    }
+    if (analyticsAvgWatchTimeSec !== undefined) {
+      metrics.avgWatchTime = metricFromApi(Math.round(analyticsAvgWatchTimeSec));
+    }
+    if (analyticsCompletionRate !== undefined) {
+      metrics.completionRate = metricFromApi(analyticsCompletionRate);
+    }
     const engagement =
       (metrics.likes.value ?? 0) + (metrics.comments.value ?? 0) + (metrics.shares.value ?? 0);
     if (

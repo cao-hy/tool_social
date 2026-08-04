@@ -523,9 +523,18 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
         : {}),
     });
 
+    const watchTime = firstNumber(insights, ['post_video_view_time']);
+    const avgWatchTime = firstNumber(insights, ['post_video_avg_time_watched']);
+    const linkClicks = numberRecord(insights.post_clicks_by_type)?.['link clicks'];
+
     if (views !== undefined) metrics.views = metricFromApi(views);
     if (impressions !== undefined) metrics.impressions = metricFromApi(impressions);
     if (reach !== undefined) metrics.reach = metricFromApi(reach);
+    if (clicks !== undefined) metrics.clicks = metricFromApi(clicks);
+    if (linkClicks !== undefined) metrics.linkClicks = metricFromApi(linkClicks);
+    if (watchTime !== undefined) metrics.watchTime = metricFromApi(Math.round(watchTime / 1000));
+    if (avgWatchTime !== undefined)
+      metrics.avgWatchTime = metricFromApi(Math.round(avgWatchTime / 1000));
 
     if (reactionBreakdownTotal !== undefined && likes === undefined) {
       metrics.likes = metricFromApi(reactionBreakdownTotal);

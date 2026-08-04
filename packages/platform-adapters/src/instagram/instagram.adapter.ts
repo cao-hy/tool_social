@@ -345,6 +345,11 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     if (insightComments !== undefined && media.comments_count === undefined) {
       metrics.comments = metricFromApi(insightComments);
     }
+    const watchTime = readInsightNumber(insightValues.ig_reels_video_view_total_time);
+    const avgWatchTime = readInsightNumber(insightValues.ig_reels_avg_watch_time);
+    if (watchTime !== undefined) metrics.watchTime = metricFromApi(Math.round(watchTime / 1000));
+    if (avgWatchTime !== undefined)
+      metrics.avgWatchTime = metricFromApi(Math.round(avgWatchTime / 1000));
 
     const engagement =
       (metrics.likes.value ?? 0) +

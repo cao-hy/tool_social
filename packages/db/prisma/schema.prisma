@@ -682,6 +682,21 @@ model PostMetric {
   engagementRate       Float?
   engagementRateSource MetricSource @default(NOT_SYNCED)
 
+  watchTime       Int?
+  watchTimeSource MetricSource @default(NOT_SYNCED)
+
+  avgWatchTime       Int?
+  avgWatchTimeSource MetricSource @default(NOT_SYNCED)
+
+  completionRate       Float?
+  completionRateSource MetricSource @default(NOT_SYNCED)
+
+  clicks       Int?
+  clicksSource MetricSource @default(NOT_SYNCED)
+
+  linkClicks       Int?
+  linkClicksSource MetricSource @default(NOT_SYNCED)
+
   lastSyncedAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -715,6 +730,11 @@ model MetricSnapshot {
   impressions Int?
   saves       Int?
   followers   Int?
+  watchTime   Int?
+  avgWatchTime Int?
+  completionRate Float?
+  clicks      Int?
+  linkClicks  Int?
 
   source MetricSource @default(PLATFORM_API)
   /// Payload thô đã redact, giữ lại để đối chiếu khi nghi ngờ mapping sai.

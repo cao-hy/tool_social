@@ -18,7 +18,19 @@ import { RedisService } from '../../infrastructure/redis/redis.service';
 import type { AnalyticsQuery, SyncAnalyticsInput } from './analytics.schemas';
 
 type MetricKey =
-  'views' | 'likes' | 'comments' | 'shares' | 'reach' | 'impressions' | 'saves' | 'engagementRate';
+  | 'views'
+  | 'likes'
+  | 'comments'
+  | 'shares'
+  | 'reach'
+  | 'impressions'
+  | 'saves'
+  | 'engagementRate'
+  | 'watchTime'
+  | 'avgWatchTime'
+  | 'completionRate'
+  | 'clicks'
+  | 'linkClicks';
 
 const METRIC_KEYS: MetricKey[] = [
   'views',
@@ -29,6 +41,11 @@ const METRIC_KEYS: MetricKey[] = [
   'impressions',
   'saves',
   'engagementRate',
+  'watchTime',
+  'avgWatchTime',
+  'completionRate',
+  'clicks',
+  'linkClicks',
 ];
 
 @Injectable()
@@ -617,6 +634,16 @@ type MetricRecord = {
   savesSource: MetricSource;
   engagementRate: number | null;
   engagementRateSource: MetricSource;
+  watchTime: number | null;
+  watchTimeSource: MetricSource;
+  avgWatchTime: number | null;
+  avgWatchTimeSource: MetricSource;
+  completionRate: number | null;
+  completionRateSource: MetricSource;
+  clicks: number | null;
+  clicksSource: MetricSource;
+  linkClicks: number | null;
+  linkClicksSource: MetricSource;
   lastSyncedAt: Date | null;
 };
 
@@ -633,6 +660,11 @@ function emptyMetricBag(): MetricBag {
     saves: { value: null, source: 'NOT_SYNCED' },
     engagement: { value: null, source: 'NOT_SYNCED' },
     engagementRate: { value: null, source: 'NOT_SYNCED' },
+    watchTime: { value: null, source: 'NOT_SYNCED' },
+    avgWatchTime: { value: null, source: 'NOT_SYNCED' },
+    completionRate: { value: null, source: 'NOT_SYNCED' },
+    clicks: { value: null, source: 'NOT_SYNCED' },
+    linkClicks: { value: null, source: 'NOT_SYNCED' },
   };
 }
 
@@ -647,6 +679,11 @@ function metricsFromPostMetric(metric: MetricRecord | null): MetricBag {
     impressions: { value: metric.impressions, source: metric.impressionsSource },
     saves: { value: metric.saves, source: metric.savesSource },
     engagementRate: { value: metric.engagementRate, source: metric.engagementRateSource },
+    watchTime: { value: metric.watchTime, source: metric.watchTimeSource },
+    avgWatchTime: { value: metric.avgWatchTime, source: metric.avgWatchTimeSource },
+    completionRate: { value: metric.completionRate, source: metric.completionRateSource },
+    clicks: { value: metric.clicks, source: metric.clicksSource },
+    linkClicks: { value: metric.linkClicks, source: metric.linkClicksSource },
     engagement: { value: null, source: 'NOT_SYNCED' },
   };
   bag.engagement = sumValues([bag.likes, bag.comments, bag.shares, bag.saves]);
@@ -661,6 +698,11 @@ function metricsFromSnapshot(snapshot: {
   reach: number | null;
   impressions: number | null;
   saves: number | null;
+  watchTime?: number | null;
+  avgWatchTime?: number | null;
+  completionRate?: number | null;
+  clicks?: number | null;
+  linkClicks?: number | null;
   source: MetricSource;
 }): MetricBag {
   const metric = (value: number | null): MetricValue => ({
@@ -676,6 +718,11 @@ function metricsFromSnapshot(snapshot: {
     impressions: metric(snapshot.impressions),
     saves: metric(snapshot.saves),
     engagementRate: { value: null, source: 'NOT_SYNCED' },
+    watchTime: metric(snapshot.watchTime ?? null),
+    avgWatchTime: metric(snapshot.avgWatchTime ?? null),
+    completionRate: metric(snapshot.completionRate ?? null),
+    clicks: metric(snapshot.clicks ?? null),
+    linkClicks: metric(snapshot.linkClicks ?? null),
     engagement: { value: null, source: 'NOT_SYNCED' },
   };
   bag.engagement = sumValues([bag.likes, bag.comments, bag.shares, bag.saves]);

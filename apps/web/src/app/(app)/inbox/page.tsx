@@ -13,17 +13,9 @@ import {
   CloudDownload,
   ExternalLink,
   MessageSquare,
-  Eye,
-  EyeOff,
-  Pencil,
   RefreshCw,
   Search,
-  Send,
   SlidersHorizontal,
-  StickyNote,
-  Tag,
-  Trash2,
-  UserRound,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
@@ -35,6 +27,9 @@ import {
   SelectInput,
   TextInput,
 } from '@/components/form-controls';
+import { BulkActionBar } from '@/components/bulk-action-bar';
+import { BulkPostCommentDrawer } from '@/components/bulk-post-comment-drawer';
+import { BulkCommentReplyDrawer } from '@/components/bulk-comment-reply-drawer';
 import { useToast } from '@/components/toast-provider';
 import {
   commentsApi,
@@ -58,7 +53,6 @@ import type {
 const STATUSES = ['OPEN', 'PENDING', 'RESOLVED'] as const;
 const TAG_COLORS = ['#64748b', '#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'] as const;
 const DEFAULT_TAG_COLOR = TAG_COLORS[0];
-const EMPTY_COMMENT_CHILDREN = new Map<string, CommentView[]>();
 const ACTION_SUCCESS_MESSAGES: Record<string, string> = {
   assign: 'Đã cập nhật người phụ trách.',
   'create-tag': 'Đã tạo tag.',
@@ -94,17 +88,14 @@ export default function InboxPage() {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [noteBody, setNoteBody] = useState('');
-  const [replyBody, setReplyBody] = useState('');
-  const [publicCommentBody, setPublicCommentBody] = useState('');
-  const [bulkPostCommentBody, setBulkPostCommentBody] = useState('');
-  const [bulkReplyBody, setBulkReplyBody] = useState('');
   const [activeThreadCommentBody, setActiveThreadCommentBody] = useState('');
   const [selectedPostIds, setSelectedPostIds] = useState<Set<string>>(() => new Set());
   const [selectedCommentIds, setSelectedCommentIds] = useState<Set<string>>(() => new Set());
+  const [selectionMode, setSelectionMode] = useState<'posts' | 'comments' | null>(null);
+  const [isBulkPostCommentOpen, setIsBulkPostCommentOpen] = useState(false);
+  const [isBulkReplyOpen, setIsBulkReplyOpen] = useState(false);
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState<string>(DEFAULT_TAG_COLOR);
-  const [newTemplateName, setNewTemplateName] = useState('');
-  const [newTemplateBody, setNewTemplateBody] = useState('');
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -218,16 +209,7 @@ export default function InboxPage() {
     ? accounts.find((account) => account.id === selected.socialAccountId)
     : undefined;
   const selectedCapability = selected ? capabilityByPlatform[selected.platform] : undefined;
-  const replyCapability = selectedCapability?.capabilities.replyToComment;
   const createCommentCapability = selectedCapability?.capabilities.createComment;
-  const replyBlockReason =
-    selected?.platform === 'FACEBOOK' &&
-    selectedAccount &&
-    !selectedAccount.scopes.includes('pages_manage_engagement')
-      ? 'Facebook token hiện tại thiếu quyền pages_manage_engagement. Hãy ngắt kết nối rồi kết nối lại Facebook Page để cấp quyền reply comment.'
-      : selected && !isCapabilityUsable(replyCapability)
-        ? capabilityBlockReason(replyCapability)
-        : null;
   const createCommentBlockReason =
     selected?.platform === 'FACEBOOK' &&
     selectedAccount &&
@@ -279,9 +261,6 @@ export default function InboxPage() {
   const hasAnyFilter = Boolean(
     status || platform || assignedToId || tagId || debouncedQuery.trim(),
   );
-  const selectedChildComments = selected
-    ? comments.filter((comment) => comment.parentId === selected.id)
-    : [];
   const activeThread =
     (activeThreadId
       ? postThreads.find((thread) => thread.platformPostId === activeThreadId)
@@ -291,15 +270,9 @@ export default function InboxPage() {
       : null) ??
     postThreads[0] ??
     null;
-  const selectedThread =
-    selected && activeThread?.platformPostId === selected.platformPostId
-      ? activeThread
-      : selected
-        ? postThreads.find((thread) => thread.platformPostId === selected.platformPostId)
-        : null;
+
   const selectedPostLabel = selected?.contentPostTitle ?? selected?.contentPostId ?? 'Bài đăng';
-  const selectedAssignee =
-    selected?.assignment?.assignedToName ?? selected?.assignment?.assignedToEmail ?? 'Chưa gán';
+
   const emptyState = syncBlockReason
     ? {
         title: 'Chưa thể đồng bộ comment',
@@ -401,33 +374,6 @@ export default function InboxPage() {
     }
   }
 
-  async function createPublicCommentForSelectedPost() {
-    if (!workspace || !selected) return;
-    const message = publicCommentBody.trim();
-    if (!message) {
-      toast.warning('Nhập nội dung comment trước khi gửi.');
-      return;
-    }
-    if (createCommentBlockReason) {
-      toast.warning(createCommentBlockReason);
-      return;
-    }
-
-    setBusy('create-comment');
-    setError(null);
-    try {
-      await commentsApi.createPlatformComment(workspace.id, selected.platformPostId, message);
-      setPublicCommentBody('');
-      toast.info(`${PLATFORM_LABELS[selected.platform]}: đã đưa comment công khai vào queue.`);
-      scheduleCommentReloads();
-      await loadComments();
-    } catch (actionError) {
-      toast.error(`${PLATFORM_LABELS[selected.platform]}: ${getErrorMessage(actionError)}`);
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function createPublicCommentForActiveThread() {
     if (!workspace || !activeThread) return;
     const message = activeThreadCommentBody.trim();
@@ -485,8 +431,7 @@ export default function InboxPage() {
     }
   }
 
-  async function bulkCreatePublicComments() {
-    const message = bulkPostCommentBody.trim();
+  async function bulkCreatePublicComments(message: string) {
     const platformPostIds = [...selectedPostIds];
     if (!workspace || platformPostIds.length === 0) return;
     if (!message) {
@@ -502,7 +447,6 @@ export default function InboxPage() {
         platformPostIds,
         message,
       );
-      setBulkPostCommentBody('');
       setSelectedPostIds(new Set());
       toast.info(`Đã queue ${result.queued}/${result.requested} comment công khai.`);
       if (result.failed > 0) {
@@ -518,8 +462,7 @@ export default function InboxPage() {
     }
   }
 
-  async function bulkReplySelectedComments() {
-    const message = bulkReplyBody.trim();
+  async function bulkReplySelectedComments(message: string) {
     const commentIds = [...selectedCommentIds];
     if (!workspace || commentIds.length === 0) return;
     if (!message) {
@@ -531,8 +474,7 @@ export default function InboxPage() {
     setError(null);
     try {
       const result = await commentsApi.bulkReply(workspace.id, commentIds, message);
-      setBulkReplyBody('');
-      setSelectedCommentIds(new Set());
+      clearSelection();
       toast.info(`Đã queue ${result.queued}/${result.requested} reply.`);
       if (result.failed > 0) {
         const firstError = result.results.find((item) => !item.queued)?.errorMessage;
@@ -547,12 +489,43 @@ export default function InboxPage() {
     }
   }
 
+  function clearSelection() {
+    setSelectedPostIds(new Set());
+    setSelectedCommentIds(new Set());
+    setSelectionMode(null);
+  }
+
+  function openCommentDetails(commentId: string | null) {
+    if (commentId) {
+      clearSelection();
+    }
+    setSelectedId(commentId);
+  }
+
   function togglePostSelection(platformPostId: string) {
-    setSelectedPostIds((current) => toggleSetValue(current, platformPostId));
+    if (selectionMode === 'comments') {
+      setSelectedCommentIds(new Set());
+    }
+    setSelectionMode('posts');
+    setSelectedId(null);
+    setSelectedPostIds((current) => {
+      const next = toggleSetValue(current, platformPostId);
+      if (next.size === 0) setSelectionMode(null);
+      return next;
+    });
   }
 
   function toggleCommentSelection(commentId: string) {
-    setSelectedCommentIds((current) => toggleSetValue(current, commentId));
+    if (selectionMode === 'posts') {
+      setSelectedPostIds(new Set());
+    }
+    setSelectionMode('comments');
+    setSelectedId(null);
+    setSelectedCommentIds((current) => {
+      const next = toggleSetValue(current, commentId);
+      if (next.size === 0) setSelectionMode(null);
+      return next;
+    });
   }
 
   function clearFilters() {
@@ -610,14 +583,6 @@ export default function InboxPage() {
     } finally {
       setBusy(null);
     }
-  }
-
-  function handleDeleteComment(commentId: string, deleteFromPlatform: boolean) {
-    if (!workspace) return;
-    void mutateComment('delete-comment', async () => {
-      await commentsApi.delete(workspace.id, commentId, deleteFromPlatform);
-      if (commentId === selectedId) setSelectedId(null);
-    });
   }
 
   return (
@@ -745,7 +710,22 @@ export default function InboxPage() {
         ) : null}
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+      <BulkActionBar
+        selectionMode={selectionMode}
+        selectedCount={selectionMode === 'posts' ? selectedPostIds.size : selectedCommentIds.size}
+        onClearSelection={clearSelection}
+        canReply={canReply}
+        onBulkCommentClick={() => setIsBulkPostCommentOpen(true)}
+        onBulkReplyClick={() => setIsBulkReplyOpen(true)}
+      />
+
+      <section
+        className={`grid gap-4 ${
+          selectedId || isBulkPostCommentOpen || isBulkReplyOpen
+            ? 'xl:grid-cols-[360px_minmax(0,1fr)_480px]'
+            : 'xl:grid-cols-[360px_minmax(0,1fr)]'
+        }`}
+      >
         <div className="flex h-[calc(100vh-220px)] min-h-[560px] flex-col rounded-md border border-slate-200 bg-white">
           <div className="shrink-0 border-b border-slate-200 px-4 py-3">
             <p className="text-sm font-semibold text-slate-950">Danh sách bài đăng</p>
@@ -774,8 +754,10 @@ export default function InboxPage() {
                   className="min-w-0 flex-1 text-left"
                   onClick={() => {
                     setActiveThreadId(thread.platformPostId);
-                    if (!thread.rootComments.some((c) => c.id === selectedId)) {
-                      setSelectedId(thread.rootComments[0]?.id ?? null);
+                    if (!thread.rootComments[0]) {
+                      toast.error('Bài đăng này chưa có comment nào.');
+                    } else {
+                      openCommentDetails(thread.rootComments[0]?.id ?? null);
                     }
                   }}
                   type="button"
@@ -833,7 +815,7 @@ export default function InboxPage() {
             </div>
           </div>
 
-          <div className="grid flex-1 gap-4 overflow-hidden p-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="flex flex-1 flex-col gap-4 overflow-hidden p-4">
             <div className="flex min-h-0 flex-col">
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto custom-scrollbar pr-2">
                 {activeThread?.rootComments.map((comment) => (
@@ -843,12 +825,11 @@ export default function InboxPage() {
                     childrenByParentId={activeThread.childrenByParentId}
                     comment={comment}
                     isSelected={selectedCommentIds.has(comment.id)}
-                    onOpenComment={setSelectedId}
+                    onOpenComment={openCommentDetails}
                     onToggleSelected={() => toggleCommentSelection(comment.id)}
                     selectedCommentIds={selectedCommentIds}
                     toggleCommentSelection={toggleCommentSelection}
                     onInlineReply={handleInlineReply}
-                    onDeleteComment={handleDeleteComment}
                   />
                 ))}
                 {activeThread && activeThread.rootComments.length === 0 ? (
@@ -885,74 +866,87 @@ export default function InboxPage() {
                 </div>
               ) : null}
             </div>
-
-            <div className="flex min-h-0 flex-col space-y-3 overflow-y-auto custom-scrollbar pr-1">
-              <section className="shrink-0 rounded-md border border-slate-200 p-3">
-                <p className="text-sm font-semibold text-slate-950">Comment nhiều bài</p>
-                <textarea
-                  className="mt-3 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                  maxLength={2000}
-                  placeholder="Một comment công khai cho các bài đã chọn..."
-                  value={bulkPostCommentBody}
-                  onChange={(event) => setBulkPostCommentBody(event.target.value)}
-                />
-                <PrimaryButton
-                  className="mt-3 w-full"
-                  disabled={
-                    !canReply ||
-                    selectedPostIds.size === 0 ||
-                    !bulkPostCommentBody.trim() ||
-                    busy !== null
-                  }
-                  onClick={() => void bulkCreatePublicComments()}
-                  type="button"
-                >
-                  Queue comment
-                </PrimaryButton>
-              </section>
-
-              <section className="shrink-0 rounded-md border border-slate-200 p-3">
-                <p className="text-sm font-semibold text-slate-950">Reply nhiều comment</p>
-                <SelectInput
-                  className="mt-3"
-                  disabled={templates.length === 0}
-                  value=""
-                  onChange={(event) => {
-                    const template = templates.find((item) => item.id === event.target.value);
-                    if (template) setBulkReplyBody(template.body);
-                  }}
-                >
-                  <option value="">Chọn quick reply</option>
-                  {templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.name}
-                    </option>
-                  ))}
-                </SelectInput>
-                <textarea
-                  className="mt-3 min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                  maxLength={2000}
-                  placeholder="Một reply cho các comment đã chọn..."
-                  value={bulkReplyBody}
-                  onChange={(event) => setBulkReplyBody(event.target.value)}
-                />
-                <PrimaryButton
-                  className="mt-3 w-full"
-                  disabled={
-                    !canReply ||
-                    selectedCommentIds.size === 0 ||
-                    !bulkReplyBody.trim() ||
-                    busy !== null
-                  }
-                  onClick={() => void bulkReplySelectedComments()}
-                  type="button"
-                >
-                  Queue reply
-                </PrimaryButton>
-              </section>
-            </div>
           </div>
         </div>
+
+        {selected ? (
+          <CommentDrawer
+            busy={busy}
+            canAssign={canAssign}
+            canModerate={canModerate}
+            comment={selected}
+            members={members}
+            noteBody={noteBody}
+            onAssign={(memberId) =>
+              void mutateComment('assign', () =>
+                commentsApi.assign(workspace.id, selected.id, memberId || null),
+              )
+            }
+            onClose={() => setSelectedId(null)}
+            onCreateTag={() =>
+              void mutateStatic('create-tag', async () => {
+                await commentsApi.createTag(workspace.id, {
+                  name: newTagName.trim(),
+                  color: newTagColor,
+                });
+                setNewTagName('');
+              })
+            }
+            onAddNote={() =>
+              void mutateComment('note', async () => {
+                await commentsApi.addNote(workspace.id, selected.id, noteBody);
+                setNoteBody('');
+              })
+            }
+            onNoteBodyChange={setNoteBody}
+            onRemoveTag={(removeTagId) =>
+              void mutateComment('tags', () =>
+                commentsApi.updateTags(
+                  workspace.id,
+                  selected.id,
+                  selected.tags.filter((item) => item.id !== removeTagId).map((item) => item.id),
+                ),
+              )
+            }
+            onSelectTag={(nextTagId) => {
+              const tagIds = new Set(selected.tags.map((tag) => tag.id));
+              tagIds.add(nextTagId);
+              void mutateComment('tags', () =>
+                commentsApi.updateTags(workspace.id, selected.id, [...tagIds]),
+              );
+            }}
+            onStatusChange={(nextStatus) =>
+              void mutateComment('status', () =>
+                commentsApi.updateStatus(workspace.id, selected.id, nextStatus),
+              )
+            }
+            onTagColorChange={setNewTagColor}
+            onTagNameChange={setNewTagName}
+            selectedPostLabel={selectedPostLabel}
+            tagColor={newTagColor}
+            tagName={newTagName}
+            tags={tags}
+          />
+        ) : null}
+
+        <BulkPostCommentDrawer
+          isOpen={isBulkPostCommentOpen}
+          onClose={() => setIsBulkPostCommentOpen(false)}
+          selectedPostIds={selectedPostIds}
+          posts={posts}
+          onSubmit={bulkCreatePublicComments}
+          busy={busy !== null}
+        />
+
+        <BulkCommentReplyDrawer
+          isOpen={isBulkReplyOpen}
+          onClose={() => setIsBulkReplyOpen(false)}
+          selectedCommentIds={selectedCommentIds}
+          comments={comments}
+          templates={templates}
+          onSubmit={bulkReplySelectedComments}
+          busy={busy !== null}
+        />
       </section>
 
       <section className="overflow-hidden rounded-md border border-slate-200 bg-white">
@@ -1013,9 +1007,13 @@ export default function InboxPage() {
                   <td className="border-b border-slate-100 px-4 py-3 align-top">
                     <div className="max-w-[360px]">
                       <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-semibold text-slate-950">
+                        <button
+                          className="mt-1 truncate text-left text-sm font-semibold text-brand-700 transition hover:text-brand-900"
+                          onClick={() => openCommentDetails(comment.id)}
+                          type="button"
+                        >
                           {comment.authorName ?? 'Unknown author'}
-                        </p>
+                        </button>
                         {comment.isFromPage ? (
                           <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-500">
                             Page
@@ -1081,7 +1079,7 @@ export default function InboxPage() {
                       className="rounded-md border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm"
                       onClick={(event) => {
                         event.stopPropagation();
-                        setSelectedId(comment.id);
+                        openCommentDetails(comment.id);
                       }}
                       type="button"
                     >
@@ -1101,118 +1099,6 @@ export default function InboxPage() {
           </div>
         ) : null}
       </section>
-
-      {selected ? (
-        <CommentDrawer
-          busy={busy}
-          canAssign={canAssign}
-          canModerate={canModerate}
-          canReply={canReply}
-          comment={selected}
-          members={members}
-          noteBody={noteBody}
-          onAssign={(memberId) =>
-            void mutateComment('assign', () =>
-              commentsApi.assign(workspace.id, selected.id, memberId || null),
-            )
-          }
-          onClose={() => setSelectedId(null)}
-          onCreateTag={() =>
-            void mutateStatic('create-tag', async () => {
-              await commentsApi.createTag(workspace.id, {
-                name: newTagName.trim(),
-                color: newTagColor,
-              });
-              setNewTagName('');
-            })
-          }
-          onCreateTemplate={() =>
-            void mutateStatic('template', async () => {
-              await commentsApi.createTemplate(workspace.id, {
-                name: newTemplateName,
-                body: newTemplateBody,
-              });
-              setNewTemplateName('');
-              setNewTemplateBody('');
-            })
-          }
-          onDeleteTemplate={(templateId) =>
-            void mutateStatic('delete-template', () =>
-              commentsApi.deleteTemplate(workspace.id, templateId),
-            )
-          }
-          onDeleteComment={handleDeleteComment}
-          onEditComment={(commentId, message) =>
-            void mutateComment('edit-comment', () =>
-              commentsApi.updateMessage(workspace.id, commentId, {
-                message,
-                updatePlatform: true,
-              }),
-            )
-          }
-          onToggleHidden={(commentId, hidden) =>
-            void mutateComment('hide-comment', () =>
-              commentsApi.updateVisibility(workspace.id, commentId, hidden),
-            )
-          }
-          onAddNote={() =>
-            void mutateComment('note', async () => {
-              await commentsApi.addNote(workspace.id, selected.id, noteBody);
-              setNoteBody('');
-            })
-          }
-          onNoteBodyChange={setNoteBody}
-          onRemoveTag={(removeTagId) =>
-            void mutateComment('tags', () =>
-              commentsApi.updateTags(
-                workspace.id,
-                selected.id,
-                selected.tags.filter((item) => item.id !== removeTagId).map((item) => item.id),
-              ),
-            )
-          }
-          onReply={() =>
-            void mutateComment('reply', async () => {
-              await commentsApi.reply(workspace.id, selected.id, replyBody);
-              setReplyBody('');
-            })
-          }
-          onReplyBodyChange={setReplyBody}
-          onCreatePublicComment={() => void createPublicCommentForSelectedPost()}
-          onPublicCommentBodyChange={setPublicCommentBody}
-          onSelectTag={(nextTagId) => {
-            const tagIds = new Set(selected.tags.map((tag) => tag.id));
-            tagIds.add(nextTagId);
-            void mutateComment('tags', () =>
-              commentsApi.updateTags(workspace.id, selected.id, [...tagIds]),
-            );
-          }}
-          onStatusChange={(nextStatus) =>
-            void mutateComment('status', () =>
-              commentsApi.updateStatus(workspace.id, selected.id, nextStatus),
-            )
-          }
-          onTemplateBodyChange={setNewTemplateBody}
-          onTemplateNameChange={setNewTemplateName}
-          onUseTemplate={(body) => setReplyBody(body)}
-          onTagColorChange={setNewTagColor}
-          onTagNameChange={setNewTagName}
-          replyBlockReason={replyBlockReason}
-          replyBody={replyBody}
-          publicCommentBlockReason={createCommentBlockReason}
-          publicCommentBody={publicCommentBody}
-          selectedAssignee={selectedAssignee}
-          selectedChildComments={selectedChildComments}
-          selectedChildrenByParentId={selectedThread?.childrenByParentId ?? EMPTY_COMMENT_CHILDREN}
-          selectedPostLabel={selectedPostLabel}
-          tagColor={newTagColor}
-          tagName={newTagName}
-          tags={tags}
-          templateBody={newTemplateBody}
-          templateName={newTemplateName}
-          templates={templates}
-        />
-      ) : null}
     </div>
   );
 }
@@ -1221,124 +1107,71 @@ function CommentDrawer({
   busy,
   canAssign,
   canModerate,
-  canReply,
   comment,
   members,
   noteBody,
   onAssign,
   onClose,
   onCreateTag,
-  onCreateTemplate,
-  onDeleteTemplate,
-  onDeleteComment,
-  onEditComment,
-  onToggleHidden,
   onAddNote,
   onNoteBodyChange,
   onRemoveTag,
-  onCreatePublicComment,
-  onPublicCommentBodyChange,
-  onReply,
-  onReplyBodyChange,
   onSelectTag,
   onStatusChange,
   onTagColorChange,
   onTagNameChange,
-  onTemplateBodyChange,
-  onTemplateNameChange,
-  onUseTemplate,
-  publicCommentBlockReason,
-  publicCommentBody,
-  replyBlockReason,
-  replyBody,
-  selectedAssignee,
-  selectedChildComments,
-  selectedChildrenByParentId,
   selectedPostLabel,
   tagColor,
   tagName,
   tags,
-  templateBody,
-  templateName,
-  templates,
 }: {
   busy: string | null;
   canAssign: boolean;
   canModerate: boolean;
-  canReply: boolean;
   comment: CommentView;
   members: WorkspaceMember[];
   noteBody: string;
   onAssign: (memberId: string) => void;
   onClose: () => void;
   onCreateTag: () => void;
-  onCreateTemplate: () => void;
-  onDeleteTemplate: (templateId: string) => void;
-  onDeleteComment: (commentId: string, deleteFromPlatform: boolean) => void;
-  onEditComment: (commentId: string, message: string) => void;
-  onToggleHidden: (commentId: string, hidden: boolean) => void;
   onAddNote: () => void;
   onNoteBodyChange: (value: string) => void;
   onRemoveTag: (tagId: string) => void;
-  onCreatePublicComment: () => void;
-  onPublicCommentBodyChange: (value: string) => void;
-  onReply: () => void;
-  onReplyBodyChange: (value: string) => void;
   onSelectTag: (tagId: string) => void;
   onStatusChange: (status: CommentView['status']) => void;
   onTagColorChange: (value: string) => void;
   onTagNameChange: (value: string) => void;
-  onTemplateBodyChange: (value: string) => void;
-  onTemplateNameChange: (value: string) => void;
-  onUseTemplate: (body: string) => void;
-  publicCommentBlockReason: string | null;
-  publicCommentBody: string;
-  replyBlockReason: string | null;
-  replyBody: string;
-  selectedAssignee: string;
-  selectedChildComments: CommentView[];
-  selectedChildrenByParentId: Map<string, CommentView[]>;
   selectedPostLabel: string;
   tagColor: string;
   tagName: string;
   tags: CommentTagView[];
-  templateBody: string;
-  templateName: string;
-  templates: ReplyTemplateView[];
 }) {
-  const visibleInternalReplies = comment.replies.filter(
-    (reply) => !isReplyAlreadySynced(reply, selectedChildComments),
-  );
+  const [showNoteInput, setShowNoteInput] = useState(false);
+  const [showCreateTag, setShowCreateTag] = useState(false);
+  const toast = useToast();
 
   return (
-    <div className="fixed inset-0 z-40">
+    <div className="pointer-events-none fixed inset-0 z-40 xl:pointer-events-auto xl:static xl:z-auto xl:block xl:h-[calc(100vh-220px)] xl:min-h-[560px]">
       <button
         aria-label="Đóng chi tiết"
-        className="absolute inset-0 bg-slate-950/20"
+        className="pointer-events-auto absolute inset-0 bg-slate-950/20 xl:hidden cursor-default"
         onClick={onClose}
         type="button"
       />
-      <aside className="absolute right-0 top-0 flex h-full w-full max-w-3xl flex-col overflow-hidden border-l border-slate-200 bg-white shadow-xl">
-        <header className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+      <aside className="pointer-events-auto absolute right-0 top-0 flex h-full w-[85%] max-w-sm flex-col overflow-hidden border-l border-slate-200 bg-white shadow-2xl xl:static xl:w-full xl:max-w-none xl:rounded-md xl:border xl:shadow-none">
+        <header className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 bg-white z-10 sticky top-0">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge status={comment.status} />
-              <span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                {platformShortLabel(comment.platform)}
-              </span>
-              <span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
-                {comment.socialAccountName}
-              </span>
+            <h2 className="truncate text-lg font-semibold text-slate-950 flex items-center gap-2">
+              {comment.authorName ?? 'Unknown author'}
               {comment.isHidden ? (
-                <span className="rounded bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-700">
+                <span className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 uppercase tracking-wide">
                   Đang ẩn
                 </span>
               ) : null}
-            </div>
-            <h2 className="mt-3 truncate text-lg font-semibold text-slate-950">
-              {comment.authorName ?? 'Unknown author'}
             </h2>
-            <p className="mt-1 text-sm text-slate-500">{formatDateTime(comment.postedAt)}</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {platformShortLabel(comment.platform)} · {formatDateTime(comment.postedAt)}
+            </p>
           </div>
           <IconButton label="Đóng" onClick={onClose}>
             <X className="h-4 w-4" />
@@ -1346,347 +1179,236 @@ function CommentDrawer({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar">
-          <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <main className="space-y-5 p-5">
-              <section className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold uppercase text-slate-500">Bài đăng</p>
-                <a
-                  className="mt-1 block truncate text-sm font-semibold text-brand-700 hover:text-brand-800"
-                  href={`/posts/${comment.contentPostId}`}
-                >
-                  {selectedPostLabel}
-                </a>
-              </section>
-
-              <section>
-                <SectionTitle icon={<MessageSquare className="h-4 w-4" />} title="Conversation" />
-                <div className="mt-3 space-y-3">
-                  <CommentBubble
-                    busy={busy}
-                    canModerate={canModerate}
-                    comment={comment}
-                    highlight
-                    onDeleteComment={onDeleteComment}
-                    onEditComment={onEditComment}
-                    onToggleHidden={onToggleHidden}
-                  />
-                  {selectedChildComments.map((child) => (
-                    <ConversationCommentTree
-                      key={child.id}
-                      busy={busy}
-                      canModerate={canModerate}
-                      childrenByParentId={selectedChildrenByParentId}
-                      comment={child}
-                      onDeleteComment={onDeleteComment}
-                      onEditComment={onEditComment}
-                      onToggleHidden={onToggleHidden}
-                    />
-                  ))}
-                  {visibleInternalReplies.map((reply) => (
-                    <div
-                      key={reply.id}
-                      className="ml-8 rounded-md border border-brand-100 bg-brand-50 p-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-brand-700">
-                          {reply.sentByName ?? reply.sentByEmail}
-                        </p>
-                        <span className="rounded bg-white px-2 py-0.5 text-xs font-semibold text-brand-700">
-                          {reply.status}
-                        </span>
-                      </div>
-                      <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-                        {reply.message}
-                      </p>
-                      <p className="mt-2 text-xs text-slate-500">
-                        {formatDateTime(reply.sentAt ?? reply.createdAt)}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="rounded-md border border-slate-200 p-4">
-                <SectionTitle icon={<MessageSquare className="h-4 w-4" />} title="Comment mới" />
-                <p className="mt-2 text-sm text-slate-600">
-                  Gửi một comment công khai mới vào bài đăng này, không phải reply vào comment đang
-                  chọn.
-                </p>
-                {canReply && !publicCommentBlockReason ? (
-                  <div className="mt-3 grid gap-2">
-                    <textarea
-                      className="min-h-28 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                      maxLength={2000}
-                      placeholder="Nhập comment mới cho bài đăng..."
-                      value={publicCommentBody}
-                      onChange={(event) => onPublicCommentBodyChange(event.target.value)}
-                    />
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-xs text-slate-500">
-                        {publicCommentBody.length}/2000
-                      </span>
-                      <PrimaryButton
-                        disabled={!publicCommentBody.trim() || busy !== null}
-                        onClick={onCreatePublicComment}
-                        type="button"
-                      >
-                        Gửi comment mới
-                      </PrimaryButton>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                    {publicCommentBlockReason ??
-                      'Vai trò hiện tại không có quyền gửi comment công khai.'}
-                  </p>
-                )}
-              </section>
-
-              <section className="rounded-md border border-slate-200 p-4">
-                <SectionTitle icon={<Send className="h-4 w-4" />} title="Reply" />
-                {canReply && !replyBlockReason ? (
-                  <div className="mt-3 grid gap-2">
-                    <SelectInput
-                      disabled={templates.length === 0}
-                      value=""
-                      onChange={(event) => {
-                        const template = templates.find((item) => item.id === event.target.value);
-                        if (template) onUseTemplate(template.body);
-                      }}
-                    >
-                      <option value="">Chọn quick reply</option>
-                      {templates.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.name}
-                        </option>
-                      ))}
-                    </SelectInput>
-                    <textarea
-                      className="min-h-32 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                      placeholder="Nhập câu trả lời..."
-                      value={replyBody}
-                      onChange={(event) => onReplyBodyChange(event.target.value)}
-                    />
-                    <div className="flex justify-end gap-2">
-                      <SecondaryButton
-                        disabled={!replyBody}
-                        onClick={() => onReplyBodyChange('')}
-                        type="button"
-                      >
-                        Xóa
-                      </SecondaryButton>
-                      <PrimaryButton
-                        disabled={!replyBody.trim() || busy !== null}
-                        onClick={onReply}
-                        type="button"
-                      >
-                        Gửi reply
-                      </PrimaryButton>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                    {replyBlockReason ?? 'Vai trò hiện tại không có quyền reply comment.'}
-                  </p>
-                )}
-              </section>
-
-              <section>
-                <SectionTitle icon={<StickyNote className="h-4 w-4" />} title="Internal notes" />
-                <div className="mt-3 grid gap-2">
-                  <textarea
-                    className="min-h-20 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                    placeholder="Ghi chú nội bộ..."
-                    value={noteBody}
-                    onChange={(event) => onNoteBodyChange(event.target.value)}
-                  />
-                  <SecondaryButton
-                    disabled={!noteBody.trim() || busy !== null}
-                    onClick={onAddNote}
-                    type="button"
+          <div className="flex flex-col px-5 py-2">
+            <section className="py-4 border-b border-slate-100">
+              <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-3">
+                Quy trình xử lý
+              </h3>
+              <div className="space-y-3">
+                <Field label="Trạng thái">
+                  <SelectInput
+                    disabled={!canModerate || busy !== null}
+                    value={comment.status}
+                    onChange={(event) => {
+                      onStatusChange(event.target.value as CommentView['status']);
+                      toast.success('Đã cập nhật trạng thái');
+                    }}
                   >
-                    Thêm note
-                  </SecondaryButton>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {comment.notes.map((note) => (
-                    <div
-                      key={note.id}
-                      className="rounded-md border border-slate-200 bg-slate-50 p-3"
+                    {STATUSES.map((item) => (
+                      <option key={item} value={item}>
+                        {statusLabel(item)}
+                      </option>
+                    ))}
+                  </SelectInput>
+                </Field>
+                <Field label="Người phụ trách">
+                  <SelectInput
+                    disabled={!canAssign || busy !== null}
+                    value={comment.assignment?.memberId ?? ''}
+                    onChange={(event) => {
+                      onAssign(event.target.value);
+                      toast.success('Đã cập nhật người phụ trách');
+                    }}
+                  >
+                    <option value="">Chưa gán</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name ?? member.email}
+                      </option>
+                    ))}
+                  </SelectInput>
+                </Field>
+              </div>
+            </section>
+
+            <section className="py-4 border-b border-slate-100">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  Tags
+                </h3>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {comment.tags.map((tagItem) => (
+                    <button
+                      key={tagItem.id}
+                      className="rounded px-2 py-1 text-xs font-medium text-white transition hover:opacity-80"
+                      disabled={!canModerate || busy !== null}
+                      onClick={() => {
+                        onRemoveTag(tagItem.id);
+                        toast.success('Đã gỡ tag');
+                      }}
+                      style={{ backgroundColor: tagItem.color }}
+                      type="button"
+                      title="Bỏ tag này"
                     >
-                      <p className="whitespace-pre-wrap text-sm text-slate-700">{note.body}</p>
-                      <p className="mt-2 text-xs text-slate-500">
-                        {note.authorName ?? note.authorEmail} · {formatDateTime(note.createdAt)}
-                      </p>
-                    </div>
+                      {tagItem.name} <span className="ml-1 opacity-70">×</span>
+                    </button>
                   ))}
-                  {comment.notes.length === 0 ? (
-                    <p className="rounded-md border border-dashed border-slate-300 p-3 text-sm text-slate-500">
-                      Chưa có note nội bộ.
-                    </p>
+                  {comment.tags.length === 0 ? (
+                    <span className="text-sm text-slate-500 py-1">Chưa có tag</span>
                   ) : null}
                 </div>
-              </section>
-            </main>
 
-            <aside className="space-y-5 border-t border-slate-200 p-5 xl:border-l xl:border-t-0">
-              <section>
-                <SectionTitle icon={<UserRound className="h-4 w-4" />} title="Workflow" />
-                <div className="mt-3 space-y-3">
-                  <Field label="Status">
-                    <SelectInput
-                      disabled={!canModerate || busy !== null}
-                      value={comment.status}
-                      onChange={(event) =>
-                        onStatusChange(event.target.value as CommentView['status'])
-                      }
-                    >
-                      {STATUSES.map((item) => (
-                        <option key={item} value={item}>
-                          {statusLabel(item)}
-                        </option>
-                      ))}
-                    </SelectInput>
-                  </Field>
-                  <Field label="Assignee">
-                    <SelectInput
-                      disabled={!canAssign || busy !== null}
-                      value={comment.assignment?.memberId ?? ''}
-                      onChange={(event) => onAssign(event.target.value)}
-                    >
-                      <option value="">Chưa gán</option>
-                      {members.map((member) => (
-                        <option key={member.id} value={member.id}>
-                          {member.name ?? member.email}
-                        </option>
-                      ))}
-                    </SelectInput>
-                  </Field>
-                  <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                    Phụ trách hiện tại: <span className="font-semibold">{selectedAssignee}</span>
-                  </p>
-                </div>
-              </section>
-
-              <section>
-                <SectionTitle icon={<Tag className="h-4 w-4" />} title="Tags" />
-                <div className="mt-3 space-y-3">
+                <div className="mt-2 space-y-2">
                   <SelectInput
                     disabled={!canModerate || busy !== null}
                     value=""
                     onChange={(event) => {
-                      if (event.target.value) onSelectTag(event.target.value);
+                      if (event.target.value === 'CREATE_NEW') {
+                        setShowCreateTag(true);
+                      } else if (event.target.value) {
+                        onSelectTag(event.target.value);
+                        toast.success('Đã gắn tag');
+                      }
                     }}
                   >
-                    <option value="">Thêm tag</option>
+                    <option value="">+ Gắn tag</option>
                     {tags.map((tag) => (
                       <option key={tag.id} value={tag.id}>
                         {tag.name}
                       </option>
                     ))}
+                    <option disabled>────────────────</option>
+                    <option value="CREATE_NEW">+ Tạo tag mới</option>
                   </SelectInput>
-                  <div className="flex flex-wrap gap-2">
-                    {comment.tags.map((tagItem) => (
-                      <button
-                        key={tagItem.id}
-                        className="rounded px-2 py-1 text-xs font-medium text-white"
-                        disabled={!canModerate || busy !== null}
-                        onClick={() => onRemoveTag(tagItem.id)}
-                        style={{ backgroundColor: tagItem.color }}
-                        type="button"
-                      >
-                        {tagItem.name} ×
-                      </button>
-                    ))}
-                    {comment.tags.length === 0 ? (
-                      <span className="text-sm text-slate-500">Chưa có tag.</span>
-                    ) : null}
-                  </div>
-                </div>
-              </section>
 
-              <section className="rounded-md border border-slate-200 p-3">
-                <h3 className="text-sm font-semibold text-slate-950">Tạo tag</h3>
-                <div className="mt-3 grid gap-3">
-                  <TextInput
-                    placeholder="Tên tag"
-                    value={tagName}
-                    onChange={(event) => onTagNameChange(event.target.value)}
-                  />
-                  <SelectInput
-                    value={tagColor}
-                    onChange={(event) => onTagColorChange(event.target.value)}
-                  >
-                    {TAG_COLORS.map((color) => (
-                      <option key={color} value={color}>
-                        {color}
-                      </option>
-                    ))}
-                  </SelectInput>
-                  <SecondaryButton
-                    disabled={!canModerate || !tagName.trim() || busy !== null}
-                    onClick={onCreateTag}
-                    type="button"
-                  >
-                    Tạo tag
-                  </SecondaryButton>
-                </div>
-              </section>
-
-              <section className="rounded-md border border-slate-200 p-3">
-                <h3 className="text-sm font-semibold text-slate-950">Quick replies</h3>
-                <div className="mt-3 grid gap-2">
-                  <TextInput
-                    placeholder="Tên mẫu"
-                    value={templateName}
-                    onChange={(event) => onTemplateNameChange(event.target.value)}
-                  />
-                  <textarea
-                    className="min-h-20 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-                    placeholder="Nội dung mẫu"
-                    value={templateBody}
-                    onChange={(event) => onTemplateBodyChange(event.target.value)}
-                  />
-                  <SecondaryButton
-                    disabled={
-                      !canReply || !templateName.trim() || !templateBody.trim() || busy !== null
-                    }
-                    onClick={onCreateTemplate}
-                    type="button"
-                  >
-                    Lưu mẫu
-                  </SecondaryButton>
-                </div>
-                {templates.length > 0 ? (
-                  <div className="mt-3 divide-y divide-slate-200 rounded-md border border-slate-200">
-                    {templates.map((template) => (
-                      <div key={template.id} className="px-3 py-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <button
-                            className="min-w-0 flex-1 text-left"
-                            onClick={() => onUseTemplate(template.body)}
-                            type="button"
-                          >
-                            <p className="truncate text-sm font-medium text-slate-900">
-                              {template.name}
-                            </p>
-                            <p className="line-clamp-2 text-xs text-slate-500">{template.body}</p>
-                          </button>
-                          <button
-                            className="text-xs font-semibold text-slate-500 hover:text-red-600"
-                            disabled={!canReply || busy !== null}
-                            onClick={() => onDeleteTemplate(template.id)}
-                            type="button"
-                          >
-                            Xóa
-                          </button>
-                        </div>
+                  {showCreateTag && (
+                    <div className="rounded-md border border-slate-200 p-3 mt-2 bg-slate-50">
+                      <div className="flex justify-between items-center mb-2">
+                        <h4 className="text-xs font-semibold text-slate-700">Tạo tag mới</h4>
+                        <button
+                          type="button"
+                          onClick={() => setShowCreateTag(false)}
+                          className="text-slate-400 hover:text-slate-600"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
                       </div>
-                    ))}
+                      <div className="grid gap-2">
+                        <TextInput
+                          placeholder="Tên tag"
+                          value={tagName}
+                          onChange={(event) => onTagNameChange(event.target.value)}
+                        />
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-semibold text-slate-700">Màu sắc:</label>
+                          <input
+                            type="color"
+                            value={tagColor}
+                            onChange={(event) => onTagColorChange(event.target.value)}
+                            className="h-8 w-14 cursor-pointer rounded border border-slate-200 bg-white p-0.5"
+                          />
+                          <span className="text-xs font-mono text-slate-500 uppercase">
+                            {tagColor}
+                          </span>
+                        </div>
+                        <SecondaryButton
+                          disabled={!canModerate || !tagName.trim() || busy !== null}
+                          onClick={() => {
+                            onCreateTag();
+                            setShowCreateTag(false);
+                          }}
+                          type="button"
+                        >
+                          Lưu tag mới
+                        </SecondaryButton>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <section className="py-4 border-b border-slate-100">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  Ghi chú nội bộ
+                </h3>
+                {!showNoteInput && (
+                  <button
+                    onClick={() => setShowNoteInput(true)}
+                    className="text-xs font-semibold text-brand-600 hover:text-brand-700"
+                  >
+                    + Thêm
+                  </button>
+                )}
+              </div>
+
+              {showNoteInput && (
+                <div className="mb-4 bg-slate-50 border border-slate-200 rounded-md p-2">
+                  <textarea
+                    className="min-h-[80px] w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
+                    placeholder="Nhập ghi chú nội bộ..."
+                    value={noteBody}
+                    onChange={(event) => onNoteBodyChange(event.target.value)}
+                  />
+                  <div className="mt-2 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowNoteInput(false)}
+                      className="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 transition rounded"
+                    >
+                      Hủy
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!noteBody.trim() || busy !== null}
+                      onClick={() => {
+                        onAddNote();
+                        setShowNoteInput(false);
+                      }}
+                      className="px-3 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-700 transition disabled:opacity-50 rounded"
+                    >
+                      Lưu ghi chú
+                    </button>
                   </div>
+                </div>
+              )}
+
+              <div className="space-y-3">
+                {comment.notes.map((note) => (
+                  <div key={note.id} className="relative pl-3 border-l-[3px] border-slate-200">
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mb-1">
+                      <span className="font-semibold text-slate-700">
+                        {note.authorName ?? note.authorEmail}
+                      </span>
+                      <span>·</span>
+                      <span>{formatDateTime(note.createdAt)}</span>
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700 leading-snug">
+                      {note.body}
+                    </p>
+                  </div>
+                ))}
+                {!showNoteInput && comment.notes.length === 0 ? (
+                  <p className="text-sm text-slate-500">Chưa có ghi chú nội bộ.</p>
                 ) : null}
-              </section>
-            </aside>
+              </div>
+            </section>
+
+            <section className="py-4">
+              <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-3">
+                Bài đăng liên quan
+              </h3>
+              <a
+                className="group flex items-center justify-between rounded-md border border-slate-200 p-3 hover:bg-slate-50 transition"
+                href={`/posts/${comment.contentPostId}`}
+              >
+                <div className="min-w-0 pr-3">
+                  <div className="flex items-center gap-1.5 mb-1 text-xs text-slate-500">
+                    <span className="font-medium">{platformShortLabel(comment.platform)}</span>
+                    <span>·</span>
+                    <span className="truncate">{comment.socialAccountName}</span>
+                  </div>
+                  <p className="truncate text-sm font-semibold text-slate-800 group-hover:text-brand-700">
+                    {selectedPostLabel}
+                  </p>
+                </div>
+                <ExternalLink className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-brand-600" />
+              </a>
+            </section>
           </div>
         </div>
       </aside>
@@ -1716,15 +1438,6 @@ function IconButton({
     >
       {children}
     </button>
-  );
-}
-
-function SectionTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
-  return (
-    <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950">
-      <span className="text-slate-500">{icon}</span>
-      {title}
-    </h3>
   );
 }
 
@@ -1938,252 +1651,6 @@ function ThreadCommentTree({
   );
 }
 
-function ConversationCommentTree({
-  busy,
-  canModerate,
-  childrenByParentId,
-  comment,
-  depth = 1,
-  onDeleteComment,
-  onEditComment,
-  onToggleHidden,
-}: {
-  busy?: string | null;
-  canModerate: boolean;
-  childrenByParentId: Map<string, CommentView[]>;
-  comment: CommentView;
-  depth?: number;
-  onDeleteComment?: (commentId: string, deleteFromPlatform: boolean) => void;
-  onEditComment?: (commentId: string, message: string) => void;
-  onToggleHidden?: (commentId: string, hidden: boolean) => void;
-}) {
-  const children = childrenByParentId.get(comment.id) ?? [];
-
-  return (
-    <div className={depth >= 4 ? 'ml-3' : ''}>
-      <CommentBubble
-        busy={busy}
-        canModerate={canModerate}
-        comment={comment}
-        onDeleteComment={onDeleteComment}
-        onEditComment={onEditComment}
-        onToggleHidden={onToggleHidden}
-      />
-      {children.length > 0 ? (
-        <div
-          className={`mt-2 space-y-2 border-l-2 border-slate-200 ${depth >= 4 ? 'pl-3' : 'pl-5'}`}
-        >
-          {children.map((child) => (
-            <ConversationCommentTree
-              key={child.id}
-              busy={busy}
-              canModerate={canModerate}
-              childrenByParentId={childrenByParentId}
-              comment={child}
-              depth={depth + 1}
-              onDeleteComment={onDeleteComment}
-              onEditComment={onEditComment}
-              onToggleHidden={onToggleHidden}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function CommentBubble({
-  busy,
-  canModerate = false,
-  comment,
-  highlight = false,
-  onDeleteComment,
-  onEditComment,
-  onToggleHidden,
-}: {
-  busy?: string | null;
-  canModerate?: boolean;
-  comment: CommentView;
-  highlight?: boolean;
-  onDeleteComment?: (commentId: string, deleteFromPlatform: boolean) => void;
-  onEditComment?: (commentId: string, message: string) => void;
-  onToggleHidden?: (commentId: string, hidden: boolean) => void;
-}) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [editMessage, setEditMessage] = useState(comment.message ?? '');
-  const canEdit = canModerate && comment.platform === 'YOUTUBE' && comment.isFromPage;
-  const canHide =
-    canModerate &&
-    (comment.platform === 'FACEBOOK' ||
-      comment.platform === 'INSTAGRAM' ||
-      comment.platform === 'YOUTUBE');
-  const canDelete =
-    canModerate &&
-    (comment.platform === 'FACEBOOK' ||
-      comment.platform === 'INSTAGRAM' ||
-      comment.platform === 'YOUTUBE');
-  const hasActions = Boolean(onDeleteComment || onEditComment || onToggleHidden);
-
-  useEffect(() => {
-    setEditing(false);
-    setConfirmingDelete(false);
-    setEditMessage(comment.message ?? '');
-  }, [comment.id, comment.message]);
-
-  return (
-    <div
-      className={`rounded-md border p-3 ${
-        highlight ? 'border-slate-300 bg-white' : 'ml-8 border-slate-200 bg-slate-50'
-      }`}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-950">
-            {comment.authorName ?? 'Unknown author'}
-          </p>
-          <p className="mt-1 text-xs text-slate-500">{formatDateTime(comment.postedAt)}</p>
-        </div>
-        {hasActions ? (
-          <div className="flex flex-wrap justify-end gap-1.5">
-            {canEdit && onEditComment ? (
-              <IconMiniButton label="Sửa" onClick={() => setEditing(true)}>
-                <Pencil className="h-3.5 w-3.5" />
-              </IconMiniButton>
-            ) : null}
-            {canHide && onToggleHidden ? (
-              <IconMiniButton
-                label={comment.isHidden ? 'Hiện lại' : 'Ẩn'}
-                onClick={() => onToggleHidden(comment.id, !comment.isHidden)}
-              >
-                {comment.isHidden ? (
-                  <Eye className="h-3.5 w-3.5" />
-                ) : (
-                  <EyeOff className="h-3.5 w-3.5" />
-                )}
-              </IconMiniButton>
-            ) : null}
-            {canDelete && onDeleteComment ? (
-              <IconMiniButton danger label="Xóa" onClick={() => setConfirmingDelete(true)}>
-                <Trash2 className="h-3.5 w-3.5" />
-              </IconMiniButton>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-
-      {editing && onEditComment ? (
-        <div className="mt-3 rounded-md border border-brand-200 bg-brand-50 p-2">
-          <textarea
-            className="min-h-24 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            value={editMessage}
-            onChange={(event) => setEditMessage(event.target.value)}
-          />
-          <div className="mt-2 flex justify-end gap-2">
-            <SecondaryButton
-              disabled={busy !== null}
-              onClick={() => {
-                setEditing(false);
-                setEditMessage(comment.message ?? '');
-              }}
-              type="button"
-            >
-              Hủy
-            </SecondaryButton>
-            <PrimaryButton
-              disabled={!editMessage.trim() || busy !== null}
-              onClick={() => {
-                onEditComment(comment.id, editMessage);
-                setEditing(false);
-              }}
-              type="button"
-            >
-              Lưu
-            </PrimaryButton>
-          </div>
-        </div>
-      ) : (
-        <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">
-          {comment.message ?? 'Không có nội dung.'}
-        </p>
-      )}
-
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {comment.isFromPage ? (
-          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-            Comment của page
-          </span>
-        ) : null}
-        {comment.likeCount ? (
-          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-            {comment.likeCount} likes
-          </span>
-        ) : null}
-        {comment.isHidden ? (
-          <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-700">Đang ẩn</span>
-        ) : null}
-      </div>
-      {confirmingDelete && onDeleteComment ? (
-        <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3">
-          <p className="text-sm font-semibold text-red-800">Xóa reply/comment này?</p>
-          <div className="mt-3 flex flex-wrap justify-end gap-2">
-            <SecondaryButton
-              disabled={busy !== null}
-              onClick={() => setConfirmingDelete(false)}
-              type="button"
-            >
-              Hủy
-            </SecondaryButton>
-            <SecondaryButton
-              disabled={busy !== null}
-              onClick={() => onDeleteComment(comment.id, false)}
-              type="button"
-            >
-              Chỉ SocialHub
-            </SecondaryButton>
-            <button
-              className="inline-flex h-10 items-center justify-center rounded-md bg-red-600 px-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-              disabled={busy !== null}
-              onClick={() => onDeleteComment(comment.id, true)}
-              type="button"
-            >
-              Xóa cả nền tảng
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function IconMiniButton({
-  children,
-  danger = false,
-  label,
-  onClick,
-}: {
-  children: React.ReactNode;
-  danger?: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      aria-label={label}
-      className={`inline-flex h-8 w-8 items-center justify-center rounded-md border transition hover:-translate-y-px hover:shadow-sm ${
-        danger
-          ? 'border-red-200 bg-white text-red-700 hover:bg-red-50'
-          : 'border-slate-200 bg-white text-slate-600 hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700'
-      }`}
-      title={label}
-      type="button"
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
-
 interface PostThread {
   platformPostId: string;
   contentPostId: string;
@@ -2296,27 +1763,6 @@ function toggleSetValue(current: Set<string>, value: string): Set<string> {
     next.add(value);
   }
   return next;
-}
-
-function isReplyAlreadySynced(
-  reply: CommentView['replies'][number],
-  childComments: CommentView[],
-): boolean {
-  if (
-    reply.externalReplyId &&
-    childComments.some((comment) => comment.externalCommentId === reply.externalReplyId)
-  ) {
-    return true;
-  }
-
-  return childComments.some(
-    (comment) =>
-      comment.isFromPage && normalizeText(comment.message) === normalizeText(reply.message),
-  );
-}
-
-function normalizeText(value: string | null | undefined) {
-  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function statusLabel(status: string) {

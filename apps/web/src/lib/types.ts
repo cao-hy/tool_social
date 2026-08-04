@@ -113,7 +113,12 @@ export type AnalyticsMetricKey =
   | 'impressions'
   | 'saves'
   | 'engagement'
-  | 'engagementRate';
+  | 'engagementRate'
+  | 'watchTime'
+  | 'avgWatchTime'
+  | 'completionRate'
+  | 'clicks'
+  | 'linkClicks';
 
 export type AnalyticsMetricBag = Record<AnalyticsMetricKey, MetricValueView>;
 
