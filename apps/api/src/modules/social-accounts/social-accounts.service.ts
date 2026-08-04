@@ -324,8 +324,18 @@ export class SocialAccountsService implements OnModuleDestroy {
 
     const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
     if (account.token && adapter.revokeToken) {
-      const accessToken = decryptToken(account.token.accessToken, this.keyring);
-      await adapter.revokeToken(accessToken);
+      try {
+        const accessToken = decryptToken(account.token.accessToken, this.keyring);
+        await adapter.revokeToken(accessToken);
+      } catch (error) {
+        logger.warn(
+          {
+            socialAccountId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          'Failed to revoke token during disconnection. Proceeding to delete account anyway.',
+        );
+      }
     }
 
     await this.removePendingJobsForSocialAccount(workspaceId, socialAccountId);
