@@ -16,11 +16,13 @@ import {
   Cell,
   LineChart,
 } from 'recharts';
-import type { PostAnalyticsView } from '@/lib/types';
+import type { AnalyticsDashboardView } from '@/lib/types';
+
+export type DashboardPost = AnalyticsDashboardView['posts'][number];
 
 const COLORS = ['#0ea5e9', '#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
-export function DashboardCharts({ posts }: { posts: PostAnalyticsView[] }) {
+export function DashboardCharts({ posts }: { posts: DashboardPost[] }) {
   // Aggregate Top 5 Posts by View
   const topByViews = [...posts]
     .sort((a, b) => (b.metrics.views.value ?? 0) - (a.metrics.views.value ?? 0))
@@ -70,9 +72,9 @@ export function DashboardCharts({ posts }: { posts: PostAnalyticsView[] }) {
     if (!platformStats[p.platform]) {
       platformStats[p.platform] = { name: p.platform, Views: 0, Engagement: 0, Comments: 0 };
     }
-    platformStats[p.platform].Views += p.metrics.views.value ?? 0;
-    platformStats[p.platform].Engagement += p.metrics.engagement.value ?? 0;
-    platformStats[p.platform].Comments += p.metrics.comments.value ?? 0;
+    platformStats[p.platform].Views += p.metrics.views?.value ?? 0;
+    platformStats[p.platform].Engagement += p.metrics.engagement?.value ?? 0;
+    platformStats[p.platform].Comments += p.metrics.comments?.value ?? 0;
   });
   const platformComparisonData = Object.values(platformStats);
 
@@ -233,7 +235,7 @@ export function DashboardCharts({ posts }: { posts: PostAnalyticsView[] }) {
                   dataKey="value"
                   label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                 >
-                  {platformPieData.map((entry, index) => (
+                  {platformPieData.map((_, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
