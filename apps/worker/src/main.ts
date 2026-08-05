@@ -82,11 +82,11 @@ async function main(): Promise<void> {
   );
   registry.registerWorker(
     'refresh-social-token',
-    createRefreshSocialTokenProcessor({ prisma, keyring, adapters }),
+    createRefreshSocialTokenProcessor({ prisma, keyring, adapters, createAdapters }),
   );
   registry.registerWorker(
     'sync-comments',
-    createSyncCommentsProcessor({ prisma, keyring, adapters }),
+    createSyncCommentsProcessor({ prisma, keyring, adapters, createAdapters }),
   );
   registry.registerWorker(
     'create-platform-comment',
@@ -98,15 +98,15 @@ async function main(): Promise<void> {
   );
   registry.registerWorker(
     'sync-external-posts',
-    createSyncExternalPostsProcessor({ prisma, keyring, adapters }),
+    createSyncExternalPostsProcessor({ prisma, keyring, adapters, createAdapters }),
   );
   registry.registerWorker(
     'sync-post-metrics',
-    createSyncPostMetricsProcessor({ prisma, keyring, adapters }),
+    createSyncPostMetricsProcessor({ prisma, keyring, adapters, createAdapters }),
   );
   registry.registerWorker(
     'sync-account-metrics',
-    createSyncAccountMetricsProcessor({ prisma, keyring, adapters }),
+    createSyncAccountMetricsProcessor({ prisma, keyring, adapters, createAdapters }),
   );
   registry.registerWorker(
     'process-webhook',

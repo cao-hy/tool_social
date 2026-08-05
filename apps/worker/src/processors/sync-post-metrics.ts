@@ -8,7 +8,9 @@ import {
   type QueuePayload,
 } from '@socialhub/shared';
 import { z } from 'zod';
+import type { ProxyConfig } from '@socialhub/shared';
 import { logger } from '../logger';
+import { loadWorkspaceProxyConfig } from '../utils/proxy';
 import { getFreshAccessToken } from './token-refresh';
 
 const syncPostMetricsPayloadSchema = z.object({
@@ -23,6 +25,7 @@ export function createSyncPostMetricsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapters: AdapterRegistry;
+  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
 }) {
   return async (job: {
     data: unknown;
@@ -77,6 +80,7 @@ async function syncPostMetrics(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapters: AdapterRegistry;
+    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
   },
   payload: SyncPostMetricsPayload,
 ) {
@@ -107,7 +111,13 @@ async function syncPostMetrics(
     select: { timezone: true },
   });
 
-  const adapter = input.adapters.get(account.platform);
+  const proxyConfig = await loadWorkspaceProxyConfig(
+    input.prisma,
+    input.keyring,
+    payload.workspaceId,
+  );
+  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+  const adapter = adapters.get(account.platform);
   const accessToken = await getFreshAccessToken({
     prisma: input.prisma,
     keyring: input.keyring,

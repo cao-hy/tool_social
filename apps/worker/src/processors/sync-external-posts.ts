@@ -3,7 +3,9 @@ import { Prisma, type Platform, type PrismaClientInstance } from '@socialhub/db'
 import type { Keyring } from '@socialhub/security';
 import type { QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
+import type { ProxyConfig } from '@socialhub/shared';
 import { logger } from '../logger';
+import { loadWorkspaceProxyConfig } from '../utils/proxy';
 import { getFreshAccessToken } from './token-refresh';
 
 const syncExternalPostsPayloadSchema = z.object({
@@ -20,6 +22,7 @@ export function createSyncExternalPostsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapters: AdapterRegistry;
+  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
 }) {
   return async (job: {
     data: unknown;
@@ -106,6 +109,7 @@ async function syncPostsLoop(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapters: AdapterRegistry;
+    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
   },
   payload: z.infer<typeof syncExternalPostsPayloadSchema>,
   syncJob: NonNullable<
@@ -118,7 +122,13 @@ async function syncPostsLoop(
   });
   if (!account) throw new Error('Account not found');
 
-  const adapter = input.adapters.requireCapability(account.platform, 'getPosts');
+  const proxyConfig = await loadWorkspaceProxyConfig(
+    input.prisma,
+    input.keyring,
+    payload.workspaceId,
+  );
+  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+  const adapter = adapters.requireCapability(account.platform, 'getPosts');
   const getPosts = adapter.getPosts;
   if (!getPosts) {
     throw new Error(`Adapter ${account.platform} chưa triển khai getPosts.`);
