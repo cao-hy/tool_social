@@ -398,17 +398,42 @@ export class PinterestClient {
     fileName: string;
     mimeType: string;
   }): Promise<void> {
-    const form = new FormData();
+    const boundary = '----SocialHubFormBoundary' + Date.now().toString(16);
+    const parts: Uint8Array[] = [];
+    const encoder = new TextEncoder();
+
     for (const [key, value] of Object.entries(input.uploadParameters)) {
-      form.set(key, value);
+      parts.push(
+        encoder.encode(
+          `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`,
+        ),
+      );
     }
-    form.set('file', new File([input.bytes], input.fileName, { type: input.mimeType }));
+
+    parts.push(
+      encoder.encode(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${input.fileName}"\r\nContent-Type: ${input.mimeType}\r\n\r\n`,
+      ),
+    );
+    parts.push(input.bytes);
+    parts.push(encoder.encode(`\r\n--${boundary}--\r\n`));
+
+    const totalLength = parts.reduce((acc, part) => acc + part.byteLength, 0);
+    const body = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const part of parts) {
+      body.set(part, offset);
+      offset += part.byteLength;
+    }
 
     let response: Response;
     try {
       response = await this.fetch(input.uploadUrl, {
         method: 'POST',
-        body: form,
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        },
+        body,
         signal: AbortSignal.timeout(180000),
       });
     } catch (error) {
