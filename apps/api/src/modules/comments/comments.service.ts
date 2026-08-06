@@ -249,10 +249,9 @@ export class CommentsService implements OnModuleDestroy {
         );
       }
 
-      const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
-        comment.platform,
-        'editComment',
-      );
+      const adapter = (
+        await this.adapterFactory.forWorkspace(workspaceId)
+      ).adapters.requireCapability(comment.platform, 'editComment');
       if (!adapter.editComment) {
         throw AppError.capabilityUnsupported(comment.platform, 'editComment');
       }
@@ -298,10 +297,9 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
-      comment.platform,
-      'hideComment',
-    );
+    const adapter = (
+      await this.adapterFactory.forWorkspace(workspaceId)
+    ).adapters.requireCapability(comment.platform, 'hideComment');
     if (!adapter.hideComment) {
       throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
     }
@@ -350,10 +348,9 @@ export class CommentsService implements OnModuleDestroy {
     if (input.deleteFromPlatform) {
       const usesModerationDelete = comment.platform === 'YOUTUBE' && !comment.isFromPage;
       const action = usesModerationDelete ? 'hideComment' : 'deleteComment';
-      const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
-        comment.platform,
-        action,
-      );
+      const adapter = (
+        await this.adapterFactory.forWorkspace(workspaceId)
+      ).adapters.requireCapability(comment.platform, action);
       this.ensureCommentActionScopes(comment, action);
       const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
 
@@ -471,10 +468,9 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
-      comment.platform,
-      'replyToComment',
-    );
+    const adapter = (
+      await this.adapterFactory.forWorkspace(workspaceId)
+    ).adapters.requireCapability(comment.platform, 'replyToComment');
     if (!adapter.replyToComment) {
       throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
     }
@@ -615,10 +611,9 @@ export class CommentsService implements OnModuleDestroy {
       throw AppError.conflict('Social account chưa kết nối.');
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
-      platformPost.platform,
-      'createComment',
-    );
+    const adapter = (
+      await this.adapterFactory.forWorkspace(workspaceId)
+    ).adapters.requireCapability(platformPost.platform, 'createComment');
     if (!adapter.createComment) {
       throw AppError.capabilityUnsupported(platformPost.platform, 'createComment');
     }
@@ -785,10 +780,9 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).requireCapability(
-      comment.platform,
-      'replyToComment',
-    );
+    const adapter = (
+      await this.adapterFactory.forWorkspace(workspaceId)
+    ).adapters.requireCapability(comment.platform, 'replyToComment');
     if (!adapter.replyToComment) {
       throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
     }

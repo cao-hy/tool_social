@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { ProxyConfig } from '@socialhub/shared';
 
 export interface ProxyAttestation {
@@ -12,6 +12,19 @@ export interface ProxyAttestation {
   provider: string;
 }
 
+export type CachedProxyPolicyResult =
+  | {
+      kind: 'SUCCESS';
+      attestation: ProxyAttestation;
+    }
+  | {
+      kind: 'FAILURE';
+      errorCode: string;
+      safeMessage: string;
+      createdAt: string;
+      expiresAt: string;
+    };
+
 export interface CheckNetworkResult {
   checkOk: boolean;
   ip: string | null;
@@ -21,21 +34,37 @@ export interface CheckNetworkResult {
   checkedAt: string;
 }
 
-export interface ProxyPolicyCache {
-  get(key: string): Promise<ProxyAttestation | null>;
-  set(key: string, value: ProxyAttestation, ttlMs: number): Promise<void>;
-  /** Must return true if lock was acquired, false if already locked */
-  acquireLock(key: string, ttlMs: number): Promise<boolean>;
+export interface ProxyAttestationLock {
+  acquire(key: string, token: string, ttlMs: number): Promise<boolean>;
+  extend(key: string, token: string, ttlMs: number): Promise<boolean>;
+  release(key: string, token: string): Promise<boolean>;
 }
 
-export function computeProxyFingerprint(proxyUrl: string): string {
-  // Using HMAC to avoid storing raw URL with credentials
-  // Ensure same proxyUrl always generates same fingerprint.
-  return createHmac('sha256', 'proxy-fingerprint-salt').update(proxyUrl).digest('hex');
+export interface ProxyPolicyCache {
+  get(key: string): Promise<CachedProxyPolicyResult | null>;
+  set(key: string, value: CachedProxyPolicyResult, ttlMs: number): Promise<void>;
+  getLock(): ProxyAttestationLock;
+}
+
+export function computeProxyFingerprint(proxyUrl: string, secret: string): string {
+  return createHmac('sha256', secret).update(proxyUrl).digest('hex');
 }
 
 export class ProxyPolicyService {
-  constructor(private readonly cache: ProxyPolicyCache) {}
+  private readonly fingerprintSecret: string;
+
+  constructor(private readonly cache: ProxyPolicyCache) {
+    // eslint-disable-next-line no-restricted-properties
+    const secret = process.env.PROXY_FINGERPRINT_SECRET;
+    if (!secret) {
+      throw new Error('PROXY_FINGERPRINT_SECRET is required');
+    }
+    const decoded = Buffer.from(secret, 'base64');
+    if (decoded.length < 32) {
+      throw new Error('PROXY_FINGERPRINT_SECRET phải có tối thiểu 32 byte sau khi decode base64.');
+    }
+    this.fingerprintSecret = secret;
+  }
 
   async getAttestation(
     workspaceId: string,
@@ -47,28 +76,35 @@ export class ProxyPolicyService {
       throw new Error('Proxy is not enabled or proxyUrl is missing');
     }
 
-    const fingerprint = computeProxyFingerprint(config.proxyUrl);
+    const fingerprint = computeProxyFingerprint(config.proxyUrl, this.fingerprintSecret);
     const countryLock = config.countryLock ?? 'none';
     const cacheKey = `proxy-attestation:${workspaceId}:${configVersion}:${fingerprint}:${countryLock}`;
 
-    // Anti Cache Stampede with single-flight lock
-    let attestation = await this.cache.get(cacheKey);
-    if (attestation) {
-      return attestation;
+    let cached = await this.cache.get(cacheKey);
+    if (cached) {
+      if (cached.kind === 'FAILURE') throw new Error(cached.safeMessage);
+      return cached.attestation;
     }
 
     const lockKey = `proxy-attestation-lock:${cacheKey}`;
-    const locked = await this.cache.acquireLock(lockKey, 15000); // 15s lock
+    const token = randomUUID();
+    const lock = this.cache.getLock();
+    const locked = await lock.acquire(lockKey, token, 15000);
 
     if (!locked) {
-      // Wait briefly and try reading cache again
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      attestation = await this.cache.get(cacheKey);
-      if (attestation) {
-        return attestation;
+      let attempts = 0;
+      while (attempts < 10) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, 100 * Math.pow(1.5, attempts) + Math.random() * 50),
+        );
+        cached = await this.cache.get(cacheKey);
+        if (cached) {
+          if (cached.kind === 'FAILURE') throw new Error(cached.safeMessage);
+          return cached.attestation;
+        }
+        attempts++;
       }
-      // If still missing, another request might be taking too long or failed
-      // Fall through to check network itself (or we could wait longer, but simple fallback is fine)
+      throw new Error('Timeout waiting for proxy attestation');
     }
 
     try {
@@ -83,34 +119,35 @@ export class ProxyPolicyService {
         );
       }
 
-      const newAttestation: ProxyAttestation = {
+      const attestation: ProxyAttestation = {
         workspaceId,
         configVersion,
         proxyFingerprint: fingerprint,
         checkedAt: status.checkedAt,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(), // 5 min ttl
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
         ip: status.ip,
         countryCode: status.countryCode ?? null,
         provider: status.provider ?? 'unknown',
       };
 
-      await this.cache.set(cacheKey, newAttestation, 5 * 60 * 1000);
-      return newAttestation;
+      await this.cache.set(cacheKey, { kind: 'SUCCESS', attestation }, 5 * 60 * 1000);
+      return attestation;
     } catch (error) {
-      // Short cache for errors to avoid hammering the provider
-      // 15 seconds
-      const errAttestation: ProxyAttestation = {
-        workspaceId,
-        configVersion,
-        proxyFingerprint: fingerprint,
-        checkedAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 15000).toISOString(),
-        ip: '',
-        countryCode: null,
-        provider: 'error',
-      };
-      await this.cache.set(cacheKey, errAttestation, 15000);
+      const errMessage = error instanceof Error ? error.message : 'Unknown proxy error';
+      await this.cache.set(
+        cacheKey,
+        {
+          kind: 'FAILURE',
+          errorCode: 'CHECK_FAILED',
+          safeMessage: errMessage,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 15000).toISOString(),
+        },
+        15000,
+      );
       throw error;
+    } finally {
+      await lock.release(lockKey, token);
     }
   }
 }

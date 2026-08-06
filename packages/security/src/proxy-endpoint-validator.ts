@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { isBlockedAddress } from './ssrf-guard';
 
 export interface DnsResolver {
@@ -12,15 +13,17 @@ export interface DnsResolver {
   >;
 }
 
+export interface ProxyGatewayAddress {
+  address: string;
+  family: 4 | 6;
+}
+
 export interface ValidatedProxyEndpoint {
   normalizedUrl: string;
   hostname: string;
   port: number;
   protocol: 'http:' | 'https:' | 'socks:' | 'socks5:';
-  resolvedAddresses: Array<{
-    address: string;
-    family: 4 | 6;
-  }>;
+  gatewayAddresses: ProxyGatewayAddress[];
   validatedAt: number;
 }
 
@@ -46,7 +49,11 @@ export class ProxyEndpointValidator {
       throw new ProxyEndpointBlockedError(`Giao thức proxy không hỗ trợ: ${url.protocol}`);
     }
 
-    const hostname = url.hostname;
+    let hostname = url.hostname;
+    const isIpv6Literal = hostname.startsWith('[') && hostname.endsWith(']');
+    if (isIpv6Literal) {
+      hostname = hostname.slice(1, -1);
+    }
 
     // Kiểm tra nhanh hostname/IP (không thông qua DNS, bắt loopback, local IP)
     if (isBlockedAddress(hostname)) {
@@ -55,8 +62,22 @@ export class ProxyEndpointValidator {
 
     let addresses: Array<{ address: string; family: number }>;
     try {
-      addresses = await this.dnsResolver.lookup(hostname, { all: true, verbatim: true });
-    } catch (_error) {
+      const version = isIP(hostname);
+      if (version === 4 || version === 6) {
+        addresses = [{ address: hostname, family: version }];
+      } else {
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('DNS lookup timeout')), 5000),
+        );
+        addresses = await Promise.race([
+          this.dnsResolver.lookup(hostname, { all: true, verbatim: true }),
+          timeoutPromise,
+        ]);
+      }
+    } catch (_error: unknown) {
+      if (_error instanceof Error && _error.message === 'DNS lookup timeout') {
+        throw new ProxyEndpointBlockedError(`Timeout khi phân giải hostname: ${hostname}`);
+      }
       throw new ProxyEndpointBlockedError(`Không thể phân giải hostname: ${hostname}`);
     }
 
@@ -77,7 +98,7 @@ export class ProxyEndpointValidator {
       hostname: url.hostname,
       port: url.port ? parseInt(url.port, 10) : url.protocol === 'https:' ? 443 : 80,
       protocol: url.protocol as 'http:' | 'https:' | 'socks:' | 'socks5:',
-      resolvedAddresses: addresses as Array<{ address: string; family: 4 | 6 }>,
+      gatewayAddresses: addresses as ProxyGatewayAddress[],
       validatedAt: Date.now(),
     };
   }

@@ -21,7 +21,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@socialhub/shared": "*"
+    "@socialhub/shared": "*",
+    "@types/ip6addr": "^0.2.6",
+    "ip6addr": "^0.2.5"
   },
   "devDependencies": {
     "postcss": "^8.5.25",

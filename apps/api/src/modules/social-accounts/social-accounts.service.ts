@@ -124,7 +124,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     workspaceId: string,
     platform: Platform,
   ): Promise<{ authorizationUrl: string; expiresInSeconds: number; developmentFixture: boolean }> {
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(platform);
     const state = generateOAuthState();
     const pkce = generatePkcePair();
     const scopes = this.scopesFor(platform);
@@ -176,7 +176,7 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(payload.workspaceId)).get(
+    const adapter = (await this.adapterFactory.forWorkspace(payload.workspaceId)).adapters.get(
       input.platform,
     );
     logger.debug(
@@ -324,7 +324,9 @@ export class SocialAccountsService implements OnModuleDestroy {
     });
     if (!account) throw AppError.notFound('social account');
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
+      account.platform,
+    );
     if (account.token && adapter.revokeToken) {
       try {
         const accessToken = decryptToken(account.token.accessToken, this.keyring);
@@ -371,7 +373,9 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (!account) throw AppError.notFound('social account');
     if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
+      account.platform,
+    );
     const accessToken = await this.getFreshAccessToken(account, adapter);
     const profile = await adapter.getAccountProfile({
       accessToken,
@@ -426,7 +430,9 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
+      account.platform,
+    );
     if (!hasTikTokCreatorInfo(adapter)) {
       throw AppError.capabilityUnsupported('TIKTOK', 'queryCreatorInfo');
     }
@@ -462,7 +468,9 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
+      account.platform,
+    );
     if (!hasPinterestBoardBrowser(adapter)) {
       throw AppError.conflict(
         'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
@@ -502,7 +510,9 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
+      account.platform,
+    );
     if (!hasPinterestBoardBrowser(adapter)) {
       throw AppError.conflict(
         'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
@@ -542,7 +552,9 @@ export class SocialAccountsService implements OnModuleDestroy {
     }
     if (!account.token) throw AppError.conflict('Instagram account chưa có token để kiểm tra.');
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
+      account.platform,
+    );
 
     // Kiểm tra xem adapter có phương thức searchLocations không
     if (
@@ -794,7 +806,7 @@ export class SocialAccountsService implements OnModuleDestroy {
     });
     if (!account) throw AppError.notFound('Không tìm thấy tài khoản');
 
-    const registry = await this.adapterFactory.forWorkspace(workspaceId);
+    const { adapters: registry } = await this.adapterFactory.forWorkspace(workspaceId);
     registry.requireCapability(account.platform, 'getPosts');
 
     const activeJob = await this.prisma.externalPostSyncJob.findFirst({

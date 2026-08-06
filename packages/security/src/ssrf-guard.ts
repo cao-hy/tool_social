@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import * as ip6addr from 'ip6addr';
 
 /**
  * Chống SSRF — SECURITY.md §7.5.
@@ -68,24 +69,30 @@ export function isBlockedIpv4(ip: string): boolean {
 }
 
 export function isBlockedIpv6(ip: string): boolean {
-  const normalized = ip.toLowerCase().replace(/^\[|\]$/g, '');
+  try {
+    const addr = ip6addr.parse(ip);
+    if (addr.kind() === 'ipv4') {
+      return isBlockedIpv4(addr.toString({ format: 'v4' }));
+    }
 
-  if (normalized === '::1' || normalized === '::') return true;
-  if (normalized.startsWith('fe80')) return true; // link-local
-  if (/^f[cd]/.test(normalized)) return true; // unique local (fc00::/7)
+    if (ip6addr.createCIDR('::1/128').contains(ip)) return true;
+    if (ip6addr.createCIDR('::/128').contains(ip)) return true;
+    if (ip6addr.createCIDR('fe80::/10').contains(ip)) return true; // link-local
+    if (ip6addr.createCIDR('fc00::/7').contains(ip)) return true; // unique local
+    if (ip6addr.createCIDR('ff00::/8').contains(ip)) return true; // multicast
 
-  // IPv4-mapped (::ffff:127.0.0.1) — kiểm tra phần IPv4 bên trong.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(normalized);
-  if (mapped?.[1]) return isBlockedIpv4(mapped[1]);
-
-  return false;
+    return false;
+  } catch {
+    return true; // if unparseable, block
+  }
 }
 
 export function isBlockedAddress(host: string): boolean {
-  const version = isIP(host);
-  if (version === 4) return isBlockedIpv4(host);
-  if (version === 6) return isBlockedIpv6(host);
-  return BLOCKED_HOSTNAMES.has(host.toLowerCase());
+  const cleanHost = host.replace(/^\[|\]$/g, '');
+  const version = isIP(cleanHost);
+  if (version === 4) return isBlockedIpv4(cleanHost);
+  if (version === 6) return isBlockedIpv6(cleanHost);
+  return BLOCKED_HOSTNAMES.has(cleanHost.toLowerCase());
 }
 
 export interface SsrfGuardOptions {

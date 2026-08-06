@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpException, Inject, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpException,
+  Inject,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import {
   checkProxyAwareNetwork,
   createProxyAwareFetch,
@@ -13,7 +23,7 @@ import {
   type ProxyConfig,
 } from '@socialhub/shared';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
-import type { FastifyRequest } from 'fastify';
+import type { FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../../common/auth/auth.types';
 import { requireMembership, requireUser } from '../../common/auth/request-auth';
@@ -45,8 +55,12 @@ const updateProxySchema = z
       .nullable()
       .optional(),
     version: z
-      .string()
-      .min(1, 'Cần version để tránh race condition (lấy từ updatedAt của setting hiện tại)'),
+      .number()
+      .int()
+      .nonnegative(
+        'Cần version để tránh race condition (lấy từ configVersion của setting hiện tại)',
+      )
+      .optional(),
   })
   .strict();
 
@@ -82,6 +96,7 @@ export class SystemController {
   async updateProxy(
     @Body(zodPipe(updateProxySchema)) config: UpdateProxyInput,
     @Req() request: FastifyRequest & AuthenticatedRequest,
+    @Res({ passthrough: true }) response: FastifyReply,
   ): Promise<ProxyConfig> {
     const workspaceId = requireMembership(request).workspaceId;
     const current = await this.workspaceProxyConfig(workspaceId);
@@ -100,7 +115,14 @@ export class SystemController {
           ? config.proxyUrl.trim()
           : null;
 
-    if (currentSetting && currentSetting.updatedAt.toISOString() !== config.version) {
+    // eslint-disable-next-line no-restricted-properties
+    const allowLegacyUpdate = process.env.ALLOW_LEGACY_PROXY_UPDATE_WITHOUT_VERSION === 'true';
+
+    if (currentSetting && config.version === undefined) {
+      if (!allowLegacyUpdate) {
+        throw new HttpException('Missing config version', 400);
+      }
+    } else if (currentSetting && currentSetting.configVersion !== config.version) {
       throw new HttpException(
         'Cấu hình đã bị thay đổi bởi người khác, vui lòng tải lại trang.',
         409,
@@ -131,6 +153,7 @@ export class SystemController {
             : config.countryLock,
         proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
         proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
+        configVersion: { increment: 1 },
       },
     });
 
@@ -151,6 +174,8 @@ export class SystemController {
         changedFields: changedFields(current, updated),
       },
     });
+
+    response.header('X-Proxy-Version', updated.version?.toString() ?? '0');
     return publicProxyConfig(updated);
   }
 

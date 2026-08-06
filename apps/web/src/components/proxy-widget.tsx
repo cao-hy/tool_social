@@ -21,6 +21,7 @@ type NetworkStatus = {
     countryLock: string | null;
     proxyUrlMasked?: string | null;
     source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
+    version?: number;
   };
   proxyAvailable: boolean;
   proxyActive: boolean;
@@ -61,6 +62,7 @@ export function ProxyWidget({
     enabled: boolean;
     countryLock: string | null;
     proxyUrl?: string | null;
+    version?: number;
   } | null>(null);
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
   const [clearProxyUrl, setClearProxyUrl] = useState(false);
@@ -121,6 +123,7 @@ export function ProxyWidget({
           : proxyUrlDraft.trim()
             ? { proxyUrl: proxyUrlDraft.trim() }
             : {}),
+        version: pendingConfig.version,
       });
       await fetchStatus({ syncDraft: true });
       setOpen(false);

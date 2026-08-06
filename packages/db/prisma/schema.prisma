@@ -325,6 +325,7 @@ model WorkspaceProxySetting {
   proxyUrl       String? @db.Text
   proxyUrlMasked String?
   countryLock    String?
+  configVersion  Int     @default(0)
 
   lastCheckedAt   DateTime?
   lastCheckStatus String?

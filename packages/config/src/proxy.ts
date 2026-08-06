@@ -1,6 +1,6 @@
-import { ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
+import { fetch as undiciFetch } from 'undici';
+import { isIP } from 'node:net';
 import type { ProxyConfig } from '@socialhub/shared';
-import QuickLRU from 'quick-lru';
 
 export class ProxyConfigurationError extends Error {
   readonly code = 'PROXY_CONFIGURATION_MISSING';
@@ -10,8 +10,6 @@ export class ProxyConfigurationError extends Error {
     this.name = 'ProxyConfigurationError';
   }
 }
-
-const proxyAgents = new QuickLRU<string, Dispatcher>({ maxSize: 1000 });
 
 export interface ProxyAwareNetworkStatus {
   checkedAt: string;
@@ -35,6 +33,7 @@ export interface WorkspaceProxySettingRecord {
   proxyUrl: string | null;
   proxyUrlMasked: string | null;
   countryLock: string | null;
+  configVersion: number;
   updatedAt: Date;
 }
 
@@ -76,20 +75,6 @@ const IP_LOOKUP_PROVIDERS = [
       };
     },
   },
-  {
-    name: 'ip-api.com',
-    url: 'http://ip-api.com/json/?fields=status,message,query,countryCode,country,city,isp',
-    parse: (data: unknown): ParsedIpLookup => {
-      const value = asRecord(data);
-      return {
-        ip: stringOrNull(value.query),
-        countryCode: stringOrNull(value.countryCode),
-        country: stringOrNull(value.country),
-        city: stringOrNull(value.city),
-        isp: stringOrNull(value.isp),
-      };
-    },
-  },
 ] as const;
 
 export function readProxyConfig(): ProxyConfig {
@@ -107,9 +92,11 @@ export function hasOutboundProxyConfigured(config?: ProxyConfig): boolean {
   return Boolean(resolveOutboundProxyUrl(config));
 }
 
+import type { ProxyDispatcherLease } from './proxy-dispatcher-pool';
+
 export function createProxyAwareFetch(
   configInput?: ProxyConfig | (() => ProxyConfig),
-  pinnedIp?: string,
+  dispatcherLease?: ProxyDispatcherLease,
 ): typeof fetch {
   return async (input, init) => {
     const config = resolveProxyConfigInput(configInput);
@@ -131,19 +118,76 @@ export function createProxyAwareFetch(
       );
     }
 
-    return undiciFetch(
-      input as Parameters<typeof undiciFetch>[0],
-      {
-        ...init,
-        dispatcher: getProxyAgent(proxyUrl, pinnedIp),
-      } as Parameters<typeof undiciFetch>[1],
-    ) as unknown as Promise<Response>;
+    try {
+      const response = await undiciFetch(
+        input as Parameters<typeof undiciFetch>[0],
+        {
+          ...init,
+          dispatcher: dispatcherLease ? dispatcherLease.dispatcher : undefined,
+        } as Parameters<typeof undiciFetch>[1],
+      );
+
+      if (!dispatcherLease) {
+        return response as unknown as Response;
+      }
+
+      // Safely wrap the response to release the lease
+      if (!response.body) {
+        dispatcherLease.release();
+        return response as unknown as Response;
+      }
+
+      const originalCancel = response.body.cancel.bind(response.body);
+      let released = false;
+      const releaseOnce = () => {
+        if (!released) {
+          released = true;
+          dispatcherLease.release();
+        }
+      };
+
+      const reader = response.body.getReader();
+      const wrappedStream = new ReadableStream({
+        async pull(controller) {
+          try {
+            const { done, value } = await reader.read();
+            if (done) {
+              releaseOnce();
+              controller.close();
+            } else {
+              controller.enqueue(value);
+            }
+          } catch (err) {
+            releaseOnce();
+            controller.error(err);
+          }
+        },
+        async cancel(reason) {
+          releaseOnce();
+          await originalCancel(reason);
+        },
+      });
+
+      const cloned = new Response(wrappedStream, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+      Object.defineProperty(cloned, 'url', { value: response.url });
+
+      return cloned as unknown as Response;
+    } catch (err) {
+      if (dispatcherLease) {
+        dispatcherLease.release();
+      }
+      throw err;
+    }
   };
 }
 
 export async function checkProxyAwareNetwork(
-  proxyConfig = readProxyConfig(),
-  fetchImpl: typeof fetch = createProxyAwareFetch(proxyConfig),
+  proxyConfig: ProxyConfig,
+  fetchImpl: typeof fetch,
 ): Promise<ProxyAwareNetworkStatus> {
   const normalizedProxyConfig = normalizeProxyConfig(proxyConfig);
   const proxyAvailable = hasOutboundProxyConfigured(normalizedProxyConfig);
@@ -159,10 +203,13 @@ export async function checkProxyAwareNetwork(
     try {
       const json = await fetchJsonWithTimeout(fetchImpl, provider.url);
       const parsed = provider.parse(json);
-      if (!parsed.ip) {
-        throw new Error('Response không có IP');
+      if (!parsed.ip || !isIP(parsed.ip)) {
+        throw new Error('Response không có IP hợp lệ');
       }
       const countryCode = parsed.countryCode?.toUpperCase() ?? null;
+      if (countryCode && !/^[A-Z]{2}$/.test(countryCode)) {
+        throw new Error('Country code không hợp lệ');
+      }
       const proxyActive = normalizedProxyConfig.enabled && proxyAvailable;
 
       return {
@@ -197,34 +244,6 @@ export async function checkProxyAwareNetwork(
     checkErrors: errors,
     countryLockSatisfied: !normalizedProxyConfig.enabled,
   };
-}
-
-function getProxyAgent(proxyUrl: string, pinnedIp?: string): Dispatcher {
-  const cacheKey = pinnedIp ? `${proxyUrl}|${pinnedIp}` : proxyUrl;
-  const existing = proxyAgents.get(cacheKey);
-  if (existing) return existing;
-
-  let uri = proxyUrl;
-  let servername: string | undefined;
-
-  if (pinnedIp) {
-    const url = new URL(proxyUrl);
-    servername = url.hostname; // Keep original hostname for SNI
-    url.hostname = pinnedIp;
-    uri = url.toString();
-  }
-
-  const agent = isSocksProxyUrl(proxyUrl)
-    ? new Socks5ProxyAgent(uri, {
-        proxyTls: servername ? { servername } : undefined,
-      })
-    : new ProxyAgent({
-        uri,
-        proxyTls: servername ? { servername } : undefined,
-      });
-
-  proxyAgents.set(cacheKey, agent);
-  return agent;
 }
 
 export function getConfiguredProxyUrl(): string | null {
@@ -280,7 +299,7 @@ export function proxyConfigFromWorkspaceSetting(
     proxyUrl,
     proxyUrlMasked: setting.proxyUrlMasked,
     source: 'WORKSPACE',
-    version: setting.updatedAt.toISOString(),
+    version: setting.configVersion,
   });
 }
 
@@ -343,11 +362,6 @@ function resolveOutboundProxyUrl(config?: ProxyConfig): string | null {
   return normalized.proxyUrl?.trim() || null;
 }
 
-function isSocksProxyUrl(value: string | null): value is string {
-  if (!value) return false;
-  return value.toLowerCase().startsWith('socks5://') || value.toLowerCase().startsWith('socks://');
-}
-
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   if (value === undefined) return fallback;
   return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
@@ -366,15 +380,28 @@ async function fetchJsonWithTimeout(fetchImpl: typeof fetch, url: string): Promi
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const contentLength = response.headers.get('content-length');
-    if (contentLength && parseInt(contentLength, 10) > 1024 * 1024) {
-      throw new Error('Response quá lớn (vượt quá 1MB)');
+    if (!response.body) {
+      throw new Error('Response không có body');
     }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    let bytesRead = 0;
+    const maxBytes = 256 * 1024; // 256KB
 
-    const text = await response.text();
-    if (text.length > 1024 * 1024) {
-      throw new Error('Nội dung response quá lớn (vượt quá 1MB)');
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        bytesRead += value.byteLength;
+        if (bytesRead > maxBytes) {
+          await reader.cancel('Response body too large');
+          throw new Error('Nội dung response quá lớn (vượt quá 256KB)');
+        }
+        text += decoder.decode(value, { stream: true });
+      }
     }
+    text += decoder.decode();
 
     return JSON.parse(text);
   } finally {

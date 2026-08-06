@@ -13,7 +13,7 @@ import {
   TIKTOK_OAUTH_SCOPES,
 } from '@socialhub/platform-adapters';
 import { Keyring } from '@socialhub/security';
-import type { ProxyConfig } from '@socialhub/shared';
+
 import Redis from 'ioredis';
 import { logger } from './logger';
 import { WorkerAdapterFactory } from './utils/adapter-factory';
@@ -63,8 +63,8 @@ async function main(): Promise<void> {
   const prisma = createWorkerPrisma(env.DATABASE_URL, env.LOG_LEVEL === 'trace');
   await prisma.$connect();
   const keyring = Keyring.fromEnv(env.ENCRYPTION_KEYS, env.ENCRYPTION_ACTIVE_KEY);
-  const adapterFactory = new WorkerAdapterFactory(prisma, keyring, env, connection);
-  const defaultAdapters = createAdapterRegistry(env);
+  const adapterFactory = new WorkerAdapterFactory(prisma, keyring, env);
+  const defaultAdapters = createWebhookAdapterRegistry(env);
   const locks = new JobLockService(connection);
   const storage = createStorageClient(env);
 
@@ -188,14 +188,10 @@ function createStorageClient(env: WorkerEnv): {
   };
 }
 
-export function createAdapterRegistry(
-  env: WorkerEnv,
-  proxyConfig?: ProxyConfig,
-  pinnedIp?: string,
-): AdapterRegistry {
+function createWebhookAdapterRegistry(env: WorkerEnv): AdapterRegistry {
   return createRuntimeAdapterRegistry({
     nodeEnv: env.NODE_ENV,
-    fetch: createProxyAwareFetch(proxyConfig, pinnedIp),
+    fetch: createProxyAwareFetch(), // Webhooks run directly, no proxy
     facebook: {
       appId: env.FACEBOOK_APP_ID,
       appSecret: env.FACEBOOK_APP_SECRET,

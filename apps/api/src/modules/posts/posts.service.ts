@@ -1518,7 +1518,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('Social account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
       platformPost.platform,
     );
     const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
@@ -1598,7 +1598,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('TikTok account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get('TIKTOK');
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get('TIKTOK');
     if (!hasTikTokStatusMethods(adapter)) {
       throw AppError.capabilityUnsupported('TIKTOK', 'tiktok_publish_state');
     }
@@ -1642,7 +1642,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     );
     if (targets.length === 0) return;
 
-    const adapters = await this.adapterFactory.forWorkspace(post.workspaceId);
+    const { adapters } = await this.adapterFactory.forWorkspace(post.workspaceId);
     const operations = targets.map((platformPost) => {
       const adapter = adapters.requireCapability(
         platformPost.platform as Platform,
@@ -1714,7 +1714,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     );
     if (targets.length === 0) return [];
 
-    const adapters = await this.adapterFactory.forWorkspace(post.workspaceId);
+    const { adapters } = await this.adapterFactory.forWorkspace(post.workspaceId);
     const results: PlatformDeleteResult[] = [];
 
     for (const platformPost of targets) {
@@ -1854,7 +1854,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('YouTube account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get('YOUTUBE');
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get('YOUTUBE');
     if (!hasYouTubeStatusMethods(adapter)) {
       throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
     }
