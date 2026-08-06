@@ -416,9 +416,21 @@ export class PinterestClient {
     }
 
     if (!response.ok) {
+      const text = await response.text();
+      let payload: unknown;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = text;
+      }
+
+      if (typeof payload === 'string' && payload.includes('<Error>')) {
+        throw new Error(`S3 Upload Error: ${payload}`);
+      }
+
       throw normalizePinterestError({
         status: response.status,
-        payload: await parseJson(response),
+        payload,
         retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
       });
     }
@@ -437,7 +449,9 @@ export class PinterestClient {
     link?: string;
     aiDisclosures?: string[];
     mediaId: string;
-    coverImageUrl: string;
+    coverImageUrl?: string;
+    coverImageData?: string;
+    coverImageContentType?: string;
   }): Promise<PinterestCreatePinResponse> {
     return this.postJson(
       '/pins',
@@ -452,6 +466,8 @@ export class PinterestClient {
           source_type: 'video_id',
           media_id: input.mediaId,
           cover_image_url: input.coverImageUrl,
+          cover_image_data: input.coverImageData,
+          cover_image_content_type: input.coverImageContentType,
         },
       },
       pinterestCreatePinResponseSchema,

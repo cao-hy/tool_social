@@ -50,12 +50,14 @@ export function validatePinterestPost(input: PublishPostInput): ValidationResult
   }
 
   if (video) {
-    const coverUrl = input.thumbnail?.url ?? image?.url;
-    if (!coverUrl || !/^https?:\/\//.test(coverUrl)) {
+    const cover = input.thumbnail ?? image;
+    const hasPublicUrl = cover?.url && /^https?:\/\//.test(cover.url);
+    const hasBytes = cover?.bytes && cover.bytes.length > 0;
+    if (!hasPublicUrl && !hasBytes) {
       issues.push({
         field: 'thumbnail',
         message:
-          'Pinterest video cần cover image URL public. Hãy gắn thêm 1 ảnh cover và cấu hình S3_PUBLIC_BASE_URL/public storage.',
+          'Pinterest video cần cover image URL public hoặc dữ liệu ảnh. Hãy gắn thêm 1 ảnh cover.',
       });
     }
   }

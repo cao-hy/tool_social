@@ -188,8 +188,10 @@ export class PinterestAdapter implements SocialPlatformAdapter {
     const video = input.media.find((item) => item.type === 'VIDEO');
     if (video) {
       const cover = input.thumbnail ?? input.media.find((item) => item.type === 'IMAGE');
-      if (!cover || !/^https?:\/\//.test(cover.url)) {
-        throw new Error('Pinterest video cần cover image URL public.');
+      const hasPublicUrl = cover?.url && /^https?:\/\//.test(cover.url);
+      const hasBytes = cover?.bytes && cover.bytes.length > 0;
+      if (!hasPublicUrl && !hasBytes) {
+        throw new Error('Pinterest video cần cover image URL public hoặc dữ liệu ảnh.');
       }
       if (!video.bytes?.length) {
         throw new Error('Pinterest video cần bytes từ storage để upload.');
@@ -214,7 +216,12 @@ export class PinterestAdapter implements SocialPlatformAdapter {
         link: input.linkUrl,
         aiDisclosures: options.aiDisclosures,
         mediaId: upload.media_id,
-        coverImageUrl: cover.url,
+        coverImageUrl: hasPublicUrl ? cover?.url : undefined,
+        coverImageData:
+          !hasPublicUrl && hasBytes && cover?.bytes
+            ? Buffer.from(cover.bytes).toString('base64')
+            : undefined,
+        coverImageContentType: !hasPublicUrl && hasBytes ? cover?.mimeType : undefined,
       });
 
       return {
