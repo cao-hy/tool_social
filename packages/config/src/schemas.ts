@@ -55,6 +55,11 @@ const syncSchema = z.object({
   EXTERNAL_POST_SYNC_MANUAL_COOLDOWN_HOURS: z.coerce.number().int().min(0).default(2),
 });
 
+const proxySchema = z.object({
+  PROXY_ENABLED: booleanFromString(false),
+  PROXY_COUNTRY_LOCK: z.string().optional(),
+});
+
 /**
  * OAuth credential của từng nền tảng — TẤT CẢ đều optional.
  *
@@ -196,6 +201,7 @@ export const apiEnvSchema = z
   .merge(storageSchema)
   .merge(observabilitySchema)
   .merge(syncSchema)
+  .merge(proxySchema)
   .merge(platformOAuthSchema)
   .superRefine((env, ctx) => {
     validatePlatformOAuth(env, ctx);
@@ -248,6 +254,7 @@ export const workerEnvSchema = z
   .merge(storageSchema)
   .merge(observabilitySchema)
   .merge(syncSchema)
+  .merge(proxySchema)
   .merge(platformOAuthSchema)
   .superRefine(validatePlatformOAuth);
 

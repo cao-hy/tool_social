@@ -7,9 +7,9 @@ import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import type { PlatformComment } from '@socialhub/platform-adapters';
 import { z } from 'zod';
-import type { ProxyConfig } from '@socialhub/shared';
+
 import { logger } from '../logger';
-import { loadWorkspaceProxyConfig } from '../utils/proxy';
+
 import { getFreshAccessToken } from './token-refresh';
 
 const syncCommentsPayloadSchema = z.object({
@@ -23,8 +23,7 @@ const syncCommentsPayloadSchema = z.object({
 export function createSyncCommentsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapters: AdapterRegistry;
-  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
 }) {
   return async (job: {
     data: unknown;
@@ -69,8 +68,7 @@ async function syncComments(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapters: AdapterRegistry;
-    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+    adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
   },
   payload: z.infer<typeof syncCommentsPayloadSchema>,
 ) {
@@ -80,12 +78,7 @@ async function syncComments(
   });
   if (!account) return { synced: 0, reason: 'account_not_found' };
 
-  const proxyConfig = await loadWorkspaceProxyConfig(
-    input.prisma,
-    input.keyring,
-    payload.workspaceId,
-  );
-  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
   const adapter = adapters.get(account.platform);
   const getComments = adapter.getComments?.bind(adapter);
   if (!getComments) {

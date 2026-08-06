@@ -45,6 +45,10 @@ export const PINO_REDACT_PATHS: readonly string[] = [
   'tokenSet.refreshToken',
   'socialToken.accessToken',
   'socialToken.refreshToken',
+  'proxyUrl',
+  'dispatcher',
+  '*.proxyUrl',
+  '*.dispatcher',
 ];
 
 export const REDACTION_PLACEHOLDER = '[REDACTED]';

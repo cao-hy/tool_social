@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Inject, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpException, Inject, Post, Req, UseGuards } from '@nestjs/common';
 import {
   checkProxyAwareNetwork,
   createProxyAwareFetch,
@@ -44,6 +44,9 @@ const updateProxySchema = z
       .transform((value) => value.toUpperCase())
       .nullable()
       .optional(),
+    version: z
+      .string()
+      .min(1, 'Cần version để tránh race condition (lấy từ updatedAt của setting hiện tại)'),
   })
   .strict();
 
@@ -96,6 +99,13 @@ export class SystemController {
         : config.proxyUrl?.trim()
           ? config.proxyUrl.trim()
           : null;
+
+    if (currentSetting && currentSetting.updatedAt.toISOString() !== config.version) {
+      throw new HttpException(
+        'Cấu hình đã bị thay đổi bởi người khác, vui lòng tải lại trang.',
+        409,
+      );
+    }
 
     const encryptedProxyUrl = nextStoredProxyUrl
       ? encryptToken(nextStoredProxyUrl, this.keyring)

@@ -1,33 +1,73 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { createProxyAwareFetch, resolveWorkspaceProxyConfig } from '@socialhub/config';
+import {
+  createProxyAwareFetch,
+  resolveWorkspaceProxyConfig,
+  checkProxyAwareNetwork,
+} from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
   TIKTOK_OAUTH_SCOPES,
 } from '@socialhub/platform-adapters';
-import { decryptToken, type Keyring } from '@socialhub/security';
+import {
+  decryptToken,
+  ProxyPolicyService,
+  RedisProxyPolicyCache,
+  type Keyring,
+} from '@socialhub/security';
 import { type ProxyConfig } from '@socialhub/shared';
 import { ENV, type ApiEnv } from './env.provider';
 import { PrismaService } from './prisma/prisma.service';
 import { KEYRING } from './tokens';
+import { RedisService } from './redis/redis.service';
 
 @Injectable()
 export class AdapterRegistryFactory {
+  private readonly policyService: ProxyPolicyService;
+
   constructor(
     @Inject(ENV) private readonly env: ApiEnv,
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(KEYRING) private readonly keyring: Keyring,
-  ) {}
-
-  async forWorkspace(workspaceId: string): Promise<AdapterRegistry> {
-    return this.create(await this.workspaceProxyConfig(workspaceId));
+    @Inject(RedisService) private readonly redisService: RedisService,
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.policyService = new ProxyPolicyService(
+      new RedisProxyPolicyCache(this.redisService.getClient() as any),
+    );
   }
 
-  create(proxyConfig?: ProxyConfig): AdapterRegistry {
+  async forWorkspace(workspaceId: string): Promise<AdapterRegistry> {
+    const setting = await this.prisma.workspaceProxySetting.findUnique({
+      where: { workspaceId },
+    });
+
+    const proxyConfig = resolveWorkspaceProxyConfig(setting, (ciphertext) =>
+      decryptToken(ciphertext, this.keyring),
+    );
+
+    let pinnedIp: string | undefined;
+
+    if (proxyConfig.enabled && proxyConfig.proxyUrl) {
+      const attestation = await this.policyService.getAttestation(
+        workspaceId,
+        proxyConfig,
+        setting?.updatedAt.getTime() ?? 0,
+        async () => {
+          return await checkProxyAwareNetwork(proxyConfig, createProxyAwareFetch(proxyConfig));
+        },
+      );
+      pinnedIp = attestation.ip;
+    }
+
+    return this.create(proxyConfig, pinnedIp);
+  }
+
+  create(proxyConfig?: ProxyConfig, pinnedIp?: string): AdapterRegistry {
     const env = this.env;
     return createRuntimeAdapterRegistry({
       nodeEnv: env.NODE_ENV,
-      fetch: createProxyAwareFetch(proxyConfig),
+      fetch: createProxyAwareFetch(proxyConfig, pinnedIp),
       facebook: {
         appId: env.FACEBOOK_APP_ID,
         appSecret: env.FACEBOOK_APP_SECRET,
@@ -55,15 +95,5 @@ export class AdapterRegistryFactory {
         scopes: [...TIKTOK_OAUTH_SCOPES],
       },
     });
-  }
-
-  private async workspaceProxyConfig(workspaceId: string): Promise<ProxyConfig> {
-    const setting = await this.prisma.workspaceProxySetting.findUnique({
-      where: { workspaceId },
-    });
-
-    return resolveWorkspaceProxyConfig(setting, (ciphertext) =>
-      decryptToken(ciphertext, this.keyring),
-    );
   }
 }

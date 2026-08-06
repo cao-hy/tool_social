@@ -1,5 +1,6 @@
 import { ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { ProxyConfig } from '@socialhub/shared';
+import QuickLRU from 'quick-lru';
 
 export class ProxyConfigurationError extends Error {
   readonly code = 'PROXY_CONFIGURATION_MISSING';
@@ -10,7 +11,7 @@ export class ProxyConfigurationError extends Error {
   }
 }
 
-const proxyAgents = new Map<string, Dispatcher>();
+const proxyAgents = new QuickLRU<string, Dispatcher>({ maxSize: 1000 });
 
 export interface ProxyAwareNetworkStatus {
   checkedAt: string;
@@ -34,6 +35,7 @@ export interface WorkspaceProxySettingRecord {
   proxyUrl: string | null;
   proxyUrlMasked: string | null;
   countryLock: string | null;
+  updatedAt: Date;
 }
 
 interface ParsedIpLookup {
@@ -107,6 +109,7 @@ export function hasOutboundProxyConfigured(config?: ProxyConfig): boolean {
 
 export function createProxyAwareFetch(
   configInput?: ProxyConfig | (() => ProxyConfig),
+  pinnedIp?: string,
 ): typeof fetch {
   return async (input, init) => {
     const config = resolveProxyConfigInput(configInput);
@@ -132,7 +135,7 @@ export function createProxyAwareFetch(
       input as Parameters<typeof undiciFetch>[0],
       {
         ...init,
-        dispatcher: getProxyAgent(proxyUrl),
+        dispatcher: getProxyAgent(proxyUrl, pinnedIp),
       } as Parameters<typeof undiciFetch>[1],
     ) as unknown as Promise<Response>;
   };
@@ -154,11 +157,8 @@ export async function checkProxyAwareNetwork(
 
   for (const provider of IP_LOOKUP_PROVIDERS) {
     try {
-      const response = await fetchJsonWithTimeout(fetchImpl, provider.url);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const parsed = provider.parse(await response.json());
+      const json = await fetchJsonWithTimeout(fetchImpl, provider.url);
+      const parsed = provider.parse(json);
       if (!parsed.ip) {
         throw new Error('Response không có IP');
       }
@@ -199,13 +199,31 @@ export async function checkProxyAwareNetwork(
   };
 }
 
-function getProxyAgent(proxyUrl: string): Dispatcher {
-  const existing = proxyAgents.get(proxyUrl);
+function getProxyAgent(proxyUrl: string, pinnedIp?: string): Dispatcher {
+  const cacheKey = pinnedIp ? `${proxyUrl}|${pinnedIp}` : proxyUrl;
+  const existing = proxyAgents.get(cacheKey);
   if (existing) return existing;
+
+  let uri = proxyUrl;
+  let servername: string | undefined;
+
+  if (pinnedIp) {
+    const url = new URL(proxyUrl);
+    servername = url.hostname; // Keep original hostname for SNI
+    url.hostname = pinnedIp;
+    uri = url.toString();
+  }
+
   const agent = isSocksProxyUrl(proxyUrl)
-    ? new Socks5ProxyAgent(proxyUrl)
-    : new ProxyAgent(proxyUrl);
-  proxyAgents.set(proxyUrl, agent);
+    ? new Socks5ProxyAgent(uri, {
+        proxyTls: servername ? { servername } : undefined,
+      })
+    : new ProxyAgent({
+        uri,
+        proxyTls: servername ? { servername } : undefined,
+      });
+
+  proxyAgents.set(cacheKey, agent);
   return agent;
 }
 
@@ -262,6 +280,7 @@ export function proxyConfigFromWorkspaceSetting(
     proxyUrl,
     proxyUrlMasked: setting.proxyUrlMasked,
     source: 'WORKSPACE',
+    version: setting.updatedAt.toISOString(),
   });
 }
 
@@ -309,6 +328,7 @@ export function normalizeProxyConfig(value: Partial<ProxyConfig>): ProxyConfig {
     proxyUrl,
     proxyUrlMasked: value.proxyUrlMasked ?? maskProxyUrl(proxyUrl),
     source,
+    version: value.version,
   };
 }
 
@@ -333,14 +353,30 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
 }
 
-async function fetchJsonWithTimeout(fetchImpl: typeof fetch, url: string): Promise<Response> {
+async function fetchJsonWithTimeout(fetchImpl: typeof fetch, url: string): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 6000);
   try {
-    return await fetchImpl(url, {
+    const response = await fetchImpl(url, {
       signal: controller.signal,
       headers: { Accept: 'application/json' },
     });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 1024 * 1024) {
+      throw new Error('Response quá lớn (vượt quá 1MB)');
+    }
+
+    const text = await response.text();
+    if (text.length > 1024 * 1024) {
+      throw new Error('Nội dung response quá lớn (vượt quá 1MB)');
+    }
+
+    return JSON.parse(text);
   } finally {
     clearTimeout(timeout);
   }

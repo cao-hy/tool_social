@@ -8,9 +8,9 @@ import {
   type QueuePayload,
 } from '@socialhub/shared';
 import { z } from 'zod';
-import type { ProxyConfig } from '@socialhub/shared';
+
 import { logger } from '../logger';
-import { loadWorkspaceProxyConfig } from '../utils/proxy';
+
 import { getFreshAccessToken } from './token-refresh';
 
 const syncPostMetricsPayloadSchema = z.object({
@@ -24,8 +24,7 @@ type SyncPostMetricsPayload = QueuePayload<'sync-post-metrics'>;
 export function createSyncPostMetricsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapters: AdapterRegistry;
-  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
 }) {
   return async (job: {
     data: unknown;
@@ -79,8 +78,7 @@ async function syncPostMetrics(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapters: AdapterRegistry;
-    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+    adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
   },
   payload: SyncPostMetricsPayload,
 ) {
@@ -111,12 +109,7 @@ async function syncPostMetrics(
     select: { timezone: true },
   });
 
-  const proxyConfig = await loadWorkspaceProxyConfig(
-    input.prisma,
-    input.keyring,
-    payload.workspaceId,
-  );
-  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
   const adapter = adapters.get(account.platform);
   const accessToken = await getFreshAccessToken({
     prisma: input.prisma,

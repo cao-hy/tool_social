@@ -20,7 +20,6 @@ import {
   type MediaType,
   type Platform,
   type PlatformPostStatus,
-  type ProxyConfig,
 } from '@socialhub/shared';
 import sharp from 'sharp';
 import { UnrecoverableError } from 'bullmq';
@@ -28,7 +27,7 @@ import { z } from 'zod';
 import { logger } from '../logger';
 import { decideOnError } from '../queue/error-policy';
 import { JobLockService } from '../queue/job-lock';
-import { loadWorkspaceProxyConfig } from '../utils/proxy';
+
 import { getFreshAccessToken } from './token-refresh';
 
 const publishPostPayloadSchema = z
@@ -57,8 +56,7 @@ const adapterLogger: AdapterLogger = {
 export function createPublishPostProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapters: AdapterRegistry;
-  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
   locks: JobLockService;
   storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
 }) {
@@ -80,7 +78,22 @@ export function createPublishPostProcessor(input: {
       const result = await input.locks.withLock(
         `publish-post:${payload.platformPostId}`,
         120_000,
-        async () => publishPlatformPost(input, payload, job),
+        async () => {
+          const timer = setInterval(() => {
+            input.prisma.platformPost
+              .update({
+                where: { id: payload.platformPostId },
+                data: { lastAttemptAt: new Date() },
+              })
+              .catch((err) => logger.error({ err }, 'Lỗi heartbeat'));
+          }, 30000);
+
+          try {
+            return await publishPlatformPost(input, payload, job);
+          } finally {
+            clearInterval(timer);
+          }
+        },
       );
 
       if (result === null) {
@@ -107,22 +120,24 @@ export function createPublishPostProcessor(input: {
       const decision = decideOnError(error, attempt, maxAttempts);
       const isDead = decision.action === 'FAIL_PERMANENTLY';
 
+      let errorCode: string = isPlatformError(error) ? error.kind : 'UNKNOWN';
+      if (isDead && errorCode === 'NETWORK') {
+        errorCode = 'REMOTE_RESULT_UNKNOWN';
+        decision.reason =
+          'Mất kết nối mạng khi đang thực hiện tác vụ, không thể xác định kết quả phía nền tảng.';
+      }
+
       await markBackgroundJobFinished(input.prisma, jobName, jobId, startedAt, {
         status: isDead ? 'DEAD' : 'FAILED',
         payload,
-        errorCode: isPlatformError(error) ? error.kind : 'UNKNOWN',
+        errorCode,
         errorMessage: decision.reason,
         isDead,
       });
 
       if (isDead) {
         // Cập nhật post thành FAILED để người dùng biết
-        await markFailed(
-          input.prisma,
-          payload.platformPostId,
-          isPlatformError(error) ? error.kind : 'UNKNOWN',
-          decision.reason,
-        );
+        await markFailed(input.prisma, payload.platformPostId, errorCode, decision.reason);
         throw new UnrecoverableError(decision.reason);
       }
 
@@ -135,8 +150,7 @@ async function publishPlatformPost(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapters: AdapterRegistry;
-    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+    adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
     locks: JobLockService;
     storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
   },
@@ -191,12 +205,14 @@ async function publishPlatformPost(
     data: { status: 'PROCESSING' },
   });
 
+  const { loadWorkspaceProxyConfig } = await import('../utils/proxy.js');
   const proxyConfig = await loadWorkspaceProxyConfig(
     input.prisma,
     input.keyring,
     payload.workspaceId,
   );
-  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+
+  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
   const adapter = adapters.get(platformPost.platform);
   if (
     platformPost.socialAccount.scopes.includes('development-fixture') &&
@@ -250,7 +266,8 @@ async function publishPlatformPost(
         platformPostId: platformPost.id,
         platform: platformPost.platform,
         mediaCount: media.length,
-        media: media.map((item, index) => ({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        media: platformPost.contentPost.media.map((item: any, index: number) => ({
           index,
           type: item.type,
           mimeType: item.mimeType,

@@ -16,6 +16,7 @@ import { Keyring } from '@socialhub/security';
 import type { ProxyConfig } from '@socialhub/shared';
 import Redis from 'ioredis';
 import { logger } from './logger';
+import { WorkerAdapterFactory } from './utils/adapter-factory';
 import { createCreatePlatformCommentProcessor } from './processors/create-platform-comment';
 import { createGenerateThumbnailProcessor } from './processors/generate-thumbnail';
 import { createProcessWebhookProcessor } from './processors/process-webhook';
@@ -29,6 +30,7 @@ import { createSyncAccountMetricsProcessor } from './processors/sync-account-met
 import { createSyncCommentsProcessor } from './processors/sync-comments';
 import { createSyncExternalPostsProcessor } from './processors/sync-external-posts';
 import { createSyncPostMetricsProcessor } from './processors/sync-post-metrics';
+import { createCleanupUnusedMediaProcessor } from './processors/cleanup-unused-media';
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
 import { startScheduledPostScanner } from './schedulers/scheduled-post-scanner';
@@ -61,64 +63,67 @@ async function main(): Promise<void> {
   const prisma = createWorkerPrisma(env.DATABASE_URL, env.LOG_LEVEL === 'trace');
   await prisma.$connect();
   const keyring = Keyring.fromEnv(env.ENCRYPTION_KEYS, env.ENCRYPTION_ACTIVE_KEY);
-  const adapters = createAdapterRegistry(env);
-  const createAdapters = (proxyConfig: ProxyConfig) => createAdapterRegistry(env, proxyConfig);
+  const adapterFactory = new WorkerAdapterFactory(prisma, keyring, env, connection);
+  const defaultAdapters = createAdapterRegistry(env);
   const locks = new JobLockService(connection);
   const storage = createStorageClient(env);
 
   registry.registerWorker(
     'publish-post',
-    createPublishPostProcessor({ prisma, keyring, adapters, createAdapters, locks, storage }),
+    createPublishPostProcessor({ prisma, keyring, adapterFactory, locks, storage }),
   );
   registry.registerWorker(
     'retry-failed-post',
-    createPublishPostProcessor({ prisma, keyring, adapters, createAdapters, locks, storage }),
+    createPublishPostProcessor({ prisma, keyring, adapterFactory, locks, storage }),
   );
   registry.registerWorker(
     'refresh-social-token',
     createRefreshSocialTokenProcessor({
       prisma,
       keyring,
-      adapters,
-      createAdapters,
+      adapterFactory,
       locks,
     }),
   );
   registry.registerWorker(
     'sync-comments',
-    createSyncCommentsProcessor({ prisma, keyring, adapters, createAdapters }),
+    createSyncCommentsProcessor({ prisma, keyring, adapterFactory }),
   );
   registry.registerWorker(
     'create-platform-comment',
-    createCreatePlatformCommentProcessor({ prisma, keyring, adapters, createAdapters }),
+    createCreatePlatformCommentProcessor({ prisma, keyring, adapterFactory }),
   );
   registry.registerWorker(
     'reply-platform-comment',
-    createReplyPlatformCommentProcessor({ prisma, keyring, adapters, createAdapters }),
+    createReplyPlatformCommentProcessor({ prisma, keyring, adapterFactory }),
   );
   registry.registerWorker(
     'sync-external-posts',
-    createSyncExternalPostsProcessor({ prisma, keyring, adapters, createAdapters }),
+    createSyncExternalPostsProcessor({ prisma, keyring, adapterFactory }),
   );
   registry.registerWorker(
     'sync-post-metrics',
-    createSyncPostMetricsProcessor({ prisma, keyring, adapters, createAdapters }),
+    createSyncPostMetricsProcessor({ prisma, keyring, adapterFactory }),
   );
   registry.registerWorker(
     'sync-account-metrics',
-    createSyncAccountMetricsProcessor({ prisma, keyring, adapters, createAdapters }),
+    createSyncAccountMetricsProcessor({ prisma, keyring, adapterFactory }),
   );
   registry.registerWorker(
     'process-webhook',
     createProcessWebhookProcessor({
       prisma,
-      adapters,
+      adapters: defaultAdapters,
       syncCommentsQueue: registry.getQueue('sync-comments'),
     }),
   );
   registry.registerWorker(
     'generate-thumbnail',
     createGenerateThumbnailProcessor({ prisma, storage }),
+  );
+  registry.registerWorker(
+    'cleanup-unused-media',
+    createCleanupUnusedMediaProcessor({ prisma, storage }),
   );
   const scheduledPostScanner = startScheduledPostScanner({
     prisma,
@@ -183,10 +188,14 @@ function createStorageClient(env: WorkerEnv): {
   };
 }
 
-function createAdapterRegistry(env: WorkerEnv, proxyConfig?: ProxyConfig): AdapterRegistry {
+export function createAdapterRegistry(
+  env: WorkerEnv,
+  proxyConfig?: ProxyConfig,
+  pinnedIp?: string,
+): AdapterRegistry {
   return createRuntimeAdapterRegistry({
     nodeEnv: env.NODE_ENV,
-    fetch: createProxyAwareFetch(proxyConfig),
+    fetch: createProxyAwareFetch(proxyConfig, pinnedIp),
     facebook: {
       appId: env.FACEBOOK_APP_ID,
       appSecret: env.FACEBOOK_APP_SECRET,

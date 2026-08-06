@@ -1,10 +1,10 @@
-import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
+import { isPlatformError } from '@socialhub/platform-adapters';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import { PLATFORM_LABELS, type ProxyConfig, type QueuePayload } from '@socialhub/shared';
+import { PLATFORM_LABELS, type QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
-import { loadWorkspaceProxyConfig } from '../utils/proxy';
+
 import { getFreshAccessToken } from './token-refresh';
 
 const replyPlatformCommentPayloadSchema = z.object({
@@ -21,8 +21,11 @@ type ReplyPlatformCommentPayload = QueuePayload<'reply-platform-comment'>;
 export function createReplyPlatformCommentProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapters: AdapterRegistry;
-  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+  adapterFactory: {
+    forWorkspace(
+      workspaceId: string,
+    ): Promise<import('@socialhub/platform-adapters').AdapterRegistry>;
+  };
 }) {
   return async (job: {
     data: unknown;
@@ -52,9 +55,19 @@ export function createReplyPlatformCommentProcessor(input: {
         ? !platformError.retryable || attempt >= maxAttempts
         : attempt >= maxAttempts;
       await markReplyFailed(input.prisma, payload, error);
+      let errorCode: string =
+        platformError?.kind ?? (error instanceof Error ? error.name : 'UNKNOWN');
+      let errorMessage =
+        error instanceof Error ? error.message : 'Lỗi không xác định khi reply comment.';
+      if (isDead && errorCode === 'NETWORK') {
+        errorCode = 'REMOTE_RESULT_UNKNOWN';
+        errorMessage =
+          'Mất kết nối mạng khi đang gửi comment, không thể xác định nền tảng đã nhận được chưa.';
+      }
+
       await finishJob(input.prisma, jobName, jobId, startedAt, isDead ? 'DEAD' : 'FAILED', {
-        errorCode: platformError?.kind ?? (error instanceof Error ? error.name : 'UNKNOWN'),
-        errorMessage: error instanceof Error ? error.message : 'Lỗi không xác định khi gửi reply.',
+        errorCode,
+        errorMessage,
         isDead,
       });
       if (platformError && !platformError.retryable) {
@@ -78,8 +91,11 @@ async function replyPlatformComment(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapters: AdapterRegistry;
-    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+    adapterFactory: {
+      forWorkspace(
+        workspaceId: string,
+      ): Promise<import('@socialhub/platform-adapters').AdapterRegistry>;
+    };
   },
   payload: ReplyPlatformCommentPayload,
 ) {
@@ -98,12 +114,7 @@ async function replyPlatformComment(
     return { replied: false, reason: 'account_disconnected' };
   }
 
-  const proxyConfig = await loadWorkspaceProxyConfig(
-    input.prisma,
-    input.keyring,
-    payload.workspaceId,
-  );
-  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
   const adapter = adapters.requireCapability(account.platform, 'replyToComment');
   const replyToComment = adapter.replyToComment?.bind(adapter);
   if (!replyToComment) return { replied: false, reason: 'capability_unsupported' };

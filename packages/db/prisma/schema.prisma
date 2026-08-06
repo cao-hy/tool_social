@@ -78,6 +78,8 @@ enum MediaStatus {
   PROCESSING
   READY
   FAILED
+  DELETE_PENDING
+  DELETE_FAILED
   ARCHIVED
 }
 
@@ -365,6 +367,7 @@ model WorkspaceInvitation {
   role        WorkspaceRole    @default(VIEWER)
   tokenHash   String           @unique
   status      InvitationStatus @default(PENDING)
+  pendingEmail String?
   invitedById String
   expiresAt   DateTime
   acceptedAt  DateTime?
@@ -373,7 +376,7 @@ model WorkspaceInvitation {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   invitedBy User      @relation(fields: [invitedById], references: [id], onDelete: Cascade)
 
-  @@unique([workspaceId, email, status])
+  @@unique([workspaceId, pendingEmail])
   @@index([workspaceId])
   @@index([email])
 }

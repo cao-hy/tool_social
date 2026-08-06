@@ -3,9 +3,9 @@ import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@soc
 import type { Keyring } from '@socialhub/security';
 import type { AccountMetrics, MetricSource, QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
-import type { ProxyConfig } from '@socialhub/shared';
+
 import { logger } from '../logger';
-import { loadWorkspaceProxyConfig } from '../utils/proxy';
+
 import { getFreshAccessToken } from './token-refresh';
 
 const syncAccountMetricsPayloadSchema = z.object({
@@ -19,8 +19,7 @@ type SyncAccountMetricsPayload = QueuePayload<'sync-account-metrics'>;
 export function createSyncAccountMetricsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapters: AdapterRegistry;
-  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
 }) {
   return async (job: {
     data: unknown;
@@ -65,8 +64,7 @@ async function syncAccountMetrics(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapters: AdapterRegistry;
-    createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+    adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
   },
   payload: SyncAccountMetricsPayload,
 ) {
@@ -83,12 +81,7 @@ async function syncAccountMetrics(
     return { synced: false, reason: 'account_disconnected' };
   }
 
-  const proxyConfig = await loadWorkspaceProxyConfig(
-    input.prisma,
-    input.keyring,
-    payload.workspaceId,
-  );
-  const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
   const adapter = adapters.get(account.platform);
   const accessToken = await getFreshAccessToken({
     prisma: input.prisma,

@@ -4,4 +4,5 @@ export interface ProxyConfig {
   proxyUrl?: string | null;
   proxyUrlMasked?: string | null;
   source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
+  version?: string;
 }

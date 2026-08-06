@@ -2,9 +2,9 @@ import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import { z } from 'zod';
-import type { ProxyConfig } from '@socialhub/shared';
+
 import { logger } from '../logger';
-import { loadWorkspaceProxyConfig } from '../utils/proxy';
+
 import type { JobLockService } from '../queue/job-lock';
 
 const refreshSocialTokenPayloadSchema = z.object({
@@ -15,8 +15,7 @@ const refreshSocialTokenPayloadSchema = z.object({
 export function createRefreshSocialTokenProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapters: AdapterRegistry;
-  createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
   locks?: JobLockService;
 }) {
   return async (job: { data: unknown; id?: string }) => {
@@ -32,12 +31,7 @@ export function createRefreshSocialTokenProcessor(input: {
       return { refreshed: false, reason: 'not_found' };
     }
 
-    const proxyConfig = await loadWorkspaceProxyConfig(
-      input.prisma,
-      input.keyring,
-      payload.workspaceId,
-    );
-    const adapters = input.createAdapters?.(proxyConfig) ?? input.adapters;
+    const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
     const adapter = adapters.get(token.socialAccount.platform);
     if (!token.refreshToken || !adapter.refreshToken) {
       await input.prisma.socialAccount.update({
@@ -86,7 +80,7 @@ export function createRefreshSocialTokenProcessor(input: {
 
       await input.prisma.$transaction([
         input.prisma.socialToken.update({
-          where: { id: token.id },
+          where: { id: token.id, updatedAt: token.updatedAt },
           data: {
             accessToken: encryptedAccessToken.ciphertext,
             refreshToken: encryptedRefreshToken?.ciphertext ?? token.refreshToken,

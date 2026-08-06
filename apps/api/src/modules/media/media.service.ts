@@ -584,19 +584,12 @@ export class MediaService implements OnModuleDestroy {
     ]);
     const deletableMedia = mediaAssets.filter((media) => !activeMediaIds.has(media.id));
 
-    for (const media of deletableMedia) {
-      const keys = [...new Set([media.storageKey, media.thumbnailKey].filter(Boolean))] as string[];
-      await Promise.all(
-        keys.map((key) =>
-          this.s3.send(new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: key })),
-        ),
-      );
-    }
-
     if (deletableMedia.length > 0) {
-      await this.prisma.mediaAsset.deleteMany({
+      await this.prisma.mediaAsset.updateMany({
         where: { id: { in: deletableMedia.map((media) => media.id) }, workspaceId },
+        data: { status: 'DELETE_PENDING' },
       });
+      // Cleanup is handled asynchronously by the worker state machine.
     }
 
     return {

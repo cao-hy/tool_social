@@ -190,7 +190,7 @@ export class WorkspacesService {
       if (invitation.expiresAt <= new Date()) {
         await tx.workspaceInvitation.update({
           where: { id: invitation.id },
-          data: { status: 'EXPIRED' },
+          data: { status: 'EXPIRED', pendingEmail: null },
         });
         throw AppError.validation('Lời mời này đã hết hạn.');
       }
@@ -206,7 +206,7 @@ export class WorkspacesService {
       if (existingMember) {
         const updatedInvitation = await tx.workspaceInvitation.update({
           where: { id: invitation.id },
-          data: { status: 'ACCEPTED', acceptedAt: new Date() },
+          data: { status: 'ACCEPTED', acceptedAt: new Date(), pendingEmail: null },
         });
 
         return {
@@ -226,7 +226,7 @@ export class WorkspacesService {
 
       const updatedInvitation = await tx.workspaceInvitation.update({
         where: { id: invitation.id },
-        data: { status: 'ACCEPTED', acceptedAt: new Date() },
+        data: { status: 'ACCEPTED', acceptedAt: new Date(), pendingEmail: null },
       });
 
       return {
@@ -285,7 +285,7 @@ export class WorkspacesService {
     if (existingPending) {
       await this.prisma.workspaceInvitation.update({
         where: { id: existingPending.id },
-        data: { status: 'EXPIRED' },
+        data: { status: 'EXPIRED', pendingEmail: null },
       });
     }
 
@@ -294,6 +294,7 @@ export class WorkspacesService {
         data: {
           workspaceId,
           email: input.email,
+          pendingEmail: input.email,
           role: input.role,
           tokenHash: hashToken(token),
           invitedById: auditContext.actorUserId,
