@@ -132,6 +132,10 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     return mapInstagramProfile(profile);
   }
 
+  async searchLocations(ctx: AdapterContext, query: string) {
+    return this.client.searchLocations(query, ctx.accessToken);
+  }
+
   validatePost(input: PublishPostInput) {
     return validateInstagramPost(input);
   }
@@ -592,7 +596,7 @@ function instagramPublishOptions(options: Record<string, unknown> | undefined): 
   return {
     mediaType,
     locationId:
-      typeof options?.locationId === 'string' ? options.locationId.trim() || undefined : undefined,
+      options?.locationId != null ? String(options.locationId).trim() || undefined : undefined,
     shareToFeed: options?.shareToFeed === true,
     altText: typeof options?.altText === 'string' ? options.altText : undefined,
     collaborators: Array.isArray(options?.collaborators)

@@ -25,6 +25,8 @@ import {
   type InstagramMediaPage,
   type InstagramCommentsPage,
   type InstagramInsightsResponse,
+  instagramLocationSearchResponseSchema,
+  type InstagramLocation,
 } from './instagram.schemas';
 
 export interface InstagramGraphClientConfig {
@@ -108,6 +110,19 @@ export class InstagramGraphClient {
       },
       instagramProfileSchema,
     );
+  }
+
+  async searchLocations(query: string, userAccessToken: string): Promise<InstagramLocation[]> {
+    const response = await this.get(
+      '/pages/search',
+      {
+        q: query,
+        fields: 'id,name,location',
+        access_token: userAccessToken,
+      },
+      instagramLocationSearchResponseSchema,
+    );
+    return response.data;
   }
 
   async createMediaContainer(input: {

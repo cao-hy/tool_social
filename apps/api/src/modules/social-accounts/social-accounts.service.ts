@@ -522,6 +522,48 @@ export class SocialAccountsService implements OnModuleDestroy {
     };
   }
 
+  async searchInstagramLocations(
+    workspaceId: string,
+    socialAccountId: string,
+    query: string,
+    auditContext: AuditContext,
+  ) {
+    if (!query) return [];
+
+    const account = await this.prisma.socialAccount.findFirst({
+      where: { id: socialAccountId, workspaceId, deletedAt: null },
+      include: { token: true },
+    });
+    if (!account) throw AppError.notFound('social account');
+    if (account.platform !== 'INSTAGRAM') {
+      throw AppError.validation('Tính năng này chỉ áp dụng cho Instagram.');
+    }
+    if (!account.token) throw AppError.conflict('Instagram account chưa có token để kiểm tra.');
+
+    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).get(account.platform);
+
+    // Kiểm tra xem adapter có phương thức searchLocations không
+    if (
+      !('searchLocations' in adapter) ||
+      typeof (adapter as unknown as { searchLocations: unknown }).searchLocations !== 'function'
+    ) {
+      throw AppError.conflict('Instagram adapter chưa hỗ trợ tính năng tìm kiếm vị trí.');
+    }
+
+    const accessToken = await this.getFreshAccessToken(account, adapter);
+    return (
+      adapter as unknown as { searchLocations: (ctx: unknown, query: string) => Promise<unknown[]> }
+    ).searchLocations(
+      {
+        accessToken,
+        externalAccountId: account.externalAccountId,
+        externalPageId: account.externalPageId ?? undefined,
+        correlationId: auditContext.requestId ?? 'instagram-search-locations',
+      },
+      query,
+    );
+  }
+
   private tokenCreateData(
     socialAccountId: string,
     tokenSet: TokenSet,

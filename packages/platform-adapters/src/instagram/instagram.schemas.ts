@@ -1,5 +1,21 @@
 import { z } from 'zod';
 
+export const instagramLocationSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  location: z
+    .object({
+      city: z.string().optional(),
+      country: z.string().optional(),
+    })
+    .optional(),
+});
+export type InstagramLocation = z.infer<typeof instagramLocationSchema>;
+
+export const instagramLocationSearchResponseSchema = z.object({
+  data: z.array(instagramLocationSchema),
+});
+
 export const instagramTokenResponseSchema = z.object({
   access_token: z.string(),
   token_type: z.string().optional(),

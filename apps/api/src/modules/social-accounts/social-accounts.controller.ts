@@ -135,6 +135,23 @@ export class SocialAccountsController {
     );
   }
 
+  @Get('workspaces/:workspaceId/social-accounts/:socialAccountId/instagram/locations')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:view')
+  instagramLocations(
+    @Param('workspaceId') workspaceId: string,
+    @Param('socialAccountId') socialAccountId: string,
+    @Query('q') query: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.searchInstagramLocations(
+      workspaceId,
+      socialAccountId,
+      query || '',
+      this.auditContext(request),
+    );
+  }
+
   @Get('oauth/:platform/callback')
   async callback(
     @Param('platform') platform: string,

@@ -242,6 +242,10 @@ export const socialAccountsApi = {
     apiFetch<{ items: PinterestBoardSectionView[]; fetchedAt: string }>(
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/pinterest/boards/${encodeURIComponent(boardId)}/sections`,
     ),
+  instagramLocations: (workspaceId: string, socialAccountId: string, query: string) =>
+    apiFetch<Array<{ id: string; name: string; location?: { city?: string; country?: string } }>>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/instagram/locations?q=${encodeURIComponent(query)}`,
+    ),
   syncPosts: (workspaceId: string, socialAccountId: string) =>
     apiFetch<{ jobId: string; backgroundJobId?: string; status: 'QUEUED'; message: string }>(
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/sync-posts`,

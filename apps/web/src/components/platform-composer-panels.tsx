@@ -12,6 +12,7 @@ import {
 } from '@/lib/platform-composer-options';
 import type { MediaAssetView, MediaLibraryItem } from '@/lib/types';
 import { VideoFramePicker } from './video-frame-picker';
+import { InstagramLocationPicker } from './instagram-location-picker';
 import type {
   PinterestBoardSectionView,
   PinterestBoardView,
@@ -616,23 +617,21 @@ function PlatformOptions({
           />
           Share Reels lên feed
         </label>
-        <Field label="Location ID">
-          <TextInput
+        <Field label="Location">
+          <InstagramLocationPicker
+            workspaceId={workspaceId ?? ''}
+            socialAccountId={account.id}
             disabled={
               disabled ||
               (draft.instagramPlacement !== 'FEED' && draft.instagramPlacement !== 'CAROUSEL')
             }
-            inputMode="numeric"
-            placeholder="Ví dụ 1234567890"
-            value={draft.instagramLocationId}
-            onChange={(event) =>
-              onChange(account.id, { instagramLocationId: event.target.value.trim() })
-            }
+            value={draft.instagramLocationId ?? ''}
+            onChange={(val) => onChange(account.id, { instagramLocationId: val || undefined })}
           />
           <p className="mt-1 text-xs text-slate-500">
             {draft.instagramPlacement === 'FEED' || draft.instagramPlacement === 'CAROUSEL'
-              ? 'Nhập Facebook Page/Place ID có địa chỉ lat/lng. Không phải tên địa điểm tự do.'
-              : 'Instagram Graph API chỉ áp dụng location_id cho Feed/Carousel trong luồng hiện tại.'}
+              ? 'Tìm kiếm địa điểm (ví dụ: Hanoi).'
+              : 'Instagram Graph API chỉ áp dụng location cho Feed/Carousel.'}
           </p>
         </Field>
         <Field label="Alt text Instagram">
