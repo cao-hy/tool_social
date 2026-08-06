@@ -83,7 +83,7 @@ describe('createProxyAwareFetch', () => {
 
   it('does not throw if proxy is disabled and proxyUrl is missing', async () => {
     // Tạo một server nội bộ để đảm bảo kết nối trực tiếp thực sự thành công
-    const server = createServer((req, res) => {
+    const server = createServer((_req, res) => {
       res.writeHead(200);
       res.end('ok');
     });
