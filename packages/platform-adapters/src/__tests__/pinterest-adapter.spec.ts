@@ -420,7 +420,7 @@ describe('PinterestAdapter', () => {
       }
       if (url.origin === 'https://upload.pinterest.test') {
         expect(init?.method).toBe('POST');
-        expect(init?.body).toBeInstanceOf(FormData);
+        expect(init?.body).toBeInstanceOf(Uint8Array);
         return new Response(null, { status: 204 });
       }
       if (url.pathname === '/v5/media/media-1') {
