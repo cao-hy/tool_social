@@ -1,4 +1,4 @@
-import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Prisma } from '@socialhub/db';
@@ -35,7 +35,7 @@ import type {
 } from './posts.schemas';
 
 @Injectable()
-export class PostsService implements OnModuleDestroy {
+export class PostsService implements OnModuleInit, OnModuleDestroy {
   private readonly publishQueue: Queue;
   private readonly retryQueue: Queue;
   private readonly publicS3: S3Client;
@@ -64,6 +64,32 @@ export class PostsService implements OnModuleDestroy {
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
       },
     });
+  }
+
+  async onModuleInit(): Promise<void> {
+    this.sweepStuckJobs().catch((err) => logger.error({ err }, 'Lỗi khi sweep stuck jobs'));
+  }
+
+  private async sweepStuckJobs() {
+    // 1. Tìm các bài post kẹt ở trạng thái QUEUED mà chưa được đẩy lên Redis
+    // Do hệ thống có thể crash ngay sau prisma.$transaction commit nhưng trước khi gọi enqueuePost
+    const stuckPlatformPosts = await this.prisma.platformPost.findMany({
+      where: {
+        status: 'QUEUED',
+        updatedAt: {
+          lt: new Date(Date.now() - 5 * 60 * 1000), // Kẹt hơn 5 phút
+        },
+      },
+    });
+
+    if (stuckPlatformPosts.length > 0) {
+      logger.info(
+        `Tìm thấy ${stuckPlatformPosts.length} platform posts kẹt ở QUEUED. Đang enqueue lại...`,
+      );
+      for (const post of stuckPlatformPosts) {
+        await this.enqueuePlatformPost(post.id, post.workspaceId, 'sweeper');
+      }
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

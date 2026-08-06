@@ -23,6 +23,7 @@ import {
   type ProxyConfig,
 } from '@socialhub/shared';
 import sharp from 'sharp';
+import { UnrecoverableError } from 'bullmq';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { decideOnError } from '../queue/error-policy';
@@ -102,13 +103,29 @@ export function createPublishPostProcessor(input: {
     } catch (error) {
       const attempt = (job.attemptsMade ?? 0) + 1;
       const maxAttempts = job.opts?.attempts ?? 1;
+
+      const decision = decideOnError(error, attempt, maxAttempts);
+      const isDead = decision.action === 'FAIL_PERMANENTLY';
+
       await markBackgroundJobFinished(input.prisma, jobName, jobId, startedAt, {
-        status: attempt >= maxAttempts ? 'DEAD' : 'FAILED',
+        status: isDead ? 'DEAD' : 'FAILED',
         payload,
         errorCode: isPlatformError(error) ? error.kind : 'UNKNOWN',
-        errorMessage: error instanceof Error ? error.message : 'Lỗi không xác định khi publish.',
-        isDead: attempt >= maxAttempts,
+        errorMessage: decision.reason,
+        isDead,
       });
+
+      if (isDead) {
+        // Cập nhật post thành FAILED để người dùng biết
+        await markFailed(
+          input.prisma,
+          payload.platformPostId,
+          isPlatformError(error) ? error.kind : 'UNKNOWN',
+          decision.reason,
+        );
+        throw new UnrecoverableError(decision.reason);
+      }
+
       throw error;
     }
   };

@@ -90,7 +90,7 @@ async function processWebhook(
 
   for (const event of events) {
     if (!event.externalAccountId) continue;
-    const account = await input.prisma.socialAccount.findFirst({
+    const accounts = await input.prisma.socialAccount.findMany({
       where: {
         platform: webhookEvent.platform,
         deletedAt: null,
@@ -100,28 +100,30 @@ async function processWebhook(
         ],
       },
     });
-    if (!account) continue;
+    if (accounts.length === 0) continue;
 
-    const platformPost = event.externalPostId
-      ? await input.prisma.platformPost.findFirst({
-          where: {
-            workspaceId: account.workspaceId,
-            socialAccountId: account.id,
-            externalPostId: event.externalPostId,
-          },
-        })
-      : null;
-    const syncPayload: QueuePayload<'sync-comments'> = {
-      workspaceId: account.workspaceId,
-      socialAccountId: account.id,
-      platformPostId: platformPost?.id,
-      since: new Date(Math.max(0, event.occurredAt.getTime() - 5 * 60 * 1000)).toISOString(),
-    };
+    for (const account of accounts) {
+      const platformPost = event.externalPostId
+        ? await input.prisma.platformPost.findFirst({
+            where: {
+              workspaceId: account.workspaceId,
+              socialAccountId: account.id,
+              externalPostId: event.externalPostId,
+            },
+          })
+        : null;
+      const syncPayload: QueuePayload<'sync-comments'> = {
+        workspaceId: account.workspaceId,
+        socialAccountId: account.id,
+        platformPostId: platformPost?.id,
+        since: new Date(Math.max(0, event.occurredAt.getTime() - 5 * 60 * 1000)).toISOString(),
+      };
 
-    await input.syncCommentsQueue.add('sync-comments', syncPayload, {
-      jobId: buildJobId('sync-comments', syncPayload),
-    });
-    queued += 1;
+      await input.syncCommentsQueue.add('sync-comments', syncPayload, {
+        jobId: buildJobId('sync-comments', syncPayload),
+      });
+      queued += 1;
+    }
   }
 
   await markWebhookDone(input.prisma, webhookEvent.id, events.length > 0 ? 'PROCESSED' : 'IGNORED');
