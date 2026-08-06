@@ -5,13 +5,19 @@ export interface PostComposerValidationInput {
   body?: string;
   linkUrl?: string;
   selectedAccounts: SocialAccountView[];
-  mediaAssets: Pick<MediaAssetView, 'type' | 'status' | 'readUrl' | 'thumbnailUrl'>[];
+  mediaAssets: Pick<
+    MediaAssetView,
+    'type' | 'status' | 'readUrl' | 'thumbnailUrl' | 'width' | 'height'
+  >[];
   platformOverrides?: Array<{
     socialAccountId: string;
     title?: string;
     caption?: string;
     linkUrl?: string;
-    mediaAssets?: Pick<MediaAssetView, 'type' | 'status' | 'readUrl' | 'thumbnailUrl'>[];
+    mediaAssets?: Pick<
+      MediaAssetView,
+      'type' | 'status' | 'readUrl' | 'thumbnailUrl' | 'width' | 'height'
+    >[];
     options?: Record<string, unknown>;
   }>;
   requireTargets: boolean;
@@ -81,6 +87,23 @@ export function validatePostComposer(input: PostComposerValidationInput): string
 
       if (videoCount > 1) {
         return `${prefix}chỉ hỗ trợ publish một video trong một bài ở phiên bản hiện tại.`;
+      }
+    }
+
+    if (account.platform === 'INSTAGRAM') {
+      if (imageCount === 0 && videoCount === 0) {
+        return `${prefix}cần ít nhất 1 ảnh hoặc 1 video.`;
+      }
+      if (imageCount + videoCount > 10) {
+        return `${prefix}chỉ hỗ trợ tối đa 10 ảnh/video.`;
+      }
+      for (const asset of resolvedMedia) {
+        if (asset.type === 'IMAGE' && asset.width && asset.height) {
+          const ratio = asset.width / asset.height;
+          if (ratio < 0.79 || ratio > 1.92) {
+            return `${prefix}chỉ hỗ trợ hình ảnh có tỷ lệ khung hình (width/height) từ 4:5 (0.8) đến 1.91:1. Có ảnh hiện tại đang ở tỷ lệ ${ratio.toFixed(2)}.`;
+          }
+        }
       }
     }
 

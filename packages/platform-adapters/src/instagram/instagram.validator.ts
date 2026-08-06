@@ -58,6 +58,16 @@ export function validateInstagramPost(input: PublishPostInput): ValidationResult
           'Instagram cần URL media public ngoài internet. Hãy cấu hình S3_PUBLIC_BASE_URL trỏ tới domain media public.',
       });
     }
+
+    if (item.type === 'IMAGE' && item.width && item.height) {
+      const ratio = item.width / item.height;
+      if (ratio < 0.79 || ratio > 1.92) {
+        issues.push({
+          field: `media[${index}]`,
+          message: `Instagram chỉ hỗ trợ hình ảnh có tỷ lệ khung hình (width/height) từ 4:5 (0.8) đến 1.91:1. Ảnh hiện tại có tỷ lệ ${ratio.toFixed(2)}.`,
+        });
+      }
+    }
   });
 
   if (usesReelsCover && input.thumbnail) {

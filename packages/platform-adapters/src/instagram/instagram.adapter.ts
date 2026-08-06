@@ -215,9 +215,7 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         children: childrenIds,
         caption: message,
         locationId: options.locationId,
-        altText: options.altText,
         collaborators: options.collaborators,
-        userTags: options.userTags,
       });
       await this.waitUntilContainerReady(ctx, carouselCreationId, 'carousel');
 
