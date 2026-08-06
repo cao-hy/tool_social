@@ -12,6 +12,15 @@ export interface ProxyAttestation {
   provider: string;
 }
 
+export interface CheckNetworkResult {
+  checkOk: boolean;
+  ip?: string;
+  countryCode?: string;
+  provider?: string;
+  checkError?: string;
+  checkedAt: string;
+}
+
 export interface ProxyPolicyCache {
   get(key: string): Promise<ProxyAttestation | null>;
   set(key: string, value: ProxyAttestation, ttlMs: number): Promise<void>;
@@ -32,7 +41,7 @@ export class ProxyPolicyService {
     workspaceId: string,
     config: ProxyConfig,
     configVersion: number,
-    checkNetworkFn: () => Promise<unknown>,
+    checkNetworkFn: () => Promise<CheckNetworkResult>,
   ): Promise<ProxyAttestation> {
     if (!config.enabled || !config.proxyUrl) {
       throw new Error('Proxy is not enabled or proxyUrl is missing');
@@ -81,7 +90,7 @@ export class ProxyPolicyService {
         checkedAt: status.checkedAt,
         expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(), // 5 min ttl
         ip: status.ip,
-        countryCode: status.countryCode,
+        countryCode: status.countryCode ?? null,
         provider: status.provider ?? 'unknown',
       };
 
