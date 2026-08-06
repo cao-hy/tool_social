@@ -85,9 +85,11 @@ services:
       - -c
       - |
         mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc admin config set local api cors_allow_origin="*" &&
+        mc admin service restart local &&
         mc mb --ignore-existing local/socialhub-media &&
         mc anonymous set none local/socialhub-media &&
-        echo 'Bucket socialhub-media đã sẵn sàng (private).'
+        echo 'Bucket socialhub-media đã sẵn sàng (private và đã cấu hình CORS).'
 
 volumes:
   postgres-data:

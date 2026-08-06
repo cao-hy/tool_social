@@ -25,7 +25,7 @@ export interface PlatformOverrideDraft {
   pinterestIsStandard: boolean;
   pinterestAdAccountId: string;
   pinterestProductTagsJson: string;
-  thumbnailMode: 'AUTO' | 'GENERATED' | 'MEDIA_ASSET';
+  thumbnailMode: 'AUTO' | 'GENERATED' | 'MEDIA_ASSET' | 'VIDEO_FRAME';
   thumbnailMediaAssetId: string;
   youtubePrivacyStatus: 'public' | 'unlisted' | 'private';
   youtubeCategoryId: string;
@@ -237,7 +237,11 @@ export function platformOverrideFromOptions(input: {
     pinterestIsStandard: readBoolean(options.isStandard, true),
     pinterestAdAccountId: readString(options.adAccountId),
     pinterestProductTagsJson: readJsonText(options.productTags),
-    thumbnailMode: readEnum(options.thumbnailMode, ['AUTO', 'GENERATED', 'MEDIA_ASSET'], 'AUTO'),
+    thumbnailMode: readEnum(
+      options.thumbnailMode,
+      ['AUTO', 'GENERATED', 'MEDIA_ASSET', 'VIDEO_FRAME'],
+      'AUTO',
+    ),
     thumbnailMediaAssetId: readString(options.thumbnailMediaAssetId),
     youtubePrivacyStatus: readEnum(
       options.privacyStatus,
@@ -403,7 +407,7 @@ function thumbnailOptions(draft: PlatformOverrideDraft): Record<string, unknown>
   return compactOptions({
     thumbnailMode: draft.thumbnailMode === 'AUTO' ? undefined : draft.thumbnailMode,
     thumbnailMediaAssetId:
-      draft.thumbnailMode === 'MEDIA_ASSET'
+      draft.thumbnailMode === 'MEDIA_ASSET' || draft.thumbnailMode === 'VIDEO_FRAME'
         ? draft.thumbnailMediaAssetId.trim() || undefined
         : undefined,
   });

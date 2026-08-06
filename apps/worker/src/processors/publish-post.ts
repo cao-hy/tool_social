@@ -604,11 +604,11 @@ async function thumbnailInputFromOptions(input: {
     return normalizeThumbnailForPlatform(input.platform, thumbnail);
   }
 
-  if (mode === 'MEDIA_ASSET') {
+  if (mode === 'MEDIA_ASSET' || mode === 'VIDEO_FRAME') {
     const mediaAssetId =
       typeof input.options?.thumbnailMediaAssetId === 'string'
         ? input.options.thumbnailMediaAssetId
-        : '';
+        : null;
     if (!mediaAssetId) {
       throw createPlatformError(
         'VALIDATION',

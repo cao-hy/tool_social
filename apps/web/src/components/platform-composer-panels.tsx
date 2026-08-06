@@ -10,9 +10,9 @@ import {
   platformOverrideDefaults,
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
+import type { MediaAssetView, MediaLibraryItem } from '@/lib/types';
+import { VideoFramePicker } from './video-frame-picker';
 import type {
-  MediaAssetView,
-  MediaLibraryItem,
   PinterestBoardSectionView,
   PinterestBoardView,
   SocialAccountView,
@@ -1373,7 +1373,9 @@ function CoverThumbnailSelector({
                 customized: true,
                 thumbnailMode,
                 thumbnailMediaAssetId:
-                  thumbnailMode === 'MEDIA_ASSET' ? draft.thumbnailMediaAssetId : '',
+                  thumbnailMode === 'MEDIA_ASSET' || thumbnailMode === 'VIDEO_FRAME'
+                    ? draft.thumbnailMediaAssetId
+                    : '',
               });
             }}
           >
@@ -1383,6 +1385,9 @@ function CoverThumbnailSelector({
             </option>
             <option disabled={imageOptions.length === 0} value="MEDIA_ASSET">
               Chọn ảnh đã upload
+            </option>
+            <option disabled={videos.length === 0} value="VIDEO_FRAME">
+              Chọn từ frame video
             </option>
           </SelectInput>
           {!generatedReady && videos.length > 0 ? (
@@ -1418,6 +1423,20 @@ function CoverThumbnailSelector({
           </p>
         </Field>
       </div>
+
+      {draft.thumbnailMode === 'VIDEO_FRAME' && videos[0] && onUploadCoverMedia ? (
+        <VideoFramePicker
+          videoUrl={videos[0].readUrl ?? videos[0].displayUrl ?? ''}
+          disabled={disabled}
+          onUpload={async (file) => {
+            const uploaded = await onUploadCoverMedia(file);
+            onChange(account.id, {
+              customized: true,
+              thumbnailMediaAssetId: uploaded.id,
+            });
+          }}
+        />
+      ) : null}
 
       {onUploadCoverMedia ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
