@@ -11,17 +11,9 @@ import {
   type YouTubeVideoPlatformState,
 } from '@socialhub/platform-adapters';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import {
-  checkProxyAwareNetwork,
-  createProxyAwareFetch,
-  getConfiguredProxyUrl,
-  maskProxyUrl,
-  normalizeProxyConfig,
-  proxyConfigFromWorkspaceSetting,
-  readProxyConfig,
-} from '@socialhub/config';
+import { checkProxyAwareNetwork, createProxyAwareFetch, readProxyConfig } from '@socialhub/config';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
-import { decryptToken, type Keyring } from '@socialhub/security';
+import type { Keyring } from '@socialhub/security';
 import {
   deriveContentPostStatus,
   PLATFORM_LABELS,
@@ -35,6 +27,7 @@ import { z } from 'zod';
 import { logger } from '../logger';
 import { decideOnError } from '../queue/error-policy';
 import { JobLockService } from '../queue/job-lock';
+import { loadWorkspaceProxyConfig } from '../utils/proxy';
 import { getFreshAccessToken } from './token-refresh';
 
 const publishPostPayloadSchema = z
@@ -311,7 +304,7 @@ async function publishPlatformPost(
     } satisfies AdapterContext;
 
     publishNetworkProof = await capturePublishNetworkProof(proxyConfig);
-    assertCountryLock(publishNetworkProof);
+    assertPublishNetworkReady(publishNetworkProof);
 
     const result = await adapter.publishPost(adapterContext, publishInput);
     const platformState = await platformStateAfterPublish(
@@ -461,47 +454,33 @@ async function capturePublishNetworkProof(
   };
 }
 
-async function loadWorkspaceProxyConfig(
-  prisma: PrismaClientInstance,
-  keyring: Keyring,
-  workspaceId: string,
-): Promise<ProxyConfig> {
-  const setting = await prisma.workspaceProxySetting.findUnique({ where: { workspaceId } });
-  if (!setting) {
-    const envProxyUrl = getConfiguredProxyUrl();
-    return normalizeProxyConfig({
-      ...readProxyConfig(),
-      enabled: false,
-      proxyUrl: envProxyUrl,
-      proxyUrlMasked: maskProxyUrl(envProxyUrl),
-      source: envProxyUrl ? 'ENV' : 'DIRECT',
-    });
+function assertPublishNetworkReady(networkProof: PublishNetworkProof): void {
+  if (!networkProof.proxyEnabled) {
+    return;
   }
 
-  const config = proxyConfigFromWorkspaceSetting(setting, (ciphertext) =>
-    decryptToken(ciphertext, keyring),
-  );
-  if (!config.proxyUrl) {
-    const envProxyUrl = getConfiguredProxyUrl();
-    return normalizeProxyConfig({
-      ...config,
-      proxyUrl: envProxyUrl,
-      proxyUrlMasked: maskProxyUrl(envProxyUrl),
-      source: envProxyUrl ? 'ENV' : 'DIRECT',
-    });
+  if (!networkProof.proxyAvailable) {
+    throw new Error(
+      'Proxy đang bật nhưng chưa có Proxy URL. Publish bị chặn để tránh lộ IP máy chủ.',
+    );
   }
-  return config;
-}
 
-function assertCountryLock(networkProof: PublishNetworkProof): void {
-  if (!networkProof.proxyEnabled || !networkProof.countryLock) return;
-  if (networkProof.countryLockSatisfied) return;
-  if (!networkProof.countryCode) {
-    throw new Error('Country Lock thất bại: Không thể xác minh IP trước khi publish.');
+  // Không bật Country Lock thì lỗi kết nối proxy sẽ được platform request xử lý.
+  // createProxyAwareFetch đã bảo đảm không fallback direct.
+  if (!networkProof.countryLock) {
+    return;
   }
-  throw new Error(
-    `Country Lock bị vi phạm: IP publish là ${networkProof.countryCode} (dự kiến: ${networkProof.countryLock}).`,
-  );
+
+  if (networkProof.checkOk !== true || !networkProof.proxyActive || !networkProof.countryCode) {
+    throw new Error('Country Lock thất bại: Không thể xác minh IP proxy trước khi publish.');
+  }
+
+  if (!networkProof.countryLockSatisfied) {
+    throw new Error(
+      `Country Lock bị vi phạm: IP proxy là ${networkProof.countryCode} ` +
+        `(dự kiến: ${networkProof.countryLock}).`,
+    );
+  }
 }
 
 function mergePlatformStateWithNetworkProof(

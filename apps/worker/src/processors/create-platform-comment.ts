@@ -1,16 +1,10 @@
 import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
-import {
-  getConfiguredProxyUrl,
-  maskProxyUrl,
-  normalizeProxyConfig,
-  proxyConfigFromWorkspaceSetting,
-  readProxyConfig,
-} from '@socialhub/config';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
-import { decryptToken, type Keyring } from '@socialhub/security';
+import type { Keyring } from '@socialhub/security';
 import { PLATFORM_LABELS, type ProxyConfig, type QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
+import { loadWorkspaceProxyConfig } from '../utils/proxy';
 import { getFreshAccessToken } from './token-refresh';
 
 const createPlatformCommentPayloadSchema = z.object({
@@ -193,38 +187,6 @@ async function createPlatformComment(
     externalCommentId: result.externalCommentId,
     platform: PLATFORM_LABELS[account.platform],
   };
-}
-
-async function loadWorkspaceProxyConfig(
-  prisma: PrismaClientInstance,
-  keyring: Keyring,
-  workspaceId: string,
-): Promise<ProxyConfig> {
-  const setting = await prisma.workspaceProxySetting.findUnique({ where: { workspaceId } });
-  if (!setting) {
-    const envProxyUrl = getConfiguredProxyUrl();
-    return normalizeProxyConfig({
-      ...readProxyConfig(),
-      enabled: false,
-      proxyUrl: envProxyUrl,
-      proxyUrlMasked: maskProxyUrl(envProxyUrl),
-      source: envProxyUrl ? 'ENV' : 'DIRECT',
-    });
-  }
-
-  const config = proxyConfigFromWorkspaceSetting(setting, (ciphertext) =>
-    decryptToken(ciphertext, keyring),
-  );
-  if (!config.proxyUrl) {
-    const envProxyUrl = getConfiguredProxyUrl();
-    return normalizeProxyConfig({
-      ...config,
-      proxyUrl: envProxyUrl,
-      proxyUrlMasked: maskProxyUrl(envProxyUrl),
-      source: envProxyUrl ? 'ENV' : 'DIRECT',
-    });
-  }
-  return config;
 }
 
 async function markJob(

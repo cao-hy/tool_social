@@ -2,7 +2,12 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkProxyAwareNetwork, resolveProxyConfigPath } from '../proxy';
+import {
+  checkProxyAwareNetwork,
+  resolveProxyConfigPath,
+  createProxyAwareFetch,
+  ProxyConfigurationError,
+} from '../proxy';
 
 const originalCwd = process.cwd();
 const originalProxyConfigPath = process.env.PROXY_CONFIG_PATH;
@@ -53,5 +58,64 @@ describe('checkProxyAwareNetwork', () => {
     expect(status.proxyActive).toBe(false);
     expect(status.countryCode).toBe('VN');
     expect(status.countryLockSatisfied).toBe(true);
+  });
+
+  it('fails country lock when proxy is enabled but URL is missing', async () => {
+    const fetchImpl = (() => Promise.reject(new Error('Should not reach here'))) as typeof fetch;
+
+    const status = await checkProxyAwareNetwork(
+      { enabled: true, proxyUrl: null, countryLock: 'US' },
+      fetchImpl,
+    );
+
+    expect(status.proxyActive).toBe(false);
+    expect(status.checkOk).toBe(false);
+    expect(status.countryLockSatisfied).toBe(false);
+  });
+
+  it('fails country lock when proxy is enabled but returns wrong country', async () => {
+    const response = new Response(
+      JSON.stringify({
+        ip: '203.0.113.10',
+        country_code: 'VN',
+      }),
+      { status: 200 },
+    );
+    const fetchImpl = (() => Promise.resolve(response)) as typeof fetch;
+
+    const status = await checkProxyAwareNetwork(
+      { enabled: true, proxyUrl: 'http://test:8080', countryLock: 'US' },
+      fetchImpl,
+    );
+
+    expect(status.proxyActive).toBe(true);
+    expect(status.countryCode).toBe('VN');
+    expect(status.countryLockSatisfied).toBe(false);
+  });
+});
+
+describe('createProxyAwareFetch', () => {
+  it('throws ProxyConfigurationError if proxy is enabled but missing proxyUrl', async () => {
+    const fetchImpl = createProxyAwareFetch({
+      enabled: true,
+      proxyUrl: null,
+      countryLock: null,
+      source: 'WORKSPACE',
+    });
+    await expect(fetchImpl('http://example.com')).rejects.toThrowError(ProxyConfigurationError);
+  });
+
+  it('does not throw if proxy is disabled and proxyUrl is missing', async () => {
+    const fetchImpl = createProxyAwareFetch({
+      enabled: false,
+      proxyUrl: null,
+      countryLock: null,
+      source: 'WORKSPACE',
+    });
+    try {
+      await fetchImpl('http://127.0.0.1:0');
+    } catch (err) {
+      expect(err).not.toBeInstanceOf(ProxyConfigurationError);
+    }
   });
 });

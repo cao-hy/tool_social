@@ -2,12 +2,9 @@ import { Body, Controller, Get, Inject, Post, Req, UseGuards } from '@nestjs/com
 import {
   checkProxyAwareNetwork,
   createProxyAwareFetch,
-  getConfiguredProxyUrl,
   maskProxyUrl,
-  normalizeProxyConfig,
-  proxyConfigFromWorkspaceSetting,
+  resolveWorkspaceProxyConfig,
   publicProxyConfig,
-  readProxyConfig,
 } from '@socialhub/config';
 import {
   NETWORK_PROXY_POLICIES,
@@ -88,41 +85,48 @@ export class SystemController {
     const currentSetting = await this.prisma.workspaceProxySetting.findUnique({
       where: { workspaceId },
     });
-    const nextProxyUrl =
+
+    const storedProxyUrl = currentSetting?.proxyUrl
+      ? decryptToken(currentSetting.proxyUrl, this.keyring)
+      : null;
+
+    const nextStoredProxyUrl =
       config.proxyUrl === undefined
-        ? (current.proxyUrl ?? null)
+        ? storedProxyUrl
         : config.proxyUrl?.trim()
           ? config.proxyUrl.trim()
           : null;
-    const encryptedProxyUrl = nextProxyUrl ? encryptToken(nextProxyUrl, this.keyring) : null;
-    const updated = normalizeProxyConfig({
-      enabled: config.enabled ?? current.enabled,
-      countryLock: config.countryLock === undefined ? current.countryLock : config.countryLock,
-      proxyUrl: nextProxyUrl,
-      proxyUrlMasked: maskProxyUrl(nextProxyUrl),
-      source: nextProxyUrl ? 'WORKSPACE' : 'DIRECT',
-    });
 
-    await this.prisma.workspaceProxySetting.upsert({
+    const encryptedProxyUrl = nextStoredProxyUrl
+      ? encryptToken(nextStoredProxyUrl, this.keyring)
+      : null;
+
+    const savedSetting = await this.prisma.workspaceProxySetting.upsert({
       where: { workspaceId },
       create: {
         workspaceId,
-        enabled: updated.enabled,
-        countryLock: updated.countryLock,
-        proxyUrl: encryptedProxyUrl?.ciphertext,
-        proxyUrlMasked: updated.proxyUrlMasked,
+        enabled: config.enabled ?? currentSetting?.enabled ?? false,
+        countryLock:
+          config.countryLock === undefined
+            ? (currentSetting?.countryLock ?? null)
+            : config.countryLock,
+        proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+        proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
       },
       update: {
-        enabled: updated.enabled,
-        countryLock: updated.countryLock,
-        proxyUrl:
-          config.proxyUrl === undefined
-            ? currentSetting?.proxyUrl
-            : (encryptedProxyUrl?.ciphertext ?? null),
-        proxyUrlMasked:
-          config.proxyUrl === undefined ? currentSetting?.proxyUrlMasked : updated.proxyUrlMasked,
+        enabled: config.enabled ?? currentSetting?.enabled ?? false,
+        countryLock:
+          config.countryLock === undefined
+            ? (currentSetting?.countryLock ?? null)
+            : config.countryLock,
+        proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+        proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
       },
     });
+
+    const updated = resolveWorkspaceProxyConfig(savedSetting, (ciphertext) =>
+      decryptToken(ciphertext, this.keyring),
+    );
 
     await this.audit.record({
       ...this.auditContext(request),
@@ -167,31 +171,13 @@ export class SystemController {
   }
 
   private async workspaceProxyConfig(workspaceId: string): Promise<ProxyConfig> {
-    const setting = await this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId } });
-    if (!setting) {
-      const envProxyUrl = getConfiguredProxyUrl();
-      return normalizeProxyConfig({
-        ...readProxyConfig(),
-        enabled: false,
-        proxyUrl: envProxyUrl,
-        proxyUrlMasked: maskProxyUrl(envProxyUrl),
-        source: envProxyUrl ? 'ENV' : 'DIRECT',
-      });
-    }
+    const setting = await this.prisma.workspaceProxySetting.findUnique({
+      where: { workspaceId },
+    });
 
-    const config = proxyConfigFromWorkspaceSetting(setting, (ciphertext) =>
+    return resolveWorkspaceProxyConfig(setting, (ciphertext) =>
       decryptToken(ciphertext, this.keyring),
     );
-    if (!config.proxyUrl) {
-      const envProxyUrl = getConfiguredProxyUrl();
-      return normalizeProxyConfig({
-        ...config,
-        proxyUrl: envProxyUrl,
-        proxyUrlMasked: maskProxyUrl(envProxyUrl),
-        source: envProxyUrl ? 'ENV' : 'DIRECT',
-      });
-    }
-    return config;
   }
 
   private async rememberLastCheck(

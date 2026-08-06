@@ -1,12 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  createProxyAwareFetch,
-  getConfiguredProxyUrl,
-  maskProxyUrl,
-  normalizeProxyConfig,
-  proxyConfigFromWorkspaceSetting,
-  readProxyConfig,
-} from '@socialhub/config';
+import { createProxyAwareFetch, resolveWorkspaceProxyConfig } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -65,30 +58,12 @@ export class AdapterRegistryFactory {
   }
 
   private async workspaceProxyConfig(workspaceId: string): Promise<ProxyConfig> {
-    const setting = await this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId } });
-    if (!setting) return this.envFallback(false);
+    const setting = await this.prisma.workspaceProxySetting.findUnique({
+      where: { workspaceId },
+    });
 
-    const config = proxyConfigFromWorkspaceSetting(setting, (ciphertext) =>
+    return resolveWorkspaceProxyConfig(setting, (ciphertext) =>
       decryptToken(ciphertext, this.keyring),
     );
-    if (config.proxyUrl) return config;
-    const fallback = this.envFallback(config.enabled);
-    return normalizeProxyConfig({
-      ...config,
-      proxyUrl: fallback.proxyUrl,
-      proxyUrlMasked: fallback.proxyUrlMasked,
-      source: fallback.source,
-    });
-  }
-
-  private envFallback(enabled: boolean): ProxyConfig {
-    const envProxyUrl = getConfiguredProxyUrl();
-    return normalizeProxyConfig({
-      ...readProxyConfig(),
-      enabled,
-      proxyUrl: envProxyUrl,
-      proxyUrlMasked: maskProxyUrl(envProxyUrl),
-      source: envProxyUrl ? 'ENV' : 'DIRECT',
-    });
   }
 }

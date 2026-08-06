@@ -3,6 +3,15 @@ import path from 'node:path';
 import { ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { ProxyConfig } from '@socialhub/shared';
 
+export class ProxyConfigurationError extends Error {
+  readonly code = 'PROXY_CONFIGURATION_MISSING';
+
+  constructor(message = 'Proxy đang bật nhưng chưa có Proxy URL.') {
+    super(message);
+    this.name = 'ProxyConfigurationError';
+  }
+}
+
 const CONFIG_FILE_NAME = '.proxy-config.json';
 const proxyAgents = new Map<string, Dispatcher>();
 
@@ -118,12 +127,22 @@ export function createProxyAwareFetch(
 ): typeof fetch {
   return async (input, init) => {
     const config = resolveProxyConfigInput(configInput);
-    const proxyUrl = resolveOutboundProxyUrl(config);
-    if (!config.enabled || !proxyUrl) {
+
+    // Proxy thực sự tắt thì mới được phép đi direct.
+    if (!config.enabled) {
       return undiciFetch(
         input as Parameters<typeof undiciFetch>[0],
         init as Parameters<typeof undiciFetch>[1],
       ) as unknown as Promise<Response>;
+    }
+
+    const proxyUrl = resolveOutboundProxyUrl(config);
+
+    // Proxy bật nhưng không có URL: chặn request.
+    if (!proxyUrl) {
+      throw new ProxyConfigurationError(
+        'Proxy đang bật nhưng chưa có Proxy URL trong workspace hoặc HTTP_PROXY/HTTPS_PROXY.',
+      );
     }
 
     return undiciFetch(
@@ -147,7 +166,6 @@ export async function checkProxyAwareNetwork(
     checkedAt: new Date().toISOString(),
     proxyConfig: normalizedProxyConfig,
     proxyAvailable,
-    proxyActive: normalizedProxyConfig.enabled && proxyAvailable,
   };
   const errors: string[] = [];
 
@@ -162,15 +180,20 @@ export async function checkProxyAwareNetwork(
         throw new Error('Response không có IP');
       }
       const countryCode = parsed.countryCode?.toUpperCase() ?? null;
+      const proxyActive = normalizedProxyConfig.enabled && proxyAvailable;
+
       return {
         ...base,
         ...parsed,
+        proxyActive,
         countryCode,
         provider: provider.name,
         checkOk: true,
         checkError: null,
         checkErrors: [],
-        countryLockSatisfied: !activeCountryLock || countryCode === activeCountryLock,
+        countryLockSatisfied:
+          !normalizedProxyConfig.enabled ||
+          (proxyActive && (!activeCountryLock || countryCode === activeCountryLock)),
       };
     } catch (error) {
       errors.push(`${provider.name}: ${formatError(error)}`);
@@ -185,10 +208,11 @@ export async function checkProxyAwareNetwork(
     city: null,
     isp: null,
     provider: null,
+    proxyActive: false,
     checkOk: false,
     checkError: errors.at(-1) ?? 'Không gọi được provider kiểm tra IP',
     checkErrors: errors,
-    countryLockSatisfied: !activeCountryLock,
+    countryLockSatisfied: !normalizedProxyConfig.enabled,
   };
 }
 
@@ -276,11 +300,17 @@ export function publicProxyConfig(config: ProxyConfig): ProxyConfig {
 }
 
 export function proxyConfigFromWorkspaceSetting(
-  setting: WorkspaceProxySettingRecord | null | undefined,
+  setting: WorkspaceProxySettingRecord | null,
   decryptProxyUrl: (ciphertext: string) => string,
 ): ProxyConfig {
   if (!setting) {
-    return normalizeProxyConfig({ enabled: false, countryLock: null, source: 'DIRECT' });
+    return normalizeProxyConfig({
+      enabled: false,
+      countryLock: null,
+      proxyUrl: null,
+      proxyUrlMasked: null,
+      source: 'DIRECT',
+    });
   }
 
   const proxyUrl = setting.proxyUrl ? decryptProxyUrl(setting.proxyUrl) : null;
@@ -288,8 +318,38 @@ export function proxyConfigFromWorkspaceSetting(
     enabled: setting.enabled,
     countryLock: setting.countryLock,
     proxyUrl,
-    proxyUrlMasked: setting.proxyUrlMasked ?? maskProxyUrl(proxyUrl),
-    source: proxyUrl ? 'WORKSPACE' : 'DIRECT',
+    proxyUrlMasked: setting.proxyUrlMasked,
+    source: 'WORKSPACE',
+  });
+}
+
+export function resolveWorkspaceProxyConfig(
+  setting: WorkspaceProxySettingRecord | null | undefined,
+  decryptProxyUrl: (ciphertext: string) => string,
+): ProxyConfig {
+  const envProxyUrl = getConfiguredProxyUrl();
+
+  if (!setting) {
+    return normalizeProxyConfig({
+      enabled: false,
+      countryLock: null,
+      proxyUrl: envProxyUrl,
+      proxyUrlMasked: maskProxyUrl(envProxyUrl),
+      source: envProxyUrl ? 'ENV' : 'DIRECT',
+    });
+  }
+
+  const workspaceConfig = proxyConfigFromWorkspaceSetting(setting, decryptProxyUrl);
+
+  if (workspaceConfig.proxyUrl) {
+    return workspaceConfig;
+  }
+
+  return normalizeProxyConfig({
+    ...workspaceConfig,
+    proxyUrl: envProxyUrl,
+    proxyUrlMasked: maskProxyUrl(envProxyUrl),
+    source: envProxyUrl ? 'ENV' : 'DIRECT',
   });
 }
 

@@ -365,11 +365,11 @@ export function ProxyWidget({
           </div>
           <div className="mt-3 text-xs text-slate-500">
             {isProxyMissing
-              ? 'Đã bật proxy nhưng server chưa có HTTP_PROXY/HTTPS_PROXY, nên request vẫn đi IP trực tiếp.'
+              ? 'Đã bật proxy nhưng chưa có Proxy URL. Các request tới mạng xã hội sẽ bị chặn để tránh lộ IP máy chủ.'
               : isNetworkUnknown
                 ? `Không kiểm tra được IP hiện tại${
                     status.checkError ? `: ${status.checkError}` : ''
-                  }. Khi proxy và khóa quốc gia cùng bật, worker sẽ từ chối publish nếu không xác minh được IP.`
+                  }. Nếu đang bật khóa quốc gia, worker sẽ từ chối publish khi không xác minh được IP.`
                 : isActiveLocked && !status.countryLockSatisfied
                   ? `IP hiện tại không khớp khóa ${status.proxyConfig.countryLock}; worker sẽ từ chối đăng bài.`
                   : isActiveLocked
