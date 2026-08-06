@@ -149,3 +149,13 @@ export function canAssignRole(input: {
 
   return true;
 }
+
+export function canInviteRole(actorRole: WorkspaceRole, targetRole: WorkspaceRole): boolean {
+  if (!hasPermission(actorRole, 'member:invite')) return false;
+  return ROLE_RANK[actorRole] > ROLE_RANK[targetRole];
+}
+
+export function canRemoveRole(actorRole: WorkspaceRole, targetRole: WorkspaceRole): boolean {
+  if (!hasPermission(actorRole, 'member:remove')) return false;
+  return ROLE_RANK[actorRole] > ROLE_RANK[targetRole];
+}

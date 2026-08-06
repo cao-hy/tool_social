@@ -6,12 +6,14 @@ import {
 import type { PrismaClientInstance } from '@socialhub/db';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import type { Platform } from '@socialhub/shared';
+import type { JobLockService } from '../queue/job-lock';
 
 const REFRESH_THRESHOLD_MS = 2 * 60 * 1000;
 
 export async function getFreshAccessToken(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
+  locks?: JobLockService;
   adapter: SocialPlatformAdapter;
   account: {
     id: string;
@@ -46,15 +48,38 @@ export async function getFreshAccessToken(input: {
   }
 
   const refreshToken = decryptToken(account.token.refreshToken, keyring);
-  let tokenSet: TokenSet;
-  try {
-    tokenSet = await adapter.refreshToken(refreshToken);
-  } catch (error) {
-    if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
-      await markDisconnected(prisma, account.id, error.message);
+
+  const doRefresh = async () => {
+    // Đọc lại từ DB xem token đã được refresh chưa (lớp bảo vệ thứ 2)
+    const currentToken = await prisma.socialToken.findUnique({ where: { id: account.token.id } });
+    if (
+      currentToken?.accessTokenExpiresAt &&
+      currentToken.accessTokenExpiresAt.getTime() > Date.now() + REFRESH_THRESHOLD_MS
+    ) {
+      return decryptToken(currentToken.accessToken, keyring);
     }
-    throw error;
+
+    try {
+      return await adapter.refreshToken(refreshToken);
+    } catch (error) {
+      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
+        await markDisconnected(prisma, account.id, error.message);
+      }
+      throw error;
+    }
+  };
+
+  const lockKey = `token-refresh:${account.id}`;
+  let tokenSet: TokenSet | string;
+  if (input.locks) {
+    const result = await input.locks.withLock(lockKey, 15000, doRefresh);
+    if (!result) throw new Error('Tiến trình khác đang refresh token, vui lòng thử lại sau.');
+    tokenSet = result;
+  } else {
+    tokenSet = await doRefresh();
   }
+
+  if (typeof tokenSet === 'string') return tokenSet;
 
   const encryptedAccessToken = encryptToken(tokenSet.accessToken, keyring);
   const encryptedRefreshToken = tokenSet.refreshToken

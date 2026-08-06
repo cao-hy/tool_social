@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Prisma } from '@socialhub/db';
-import { canAssignRole, type WorkspaceRole } from '@socialhub/shared';
+import { canAssignRole, canInviteRole, canRemoveRole, type WorkspaceRole } from '@socialhub/shared';
 import { generateSecureToken, hashToken } from '@socialhub/security';
 import { AppError } from '../../common/errors/app-error';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -127,8 +127,12 @@ export class WorkspacesService {
   async inviteMember(
     workspaceId: string,
     input: InviteMemberInput,
-    auditContext: AuditContext & { actorUserId: string },
+    auditContext: AuditContext & { actorUserId: string; actorRole: WorkspaceRole },
   ) {
+    if (!canInviteRole(auditContext.actorRole, input.role)) {
+      throw AppError.forbidden('Bạn không được phép mời thành viên với vai trò này.');
+    }
+
     const existingMember = await this.prisma.workspaceMember.findFirst({
       where: {
         workspaceId,
@@ -352,6 +356,7 @@ export class WorkspacesService {
     workspaceId: string,
     memberId: string,
     actorUserId: string,
+    actorRole: WorkspaceRole,
     auditContext: AuditContext,
   ) {
     const member = await this.prisma.workspaceMember.findFirst({
@@ -361,6 +366,10 @@ export class WorkspacesService {
     if (member.userId === actorUserId) {
       throw AppError.forbidden('Bạn không thể tự xóa chính mình khỏi workspace.');
     }
+    if (!canRemoveRole(actorRole, member.role)) {
+      throw AppError.forbidden('Bạn không được phép xóa thành viên này.');
+    }
+
     if (member.role === 'OWNER') {
       const ownerCount = await this.prisma.workspaceMember.count({
         where: { workspaceId, role: 'OWNER' },

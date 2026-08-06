@@ -201,6 +201,7 @@ async function publishPlatformPost(
     const accessToken = await getFreshAccessToken({
       prisma: input.prisma,
       keyring: input.keyring,
+      locks: input.locks,
       adapter,
       account: {
         id: platformPost.socialAccount.id,

@@ -29,6 +29,7 @@ export function InstagramLocationPicker({
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -58,6 +59,7 @@ export function InstagramLocationPicker({
 
     const timer = setTimeout(async () => {
       setLoading(true);
+      setErrorMsg('');
       try {
         const results = await socialAccountsApi.instagramLocations(
           workspaceId,
@@ -66,8 +68,12 @@ export function InstagramLocationPicker({
         );
         setLocations(results);
         setOpen(true);
-      } catch (err) {
+      } catch (err: unknown) {
         console.error('Failed to search locations:', err);
+        const errorMsgStr = err instanceof Error ? err.message : String(err);
+        if (errorMsgStr.includes('403') || errorMsgStr.includes('permission')) {
+          setErrorMsg('Không thể tìm kiếm (thiếu quyền FB). Hãy nhập Location ID trực tiếp.');
+        }
       } finally {
         setLoading(false);
       }
@@ -109,7 +115,7 @@ export function InstagramLocationPicker({
         </div>
       )}
 
-      {open && locations.length > 0 && (
+      {open && (locations.length > 0 || /^\d+$/.test(query)) && (
         <ul className="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm">
           {locations.map((loc) => {
             const address = [loc.location?.city, loc.location?.country].filter(Boolean).join(', ');
@@ -126,8 +132,21 @@ export function InstagramLocationPicker({
               </li>
             );
           })}
+          {/^\d+$/.test(query) && (
+            <li
+              onClick={() => {
+                onChange(query);
+                setOpen(false);
+              }}
+              className="relative cursor-default select-none py-2 pl-3 pr-9 hover:bg-brand-50 hover:text-brand-900 cursor-pointer text-brand-700 border-t border-slate-100"
+            >
+              <span className="block truncate font-medium">Sử dụng Location ID: {query}</span>
+            </li>
+          )}
         </ul>
       )}
+
+      {errorMsg && <div className="mt-1 text-xs text-amber-600">{errorMsg}</div>}
     </div>
   );
 }

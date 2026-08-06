@@ -170,8 +170,10 @@ export class SocialAccountsService implements OnModuleDestroy {
     const currentUserId =
       input.currentUserId ?? (await this.userIdFromSessionCookie(input.cookieHeader));
 
-    if (currentUserId && payload.userId !== currentUserId) {
-      throw AppError.forbidden('OAuth callback không khớp phiên đăng nhập hiện tại.');
+    if (!currentUserId || payload.userId !== currentUserId) {
+      throw AppError.forbidden(
+        'OAuth callback yêu cầu phiên đăng nhập hợp lệ và phải khớp với tài khoản yêu cầu kết nối.',
+      );
     }
 
     const adapter = (await this.adapterFactory.forWorkspace(payload.workspaceId)).get(
@@ -626,8 +628,30 @@ export class SocialAccountsService implements OnModuleDestroy {
     }
 
     const refreshToken = decryptToken(account.token.refreshToken, this.keyring);
+
+    await this.redis.connect();
+    const lockKey = `token-refresh:${account.id}`;
+    const crypto = await import('node:crypto');
+    const lockToken = crypto.randomUUID();
+    const redisClient = this.redis.getClient();
+    const acquired = await redisClient.set(lockKey, lockToken, 'PX', 15000, 'NX');
+
+    if (!acquired) {
+      throw AppError.conflict('Tiến trình khác đang refresh token, vui lòng thử lại sau.');
+    }
+
     let tokenSet: TokenSet;
     try {
+      const currentToken = await this.prisma.socialToken.findUnique({
+        where: { id: account.token.id },
+      });
+      if (
+        currentToken?.accessTokenExpiresAt &&
+        currentToken.accessTokenExpiresAt.getTime() > refreshThreshold
+      ) {
+        return decryptToken(currentToken.accessToken, this.keyring);
+      }
+
       tokenSet = await adapter.refreshToken(refreshToken);
     } catch (error) {
       if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
@@ -641,7 +665,15 @@ export class SocialAccountsService implements OnModuleDestroy {
         });
       }
       throw error;
+    } finally {
+      await redisClient.eval(
+        `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`,
+        1,
+        lockKey,
+        lockToken,
+      );
     }
+
     const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
     const encryptedRefreshToken = tokenSet.refreshToken
       ? encryptToken(tokenSet.refreshToken, this.keyring)

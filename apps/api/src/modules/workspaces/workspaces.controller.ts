@@ -90,6 +90,7 @@ export class WorkspacesController {
     return this.workspaces.inviteMember(workspaceId, body, {
       ...this.auditContext(request),
       actorUserId: requireUser(request).id,
+      actorRole: requireMembership(request).role as WorkspaceRole,
     });
   }
 
@@ -136,6 +137,7 @@ export class WorkspacesController {
       workspaceId,
       memberId,
       requireUser(request).id,
+      requireMembership(request).role as WorkspaceRole,
       this.auditContext(request),
     );
   }

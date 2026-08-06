@@ -1,4 +1,3 @@
-import { WORKSPACE_ROLES } from '@socialhub/shared';
 import { z } from 'zod';
 
 export const createWorkspaceSchema = z.object({
@@ -20,7 +19,7 @@ export const inviteMemberSchema = z.object({
     .string()
     .email()
     .transform((value) => value.toLowerCase().trim()),
-  role: z.enum(WORKSPACE_ROLES).default('VIEWER'),
+  role: z.enum(['ADMIN', 'EDITOR', 'ANALYST', 'VIEWER']).default('VIEWER'),
 });
 
 export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
@@ -32,7 +31,7 @@ export const acceptInvitationSchema = z.object({
 export type AcceptInvitationInput = z.infer<typeof acceptInvitationSchema>;
 
 export const changeRoleSchema = z.object({
-  role: z.enum(WORKSPACE_ROLES),
+  role: z.enum(['ADMIN', 'EDITOR', 'ANALYST', 'VIEWER']),
 });
 
 export type ChangeRoleInput = z.infer<typeof changeRoleSchema>;

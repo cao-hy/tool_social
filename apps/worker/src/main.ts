@@ -76,7 +76,13 @@ async function main(): Promise<void> {
   );
   registry.registerWorker(
     'refresh-social-token',
-    createRefreshSocialTokenProcessor({ prisma, keyring, adapters, createAdapters }),
+    createRefreshSocialTokenProcessor({
+      prisma,
+      keyring,
+      adapters,
+      createAdapters,
+      locks: jobLockService,
+    }),
   );
   registry.registerWorker(
     'sync-comments',

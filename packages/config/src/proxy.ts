@@ -320,7 +320,7 @@ function resolveProxyConfigInput(configInput?: ProxyConfig | (() => ProxyConfig)
 function resolveOutboundProxyUrl(config?: ProxyConfig): string | null {
   const normalized = config ? normalizeProxyConfig(config) : readProxyConfig();
   if (!normalized.enabled) return null;
-  return normalized.proxyUrl?.trim() || getConfiguredProxyUrl();
+  return normalized.proxyUrl?.trim() || null;
 }
 
 function isSocksProxyUrl(value: string | null): value is string {

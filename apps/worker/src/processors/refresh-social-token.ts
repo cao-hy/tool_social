@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { ProxyConfig } from '@socialhub/shared';
 import { logger } from '../logger';
 import { loadWorkspaceProxyConfig } from '../utils/proxy';
+import type { JobLockService } from '../queue/job-lock';
 
 const refreshSocialTokenPayloadSchema = z.object({
   socialAccountId: z.string().min(1),
@@ -16,6 +17,7 @@ export function createRefreshSocialTokenProcessor(input: {
   keyring: Keyring;
   adapters: AdapterRegistry;
   createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+  locks?: JobLockService;
 }) {
   return async (job: { data: unknown; id?: string }) => {
     const payload = refreshSocialTokenPayloadSchema.parse(job.data);
@@ -61,7 +63,21 @@ export function createRefreshSocialTokenProcessor(input: {
 
     try {
       const refreshToken = decryptToken(token.refreshToken, input.keyring);
-      const tokenSet = await adapter.refreshToken(refreshToken);
+      const doRefresh = async () => adapter.refreshToken(refreshToken);
+
+      const lockKey = `token-refresh:${token.socialAccountId}`;
+      let tokenSet;
+      if (input.locks) {
+        const result = await input.locks.withLock(lockKey, 15000, doRefresh);
+        if (!result) {
+          logger.warn({ jobId: job.id, payload }, 'Tiến trình khác đang refresh token');
+          return { refreshed: false, reason: 'locked' };
+        }
+        tokenSet = result;
+      } else {
+        tokenSet = await doRefresh();
+      }
+
       const encryptedAccessToken = encryptToken(tokenSet.accessToken, input.keyring);
       const encryptedRefreshToken = tokenSet.refreshToken
         ? encryptToken(tokenSet.refreshToken, input.keyring)

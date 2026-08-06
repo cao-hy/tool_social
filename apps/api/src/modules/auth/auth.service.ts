@@ -181,6 +181,10 @@ export class AuthService {
     if (user && user.deletedAt === null) {
       const token = generateSecureToken();
       devResetToken = token;
+      await this.prisma.passwordResetToken.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
       await this.prisma.passwordResetToken.create({
         data: {
           userId: user.id,
@@ -207,23 +211,32 @@ export class AuthService {
     try {
       const passwordHash = await hashPassword(input.password);
       const tokenHash = hashToken(input.token);
-      const reset = await this.prisma.passwordResetToken.findUnique({ where: { tokenHash } });
-
-      if (!reset || reset.usedAt !== null || reset.expiresAt <= new Date()) {
-        throw AppError.validation('Reset token không hợp lệ hoặc đã hết hạn.');
-      }
-
-      await this.prisma.$transaction([
-        this.prisma.user.update({
-          where: { id: reset.userId },
-          data: { passwordHash },
-        }),
-        this.prisma.passwordResetToken.update({
-          where: { id: reset.id },
+      const reset = await this.prisma.$transaction(async (tx) => {
+        const consumed = await tx.passwordResetToken.updateMany({
+          where: {
+            tokenHash,
+            usedAt: null,
+            expiresAt: { gt: new Date() },
+          },
           data: { usedAt: new Date() },
-        }),
-        this.prisma.session.deleteMany({ where: { userId: reset.userId } }),
-      ]);
+        });
+
+        if (consumed.count !== 1) {
+          throw AppError.validation('Reset token không hợp lệ hoặc đã hết hạn.');
+        }
+
+        const resetToken = await tx.passwordResetToken.findUnique({ where: { tokenHash } });
+        if (!resetToken) throw AppError.validation('Lỗi không xác định.');
+
+        await tx.user.update({
+          where: { id: resetToken.userId },
+          data: { passwordHash },
+        });
+
+        await tx.session.deleteMany({ where: { userId: resetToken.userId } });
+
+        return resetToken;
+      });
 
       await this.audit.record({
         ...auditContext,

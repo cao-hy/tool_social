@@ -412,7 +412,9 @@ model SocialAccount {
   metricSnapshots MetricSnapshot[]
   externalPostSyncJobs ExternalPostSyncJob[]
 
-  @@unique([workspaceId, platform, externalAccountId, externalPageId])
+  // Constraint này được xử lý bằng partial unique index trong SQL migration
+  // để hỗ trợ trường hợp externalPageId là NULL
+  // @@unique([workspaceId, platform, externalAccountId, externalPageId])
   @@index([workspaceId])
   @@index([workspaceId, platform])
   @@index([status])
