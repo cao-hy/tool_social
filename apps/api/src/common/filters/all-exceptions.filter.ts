@@ -66,6 +66,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
       };
     }
 
+    if (
+      exception instanceof Error &&
+      'code' in exception &&
+      exception.code === 'PROXY_CONFIGURATION_MISSING'
+    ) {
+      return {
+        status: HttpStatus.SERVICE_UNAVAILABLE,
+        code: 'INTERNAL_ERROR',
+        message: exception.message || 'Proxy đang bật nhưng chưa có Proxy URL.',
+        logLevel: 'error',
+      };
+    }
+
     if (exception instanceof ZodError) {
       return {
         status: HttpStatus.BAD_REQUEST,

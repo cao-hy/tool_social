@@ -3,7 +3,6 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
 import {
   createProxyAwareFetch,
-  initProxyWatcher,
   loadEnvOrExit,
   loadWorkerEnv,
   type WorkerEnv,
@@ -47,11 +46,6 @@ let shuttingDown = false;
 async function main(): Promise<void> {
   const env: WorkerEnv = loadEnvOrExit(loadWorkerEnv);
 
-  initProxyWatcher((config) => {
-    logger.info(
-      `Proxy config changed. Enabled: ${config.enabled}, Country Lock: ${config.countryLock}`,
-    );
-  });
   logger.level = env.LOG_LEVEL;
 
   const connection = new Redis(env.REDIS_URL, {

@@ -40,6 +40,15 @@ export function decideOnError(
     return decideOnPlatformError(error, attempt, maxAttempts);
   }
 
+  if (isProxyConfigurationError(error)) {
+    return {
+      action: 'FAIL_PERMANENTLY',
+      reason: error.message,
+      notifyUser: true,
+      markAccountDisconnected: false,
+    };
+  }
+
   // Lỗi lập trình (TypeError, lỗi Prisma...) — retry thường không giúp gì,
   // nhưng cũng có thể là lỗi kết nối thoáng qua. Cho retry có giới hạn.
   return {
@@ -85,4 +94,8 @@ function decideOnPlatformError(
     notifyUser: error.kind === 'RATE_LIMITED' && attempt >= 2,
     markAccountDisconnected: false,
   };
+}
+
+function isProxyConfigurationError(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && 'code' in error && error.code === 'PROXY_CONFIGURATION_MISSING';
 }

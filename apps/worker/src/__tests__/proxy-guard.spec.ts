@@ -1,50 +1,5 @@
 import { describe, expect, it } from 'vitest';
-
-// Mô phỏng lại type và logic của assertPublishNetworkReady
-interface PublishNetworkProof {
-  checkedAt: string;
-  ip: string | null;
-  countryCode: string | null;
-  country: string | null;
-  city: string | null;
-  isp: string | null;
-  provider: string | null;
-  checkOk: boolean;
-  checkError: string | null;
-  checkErrors: string[];
-  proxyEnabled: boolean;
-  proxyAvailable: boolean;
-  proxyActive: boolean;
-  countryLock: string | null;
-  countryLockSatisfied: boolean;
-}
-
-function assertPublishNetworkReady(networkProof: PublishNetworkProof): void {
-  if (!networkProof.proxyEnabled) {
-    return;
-  }
-
-  if (!networkProof.proxyAvailable) {
-    throw new Error(
-      'Proxy đang bật nhưng chưa có Proxy URL. Publish bị chặn để tránh lộ IP máy chủ.',
-    );
-  }
-
-  if (!networkProof.countryLock) {
-    return;
-  }
-
-  if (networkProof.checkOk !== true || !networkProof.proxyActive || !networkProof.countryCode) {
-    throw new Error('Country Lock thất bại: Không thể xác minh IP proxy trước khi publish.');
-  }
-
-  if (!networkProof.countryLockSatisfied) {
-    throw new Error(
-      `Country Lock bị vi phạm: IP proxy là ${networkProof.countryCode} ` +
-        `(dự kiến: ${networkProof.countryLock}).`,
-    );
-  }
-}
+import { assertPublishNetworkReady, type PublishNetworkProof } from '../utils/proxy-guard';
 
 describe('assertPublishNetworkReady', () => {
   const baseProof: PublishNetworkProof = {
@@ -113,7 +68,7 @@ describe('assertPublishNetworkReady', () => {
         checkOk: true,
         countryLockSatisfied: false,
       }),
-    ).toThrowError('Country Lock bị vi phạm: IP proxy là VN (dự kiến: US)');
+    ).toThrowError('Country Lock bị vi phạm: IP proxy là VN nhưng workspace yêu cầu US');
   });
 
   it('allows if proxy is enabled, country lock is on, and country matches', () => {

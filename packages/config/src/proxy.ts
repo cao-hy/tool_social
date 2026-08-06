@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { ProxyAgent, Socks5ProxyAgent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { ProxyConfig } from '@socialhub/shared';
 
@@ -12,7 +10,6 @@ export class ProxyConfigurationError extends Error {
   }
 }
 
-const CONFIG_FILE_NAME = '.proxy-config.json';
 const proxyAgents = new Map<string, Dispatcher>();
 
 export interface ProxyAwareNetworkStatus {
@@ -94,28 +91,14 @@ const IP_LOOKUP_PROVIDERS = [
 ] as const;
 
 export function readProxyConfig(): ProxyConfig {
-  const fallback = readProxyConfigFromEnv();
-  try {
-    const configPath = resolveProxyConfigPath();
-    if (fs.existsSync(configPath)) {
-      const data = fs.readFileSync(configPath, 'utf8');
-      return normalizeProxyConfig({ ...fallback, ...JSON.parse(data) });
-    }
-  } catch (err) {
-    console.error('Error reading proxy config', err);
-  }
-  return fallback;
-}
-
-export function writeProxyConfig(config: ProxyConfig): void {
-  const configPath = resolveProxyConfigPath();
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(normalizeProxyConfig(config), null, 2), 'utf8');
-}
-
-export function applyProxyConfig(_config: ProxyConfig): void {
-  // Backward-compatible no-op. Dynamic per-workspace proxy config is resolved
-  // per request, while undici agents are cached by proxy URL.
+  const proxyUrl = getConfiguredProxyUrl();
+  return normalizeProxyConfig({
+    enabled: parseBoolean(process.env.PROXY_ENABLED, false),
+    countryLock: process.env.PROXY_COUNTRY_LOCK,
+    proxyUrl,
+    proxyUrlMasked: maskProxyUrl(proxyUrl),
+    source: proxyUrl ? 'ENV' : 'DIRECT',
+  });
 }
 
 export function hasOutboundProxyConfigured(config?: ProxyConfig): boolean {
@@ -216,47 +199,6 @@ export async function checkProxyAwareNetwork(
   };
 }
 
-export function initProxyWatcher(onConfigChanged?: (config: ProxyConfig) => void): void {
-  applyProxyConfig(readProxyConfig());
-
-  let lastContent = '';
-  setInterval(() => {
-    try {
-      const configPath = resolveProxyConfigPath();
-      const content = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
-      if (content !== lastContent) {
-        lastContent = content;
-        const config = readProxyConfig();
-        applyProxyConfig(config);
-        if (onConfigChanged) onConfigChanged(config);
-      }
-    } catch {
-      // Best-effort watcher: invalid partial writes are retried on the next tick.
-    }
-  }, 2000).unref();
-}
-
-export function resolveProxyConfigPath(): string {
-  const explicitPath = process.env.PROXY_CONFIG_PATH?.trim();
-  if (explicitPath) {
-    return path.isAbsolute(explicitPath)
-      ? explicitPath
-      : path.join(findWorkspaceRoot(), explicitPath);
-  }
-  return path.join(findWorkspaceRoot(), CONFIG_FILE_NAME);
-}
-
-function readProxyConfigFromEnv(): ProxyConfig {
-  const proxyUrl = getConfiguredProxyUrl();
-  return normalizeProxyConfig({
-    enabled: parseBoolean(process.env.PROXY_ENABLED, false),
-    countryLock: process.env.PROXY_COUNTRY_LOCK,
-    proxyUrl,
-    proxyUrlMasked: maskProxyUrl(proxyUrl),
-    source: proxyUrl ? 'ENV' : 'DIRECT',
-  });
-}
-
 function getProxyAgent(proxyUrl: string): Dispatcher {
   const existing = proxyAgents.get(proxyUrl);
   if (existing) return existing;
@@ -327,7 +269,8 @@ export function resolveWorkspaceProxyConfig(
   setting: WorkspaceProxySettingRecord | null | undefined,
   decryptProxyUrl: (ciphertext: string) => string,
 ): ProxyConfig {
-  const envProxyUrl = getConfiguredProxyUrl();
+  const allowEnvFallback = process.env.ALLOW_ENV_PROXY_FALLBACK === 'true';
+  const envProxyUrl = allowEnvFallback ? getConfiguredProxyUrl() : null;
 
   if (!setting) {
     return normalizeProxyConfig({
@@ -433,29 +376,4 @@ function formatCause(error: Error): string | null {
     .map(String);
   if (typeof record.message === 'string') parts.push(record.message);
   return parts.length ? [...new Set(parts)].join(' ') : null;
-}
-
-function findWorkspaceRoot(startDir = process.cwd()): string {
-  let current = startDir;
-  const root = path.parse(current).root;
-
-  while (true) {
-    const packageJsonPath = path.join(current, 'package.json');
-    if (fs.existsSync(packageJsonPath)) {
-      try {
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as {
-          name?: string;
-          workspaces?: unknown;
-        };
-        if (packageJson.name === 'socialhub-manager' || packageJson.workspaces) {
-          return current;
-        }
-      } catch {
-        // Keep climbing; malformed package.json should not break proxy defaults.
-      }
-    }
-
-    if (current === root) return startDir;
-    current = path.dirname(current);
-  }
 }

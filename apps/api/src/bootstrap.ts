@@ -2,7 +2,7 @@ import fastifyHelmet from '@fastify/helmet';
 import fastifyRateLimit from '@fastify/rate-limit';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { initProxyWatcher, type ApiEnv } from '@socialhub/config';
+import { type ApiEnv } from '@socialhub/config';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AppModule } from './app.module';
 import { attachRequestId } from './common/request-context';
@@ -18,7 +18,6 @@ export const API_PREFIX = 'api/v1';
 const UNVERSIONED_ROUTES = ['health', 'ready'];
 
 export async function createApp(env: ApiEnv): Promise<NestFastifyApplication> {
-  initProxyWatcher();
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter({
