@@ -48,10 +48,12 @@ export async function getFreshAccessToken(input: {
   }
 
   const refreshToken = decryptToken(account.token.refreshToken, keyring);
+  const tokenId = account.token.id;
+  const refreshTokenFn = adapter.refreshToken.bind(adapter);
 
   const doRefresh = async () => {
     // Đọc lại từ DB xem token đã được refresh chưa (lớp bảo vệ thứ 2)
-    const currentToken = await prisma.socialToken.findUnique({ where: { id: account.token.id } });
+    const currentToken = await prisma.socialToken.findUnique({ where: { id: tokenId } });
     if (
       currentToken?.accessTokenExpiresAt &&
       currentToken.accessTokenExpiresAt.getTime() > Date.now() + REFRESH_THRESHOLD_MS
@@ -60,7 +62,7 @@ export async function getFreshAccessToken(input: {
     }
 
     try {
-      return await adapter.refreshToken(refreshToken);
+      return await refreshTokenFn(refreshToken);
     } catch (error) {
       if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
         await markDisconnected(prisma, account.id, error.message);

@@ -63,7 +63,8 @@ export function createRefreshSocialTokenProcessor(input: {
 
     try {
       const refreshToken = decryptToken(token.refreshToken, input.keyring);
-      const doRefresh = async () => adapter.refreshToken(refreshToken);
+      const refreshTokenFn = adapter.refreshToken.bind(adapter);
+      const doRefresh = async () => refreshTokenFn(refreshToken);
 
       const lockKey = `token-refresh:${token.socialAccountId}`;
       let tokenSet;

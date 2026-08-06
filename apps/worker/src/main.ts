@@ -81,7 +81,7 @@ async function main(): Promise<void> {
       keyring,
       adapters,
       createAdapters,
-      locks: jobLockService,
+      locks,
     }),
   );
   registry.registerWorker(

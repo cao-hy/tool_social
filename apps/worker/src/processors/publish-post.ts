@@ -120,6 +120,7 @@ async function publishPlatformPost(
     keyring: Keyring;
     adapters: AdapterRegistry;
     createAdapters?: (proxyConfig: ProxyConfig) => AdapterRegistry;
+    locks: JobLockService;
     storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
   },
   payload: z.infer<typeof publishPostPayloadSchema>,
