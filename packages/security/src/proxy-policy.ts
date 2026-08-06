@@ -14,10 +14,10 @@ export interface ProxyAttestation {
 
 export interface CheckNetworkResult {
   checkOk: boolean;
-  ip?: string;
-  countryCode?: string;
-  provider?: string;
-  checkError?: string;
+  ip: string | null;
+  countryCode: string | null;
+  provider: string | null;
+  checkError: string | null;
   checkedAt: string;
 }
 
