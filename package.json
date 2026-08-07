@@ -17,7 +17,7 @@
     "build": "turbo run build",
     "predev": "npm run build:runtime-packages",
     "dev": "turbo run dev",
-    "build:runtime-packages": "npm run build -w @socialhub/shared && npm run build -w @socialhub/config && npm run build -w @socialhub/security && npm run build -w @socialhub/platform-adapters",
+    "build:runtime-packages": "npm run build -w @socialhub/shared && npm run build -w @socialhub/security && npm run build -w @socialhub/config && npm run build -w @socialhub/platform-adapters",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint -- --fix",
     "typecheck": "turbo run typecheck",

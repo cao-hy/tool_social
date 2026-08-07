@@ -22,8 +22,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npx prisma generate --schema packages/db/prisma/schema.prisma
 RUN npm run build -w @socialhub/shared \
- && npm run build -w @socialhub/config \
  && npm run build -w @socialhub/security \
+ && npm run build -w @socialhub/config \
  && npm run build -w @socialhub/platform-adapters \
  && npx tsc -p packages/db/tsconfig.build.json \
  && npm run build -w @socialhub/worker
