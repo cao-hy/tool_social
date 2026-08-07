@@ -30,6 +30,7 @@ import {
   ProxyPolicyService,
   RedisProxyPolicyCache,
   type Keyring,
+  type MinimalRedisClient,
 } from '@socialhub/security';
 import dns from 'node:dns/promises';
 import type { FastifyRequest, FastifyReply } from 'fastify';
@@ -96,12 +97,10 @@ export class SystemController {
 
   private get proxyRuntime(): ProxyRuntimeService {
     if (!this.proxyRuntimeInstance) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const redisClient = this.redisService?.getClient
-        ? this.redisService.getClient()
-        : ({} as any);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const policyCache = new RedisProxyPolicyCache(redisClient as any);
+      const redisClient = (
+        this.redisService?.getClient ? this.redisService.getClient() : {}
+      ) as MinimalRedisClient;
+      const policyCache = new RedisProxyPolicyCache(redisClient);
       const policyService = new ProxyPolicyService(policyCache, this.env.PROXY_FINGERPRINT_SECRET);
       this.proxyRuntimeInstance = new ProxyRuntimeService(
         policyService,

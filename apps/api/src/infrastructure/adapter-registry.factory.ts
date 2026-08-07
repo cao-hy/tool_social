@@ -15,6 +15,7 @@ import {
   ProxyPolicyService,
   RedisProxyPolicyCache,
   type Keyring,
+  type MinimalRedisClient,
 } from '@socialhub/security';
 
 import { ENV, type ApiEnv } from './env.provider';
@@ -33,8 +34,9 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
     @Inject(KEYRING) private readonly keyring: Keyring,
     @Inject(RedisService) private readonly redisService: RedisService,
   ) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const policyCache = new RedisProxyPolicyCache(this.redisService.getClient() as any);
+    const policyCache = new RedisProxyPolicyCache(
+      this.redisService.getClient() as MinimalRedisClient,
+    );
     const policyService = new ProxyPolicyService(policyCache, this.env.PROXY_FINGERPRINT_SECRET);
     this.proxyRuntime = new ProxyRuntimeService(policyService, this.env.PROXY_FINGERPRINT_SECRET);
   }
