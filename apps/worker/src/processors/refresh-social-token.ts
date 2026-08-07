@@ -1,4 +1,5 @@
-import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
+import { isPlatformError } from '@socialhub/platform-adapters';
+import type { WorkspaceAdapterContext } from '@socialhub/config';
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import { z } from 'zod';
@@ -15,7 +16,7 @@ const refreshSocialTokenPayloadSchema = z.object({
 export function createRefreshSocialTokenProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
   locks?: JobLockService;
 }) {
   return async (job: { data: unknown; id?: string }) => {
@@ -31,7 +32,7 @@ export function createRefreshSocialTokenProcessor(input: {
       return { refreshed: false, reason: 'not_found' };
     }
 
-    const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
+    const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
     const adapter = adapters.get(token.socialAccount.platform);
     if (!token.refreshToken || !adapter.refreshToken) {
       await input.prisma.socialAccount.update({

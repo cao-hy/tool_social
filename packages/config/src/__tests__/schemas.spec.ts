@@ -13,6 +13,7 @@ const validApiEnv = {
   CORS_ORIGINS: 'http://localhost:3000',
   DATABASE_URL: 'postgresql://user:pass@localhost:5432/socialhub',
   REDIS_URL: 'redis://localhost:6379',
+  PROXY_FINGERPRINT_SECRET: 'c29tZS0zMi1ieXRlLWtleS1mb3ItdGVzdGluZy1vbmx5',
   ENCRYPTION_KEYS: 'v1:c29tZS0zMi1ieXRlLWtleS1mb3ItdGVzdGluZy1vbmx5',
   ENCRYPTION_ACTIVE_KEY: 'v1',
   S3_ENDPOINT: 'http://localhost:9000',
@@ -86,6 +87,7 @@ describe('apiEnvSchema — fail fast lúc khởi động (ARCHITECTURE.md §11)'
       ...validApiEnv,
       ENCRYPTION_KEYS: 'v1:YWJj,v2:ZGVm',
       ENCRYPTION_ACTIVE_KEY: 'v2',
+      PROXY_FINGERPRINT_SECRET: 'c29tZS0zMi1ieXRlLWtleS1mb3ItdGVzdGluZy1vbmx5',
     });
     expect(env.ENCRYPTION_ACTIVE_KEY).toBe('v2');
   });

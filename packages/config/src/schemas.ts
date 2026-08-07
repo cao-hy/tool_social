@@ -58,6 +58,25 @@ const syncSchema = z.object({
 const proxySchema = z.object({
   PROXY_ENABLED: booleanFromString(false),
   PROXY_COUNTRY_LOCK: z.string().optional(),
+  PROXY_FINGERPRINT_SECRET: z
+    .string()
+    .min(1)
+    .superRefine((val, ctx) => {
+      try {
+        const decoded = Buffer.from(val, 'base64');
+        if (decoded.length < 32) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'PROXY_FINGERPRINT_SECRET phải có tối thiểu 32 byte sau khi decode base64',
+          });
+        }
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'PROXY_FINGERPRINT_SECRET phải là chuỗi base64 hợp lệ',
+        });
+      }
+    }),
 });
 
 /**

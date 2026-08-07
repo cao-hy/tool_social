@@ -1,4 +1,5 @@
-import { AdapterRegistry, isPlatformError } from '@socialhub/platform-adapters';
+import { isPlatformError } from '@socialhub/platform-adapters';
+import type { WorkspaceAdapterContext } from '@socialhub/config';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import type { AccountMetrics, MetricSource, QueuePayload } from '@socialhub/shared';
@@ -19,7 +20,7 @@ type SyncAccountMetricsPayload = QueuePayload<'sync-account-metrics'>;
 export function createSyncAccountMetricsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
 }) {
   return async (job: {
     data: unknown;
@@ -64,7 +65,7 @@ async function syncAccountMetrics(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
+    adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
   },
   payload: SyncAccountMetricsPayload,
 ) {
@@ -81,7 +82,7 @@ async function syncAccountMetrics(
     return { synced: false, reason: 'account_disconnected' };
   }
 
-  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
   const adapter = adapters.get(account.platform);
   const accessToken = await getFreshAccessToken({
     prisma: input.prisma,

@@ -92,61 +92,50 @@ export function hasOutboundProxyConfigured(config?: ProxyConfig): boolean {
   return Boolean(resolveOutboundProxyUrl(config));
 }
 
-import type { ProxyDispatcherLease } from './proxy-dispatcher-pool';
+import type { ProxyDispatcherHandle } from './proxy-dispatcher-pool';
 
-export function createProxyAwareFetch(
-  configInput?: ProxyConfig | (() => ProxyConfig),
-  dispatcherLease?: ProxyDispatcherLease,
+export interface EnabledProxyConfig extends ProxyConfig {
+  enabled: true;
+  proxyUrl: string;
+}
+
+export function createDirectFetch(): typeof fetch {
+  return undiciFetch as unknown as typeof fetch;
+}
+
+export function createProxiedFetch(
+  config: EnabledProxyConfig,
+  dispatcherHandle: ProxyDispatcherHandle,
 ): typeof fetch {
+  if (!config.enabled || !config.proxyUrl || !dispatcherHandle) {
+    throw new ProxyConfigurationError('Validated proxy dispatcher is required.');
+  }
+
   return async (input, init) => {
-    const config = resolveProxyConfigInput(configInput);
-
-    // Proxy thực sự tắt thì mới được phép đi direct.
-    if (!config.enabled) {
-      return undiciFetch(
-        input as Parameters<typeof undiciFetch>[0],
-        init as Parameters<typeof undiciFetch>[1],
-      ) as unknown as Promise<Response>;
-    }
-
-    const proxyUrl = resolveOutboundProxyUrl(config);
-
-    // Proxy bật nhưng không có URL: chặn request.
-    if (!proxyUrl) {
-      throw new ProxyConfigurationError(
-        'Proxy đang bật nhưng chưa có Proxy URL trong workspace hoặc HTTP_PROXY/HTTPS_PROXY.',
-      );
-    }
-
+    const lease = dispatcherHandle.acquireRequestLease();
     try {
       const response = await undiciFetch(
         input as Parameters<typeof undiciFetch>[0],
         {
           ...init,
-          dispatcher: dispatcherLease ? dispatcherLease.dispatcher : undefined,
+          dispatcher: dispatcherHandle.dispatcher,
         } as Parameters<typeof undiciFetch>[1],
       );
 
-      if (!dispatcherLease) {
-        return response as unknown as Response;
-      }
-
-      // Safely wrap the response to release the lease
       if (!response.body) {
-        dispatcherLease.release();
+        lease.release();
         return response as unknown as Response;
       }
 
-      const originalCancel = response.body.cancel.bind(response.body);
+      const reader = response.body.getReader();
       let released = false;
       const releaseOnce = () => {
         if (!released) {
           released = true;
-          dispatcherLease.release();
+          lease.release();
         }
       };
 
-      const reader = response.body.getReader();
       const wrappedStream = new ReadableStream({
         async pull(controller) {
           try {
@@ -164,7 +153,7 @@ export function createProxyAwareFetch(
         },
         async cancel(reason) {
           releaseOnce();
-          await originalCancel(reason);
+          await reader.cancel(reason);
         },
       });
 
@@ -177,9 +166,7 @@ export function createProxyAwareFetch(
 
       return cloned as unknown as Response;
     } catch (err) {
-      if (dispatcherLease) {
-        dispatcherLease.release();
-      }
+      lease.release();
       throw err;
     }
   };
@@ -268,13 +255,14 @@ export function maskProxyUrl(value: string | null | undefined): string | null {
   }
 }
 
-export function publicProxyConfig(config: ProxyConfig): ProxyConfig {
+export function publicProxyConfig(config: ProxyConfig) {
   const normalized = normalizeProxyConfig(config);
   return {
     enabled: normalized.enabled,
     countryLock: normalized.countryLock,
     proxyUrlMasked: normalized.proxyUrlMasked,
     source: normalized.source,
+    configVersion: normalized.version,
   };
 }
 
@@ -349,11 +337,6 @@ export function normalizeProxyConfig(value: Partial<ProxyConfig>): ProxyConfig {
     source,
     version: value.version,
   };
-}
-
-function resolveProxyConfigInput(configInput?: ProxyConfig | (() => ProxyConfig)): ProxyConfig {
-  if (!configInput) return readProxyConfig();
-  return normalizeProxyConfig(typeof configInput === 'function' ? configInput() : configInput);
 }
 
 function resolveOutboundProxyUrl(config?: ProxyConfig): string | null {

@@ -1,9 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  createProxyAwareFetch,
-  resolveWorkspaceProxyConfig,
-  checkProxyAwareNetwork,
-} from '@socialhub/config';
+import { createProxiedFetch, ProxyRuntimeService } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -13,32 +9,18 @@ import {
   decryptToken,
   ProxyPolicyService,
   RedisProxyPolicyCache,
-  ProxyEndpointValidator,
   type Keyring,
-  type ProxyAttestation,
 } from '@socialhub/security';
-import { type ProxyConfig } from '@socialhub/shared';
-import dns from 'node:dns/promises';
-import { ProxyDispatcherPool } from '@socialhub/config';
 
-export interface WorkspaceAdapterContext {
-  adapters: AdapterRegistry;
-  workspaceId: string;
-  proxyConfigVersion: number;
-  proxyFingerprint: string | null;
-  attestation: ProxyAttestation | null;
-  createdAt: number;
-}
 import { ENV, type ApiEnv } from './env.provider';
 import { PrismaService } from './prisma/prisma.service';
 import { KEYRING } from './tokens';
 import { RedisService } from './redis/redis.service';
+import type { WorkspaceAdapterContext } from '@socialhub/config';
 
 @Injectable()
 export class AdapterRegistryFactory {
-  private readonly policyService: ProxyPolicyService;
-  private readonly endpointValidator: ProxyEndpointValidator;
-  private readonly dispatcherPool: ProxyDispatcherPool;
+  private readonly proxyRuntime: ProxyRuntimeService;
 
   constructor(
     @Inject(ENV) private readonly env: ApiEnv,
@@ -46,74 +28,43 @@ export class AdapterRegistryFactory {
     @Inject(KEYRING) private readonly keyring: Keyring,
     @Inject(RedisService) private readonly redisService: RedisService,
   ) {
-    this.policyService = new ProxyPolicyService(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      new RedisProxyPolicyCache(this.redisService.getClient() as any),
-    );
-    this.endpointValidator = new ProxyEndpointValidator(dns);
-    this.dispatcherPool = new ProxyDispatcherPool();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const policyCache = new RedisProxyPolicyCache(this.redisService.getClient() as any);
+    const policyService = new ProxyPolicyService(policyCache, this.env.PROXY_FINGERPRINT_SECRET);
+    this.proxyRuntime = new ProxyRuntimeService(policyService, this.env.PROXY_FINGERPRINT_SECRET);
   }
 
   async forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> {
-    const setting = await this.prisma.workspaceProxySetting.findUnique({
-      where: { workspaceId },
-    });
-
-    const proxyConfig = resolveWorkspaceProxyConfig(setting, (ciphertext) =>
-      decryptToken(ciphertext, this.keyring),
+    const ctx = await this.proxyRuntime.prepareWorkspace(
+      workspaceId,
+      (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
+      (ciphertext) => decryptToken(ciphertext, this.keyring),
     );
 
-    let attestation: ProxyAttestation | null = null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let dispatcherLease: any = undefined; // Using any here to bypass type error if imported from wrong place
-    // Actually we can import it from config
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const configVersion = (setting as any)?.configVersion ?? 0;
-
-    if (proxyConfig.enabled && proxyConfig.proxyUrl) {
-      const validatedEndpoint = await this.endpointValidator.validate(proxyConfig.proxyUrl);
-      dispatcherLease = await this.dispatcherPool.acquire(validatedEndpoint);
-
-      attestation = await this.policyService.getAttestation(
-        workspaceId,
-        proxyConfig,
-        configVersion,
-        async () => {
-          return await checkProxyAwareNetwork(
-            proxyConfig,
-            createProxyAwareFetch(proxyConfig, dispatcherLease),
-          );
-        },
-      );
-
-      // Before caching/returning, check version again
-      const currentSetting = await this.prisma.workspaceProxySetting.findUnique({
-        where: { workspaceId },
-        select: { configVersion: true },
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if ((currentSetting as any)?.configVersion !== configVersion) {
-        dispatcherLease.release();
-        throw new Error('Proxy configuration changed during request');
-      }
-    }
+    const fetchImpl = ctx.dispatcherHandle
+      ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        createProxiedFetch(
+          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl! },
+          ctx.dispatcherHandle,
+        )
+      : fetch;
 
     return {
-      adapters: this.createInternal(proxyConfig, dispatcherLease),
-      workspaceId,
-      proxyConfigVersion: configVersion,
-      proxyFingerprint: null, // we will add this in phase 2 when we inject fingerprint secret
-      attestation,
-      createdAt: Date.now(),
+      adapters: this.createInternal(fetchImpl),
+      proxy: {
+        enabled: ctx.config.enabled,
+        configVersion: ctx.configVersion,
+        fingerprint: ctx.fingerprint,
+        attestation: ctx.attestation,
+      },
     };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private createInternal(proxyConfig?: ProxyConfig, dispatcherLease?: any): AdapterRegistry {
+  private createInternal(fetchImpl: typeof fetch): AdapterRegistry {
     const env = this.env;
     return createRuntimeAdapterRegistry({
       nodeEnv: env.NODE_ENV,
-      fetch: createProxyAwareFetch(proxyConfig, dispatcherLease),
+      fetch: fetchImpl,
       facebook: {
         appId: env.FACEBOOK_APP_ID,
         appSecret: env.FACEBOOK_APP_SECRET,

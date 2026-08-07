@@ -1,5 +1,4 @@
 import {
-  AdapterRegistry,
   DevelopmentFixtureAdapter,
   createPlatformError,
   isPlatformError,
@@ -11,9 +10,10 @@ import {
   type YouTubeVideoPlatformState,
 } from '@socialhub/platform-adapters';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { checkProxyAwareNetwork, createProxyAwareFetch, readProxyConfig } from '@socialhub/config';
+
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
+import type { WorkspaceAdapterContext } from '@socialhub/config';
 import {
   deriveContentPostStatus,
   PLATFORM_LABELS,
@@ -44,7 +44,7 @@ const publishPostPayloadSchema = z
       `retry:${payload.requestedByUserId ?? 'unknown'}:${payload.platformPostId}`,
   }));
 
-import { assertPublishNetworkReady, type PublishNetworkProof } from '../utils/proxy-guard';
+import type { ProxyAttestation } from '@socialhub/security';
 
 const adapterLogger: AdapterLogger = {
   debug: (message, context) => logger.debug(context ?? {}, message),
@@ -56,7 +56,7 @@ const adapterLogger: AdapterLogger = {
 export function createPublishPostProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
+  adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
   locks: JobLockService;
   storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
 }) {
@@ -150,7 +150,7 @@ async function publishPlatformPost(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapterFactory: { forWorkspace(workspaceId: string): Promise<AdapterRegistry> };
+    adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
     locks: JobLockService;
     storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
   },
@@ -205,14 +205,8 @@ async function publishPlatformPost(
     data: { status: 'PROCESSING' },
   });
 
-  const { loadWorkspaceProxyConfig } = await import('../utils/proxy.js');
-  const proxyConfig = await loadWorkspaceProxyConfig(
-    input.prisma,
-    input.keyring,
-    payload.workspaceId,
-  );
-
-  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const adaptersContext = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const adapters = adaptersContext.adapters;
   const adapter = adapters.get(platformPost.platform);
   if (
     platformPost.socialAccount.scopes.includes('development-fixture') &&
@@ -229,7 +223,7 @@ async function publishPlatformPost(
     return { published: false, reason: 'fixture_account_with_real_adapter' };
   }
 
-  let publishNetworkProof: PublishNetworkProof | null = null;
+  const publishNetworkProof = adaptersContext.proxy?.attestation || null;
 
   try {
     const accessToken = await getFreshAccessToken({
@@ -309,7 +303,9 @@ async function publishPlatformPost(
         input.prisma,
         platformPost.id,
         'VALIDATION',
-        validation.issues.map((issue) => `${issue.field}: ${issue.message}`).join('; '),
+        validation.issues
+          .map((issue: { field: string; message: string }) => `${issue.field}: ${issue.message}`)
+          .join('; '),
       );
       await updateParentStatus(input.prisma, platformPost.contentPostId);
       return { published: false, reason: 'validation' };
@@ -323,8 +319,7 @@ async function publishPlatformPost(
       logger: adapterLogger,
     } satisfies AdapterContext;
 
-    publishNetworkProof = await capturePublishNetworkProof(proxyConfig);
-    assertPublishNetworkReady(publishNetworkProof);
+    // (Proxy validity is already attested by ProxyRuntimeService)
 
     const result = await adapter.publishPost(adapterContext, publishInput);
     const platformState = await platformStateAfterPublish(
@@ -451,33 +446,12 @@ function jsonObject(
   return value as Record<string, unknown>;
 }
 
-async function capturePublishNetworkProof(
-  proxyConfig = readProxyConfig(),
-): Promise<PublishNetworkProof> {
-  const status = await checkProxyAwareNetwork(proxyConfig, createProxyAwareFetch(proxyConfig));
-  return {
-    checkedAt: status.checkedAt,
-    ip: status.ip,
-    countryCode: status.countryCode,
-    country: status.country,
-    city: status.city,
-    isp: status.isp,
-    provider: status.provider,
-    checkOk: status.checkOk,
-    checkError: status.checkError,
-    checkErrors: status.checkErrors,
-    proxyEnabled: proxyConfig.enabled,
-    proxyAvailable: status.proxyAvailable,
-    proxyActive: status.proxyActive,
-    countryLock: proxyConfig.enabled ? proxyConfig.countryLock : null,
-    countryLockSatisfied: status.countryLockSatisfied,
-  };
-}
+// capturePublishNetworkProof removed to avoid double checking
 
 function mergePlatformStateWithNetworkProof(
   platformState:
     TikTokPublishPlatformState | YouTubeVideoPlatformState | Record<string, unknown> | undefined,
-  publishNetwork: PublishNetworkProof,
+  publishNetwork: ProxyAttestation | null,
 ): Record<string, unknown> {
   return {
     ...(platformState ?? {}),

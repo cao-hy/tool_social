@@ -1,32 +1,48 @@
-import { resolveWorkspaceProxyConfig, createProxyAwareFetch } from '@socialhub/config';
-import { decryptToken } from '@socialhub/security';
+import {
+  createProxiedFetch,
+  ProxyRuntimeService,
+  type WorkerEnv,
+  type WorkspaceAdapterContext,
+} from '@socialhub/config';
+import { decryptToken, ProxyPolicyService, RedisProxyPolicyCache } from '@socialhub/security';
 import type { PrismaClient } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import type { AdapterRegistry } from '@socialhub/platform-adapters';
-
-import { type WorkerEnv } from '@socialhub/config';
 import { createRuntimeAdapterRegistry, TIKTOK_OAUTH_SCOPES } from '@socialhub/platform-adapters';
+import { createDirectFetch } from '@socialhub/config';
+
 export class WorkerAdapterFactory {
+  private readonly proxyRuntime: ProxyRuntimeService;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly keyring: Keyring,
     private readonly env: WorkerEnv,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    redisClient: any,
   ) {
-    // Redis client kept for interface compatibility if needed, else we can remove it later
+    const policyCache = new RedisProxyPolicyCache(redisClient);
+    const policyService = new ProxyPolicyService(policyCache, this.env.PROXY_FINGERPRINT_SECRET);
+    this.proxyRuntime = new ProxyRuntimeService(policyService, this.env.PROXY_FINGERPRINT_SECRET);
   }
 
-  async forWorkspace(workspaceId: string): Promise<AdapterRegistry> {
-    const setting = await this.prisma.workspaceProxySetting.findUnique({
-      where: { workspaceId },
-    });
-
-    const proxyConfig = resolveWorkspaceProxyConfig(setting, (ciphertext) =>
-      decryptToken(ciphertext, this.keyring),
+  async forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> {
+    const ctx = await this.proxyRuntime.prepareWorkspace(
+      workspaceId,
+      (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
+      (ciphertext) => decryptToken(ciphertext, this.keyring),
     );
 
-    return createRuntimeAdapterRegistry({
+    const fetchImpl = ctx.dispatcherHandle
+      ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        createProxiedFetch(
+          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl! },
+          ctx.dispatcherHandle,
+        )
+      : createDirectFetch(); // Default global fetch or direct fetch if proxy is off
+
+    const adapters = createRuntimeAdapterRegistry({
       nodeEnv: this.env.NODE_ENV,
-      fetch: createProxyAwareFetch(proxyConfig),
+      fetch: fetchImpl,
       facebook: {
         appId: this.env.FACEBOOK_APP_ID,
         appSecret: this.env.FACEBOOK_APP_SECRET,
@@ -54,5 +70,15 @@ export class WorkerAdapterFactory {
         scopes: [...TIKTOK_OAUTH_SCOPES],
       },
     });
+
+    return {
+      adapters,
+      proxy: {
+        enabled: ctx.config.enabled,
+        configVersion: ctx.configVersion,
+        fingerprint: ctx.fingerprint,
+        attestation: ctx.attestation,
+      },
+    };
   }
 }

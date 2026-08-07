@@ -1,5 +1,5 @@
 import { Global, Module } from '@nestjs/common';
-import { createProxyAwareFetch, loadApiEnv } from '@socialhub/config';
+import { createDirectFetch, loadApiEnv } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -40,7 +40,7 @@ export { ADAPTER_REGISTRY, KEYRING } from './tokens';
       useFactory: (env: ApiEnv): AdapterRegistry =>
         createRuntimeAdapterRegistry({
           nodeEnv: env.NODE_ENV,
-          fetch: createProxyAwareFetch(),
+          fetch: createDirectFetch(),
           facebook: {
             appId: env.FACEBOOK_APP_ID,
             appSecret: env.FACEBOOK_APP_SECRET,

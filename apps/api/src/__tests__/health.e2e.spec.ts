@@ -16,6 +16,7 @@ import { attachRequestId } from '../common/request-context';
 import { HealthController } from '../modules/health/health.controller';
 import { HealthService } from '../modules/health/health.service';
 import { SystemController } from '../modules/health/system.controller';
+import { AdapterRegistryFactory } from '../infrastructure/adapter-registry.factory';
 import { PlatformsController } from '../modules/platforms/platforms.controller';
 import { PrismaService } from '../infrastructure/prisma/prisma.service';
 import { RedisService } from '../infrastructure/redis/redis.service';
@@ -56,6 +57,15 @@ describe('Health & Platforms (e2e)', () => {
         {
           provide: KEYRING,
           useValue: Keyring.fromEnv(`v1:${Keyring.generateKey()}`, 'v1'),
+        },
+        {
+          provide: AdapterRegistryFactory,
+          useValue: {
+            forWorkspace: vi.fn().mockResolvedValue({
+              adapters: { has: vi.fn() },
+              proxy: {},
+            }),
+          },
         },
         { provide: AuditService, useValue: { record: vi.fn() } },
         { provide: APP_FILTER, useClass: AllExceptionsFilter },

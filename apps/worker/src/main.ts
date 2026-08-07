@@ -1,12 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { S3Client } from '@aws-sdk/client-s3';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import {
-  createProxyAwareFetch,
-  loadEnvOrExit,
-  loadWorkerEnv,
-  type WorkerEnv,
-} from '@socialhub/config';
+import { createDirectFetch, loadEnvOrExit, loadWorkerEnv, type WorkerEnv } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -63,7 +58,7 @@ async function main(): Promise<void> {
   const prisma = createWorkerPrisma(env.DATABASE_URL, env.LOG_LEVEL === 'trace');
   await prisma.$connect();
   const keyring = Keyring.fromEnv(env.ENCRYPTION_KEYS, env.ENCRYPTION_ACTIVE_KEY);
-  const adapterFactory = new WorkerAdapterFactory(prisma, keyring, env);
+  const adapterFactory = new WorkerAdapterFactory(prisma, keyring, env, connection);
   const defaultAdapters = createWebhookAdapterRegistry(env);
   const locks = new JobLockService(connection);
   const storage = createStorageClient(env);
@@ -191,7 +186,7 @@ function createStorageClient(env: WorkerEnv): {
 function createWebhookAdapterRegistry(env: WorkerEnv): AdapterRegistry {
   return createRuntimeAdapterRegistry({
     nodeEnv: env.NODE_ENV,
-    fetch: createProxyAwareFetch(), // Webhooks run directly, no proxy
+    fetch: createDirectFetch(), // Webhooks run directly, no proxy
     facebook: {
       appId: env.FACEBOOK_APP_ID,
       appSecret: env.FACEBOOK_APP_SECRET,

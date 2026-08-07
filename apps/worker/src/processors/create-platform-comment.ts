@@ -1,4 +1,5 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
+import type { WorkspaceAdapterContext } from '@socialhub/config';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import { PLATFORM_LABELS, type QueuePayload } from '@socialhub/shared';
@@ -22,9 +23,7 @@ export function createCreatePlatformCommentProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapterFactory: {
-    forWorkspace(
-      workspaceId: string,
-    ): Promise<import('@socialhub/platform-adapters').AdapterRegistry>;
+    forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
   };
 }) {
   return async (job: {
@@ -93,7 +92,7 @@ async function createPlatformComment(
     adapterFactory: {
       forWorkspace(
         workspaceId: string,
-      ): Promise<import('@socialhub/platform-adapters').AdapterRegistry>;
+      ): Promise<import('@socialhub/config').WorkspaceAdapterContext>;
     };
   },
   payload: CreatePlatformCommentPayload,
@@ -120,7 +119,7 @@ async function createPlatformComment(
     return { created: false, reason: 'account_disconnected' };
   }
 
-  const adapters = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
   const adapter = adapters.requireCapability(account.platform, 'createComment');
   const createComment = adapter.createComment?.bind(adapter);
   if (!createComment) return { created: false, reason: 'capability_unsupported' };

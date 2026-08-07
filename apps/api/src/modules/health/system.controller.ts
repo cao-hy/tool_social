@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import {
   checkProxyAwareNetwork,
-  createProxyAwareFetch,
+  createDirectFetch,
   maskProxyUrl,
   resolveWorkspaceProxyConfig,
   publicProxyConfig,
@@ -36,6 +36,7 @@ import { getRequestId } from '../../common/request-context';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { KEYRING } from '../../infrastructure/tokens';
 import { AuditService } from '../audit/audit.service';
+import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
 
 const updateProxySchema = z
   .object({
@@ -74,17 +75,47 @@ export class SystemController {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(KEYRING) private readonly keyring: Keyring,
     @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(AdapterRegistryFactory) private readonly adapterFactory: AdapterRegistryFactory,
   ) {}
 
   @Get('network')
   async getNetworkStatus(@Req() request: FastifyRequest & AuthenticatedRequest) {
     const workspaceId = requireMembership(request).workspaceId;
     const proxyConfig = await this.workspaceProxyConfig(workspaceId);
-    const status = await checkProxyAwareNetwork(proxyConfig, createProxyAwareFetch(proxyConfig));
-    await this.rememberLastCheck(workspaceId, status);
+    let status: Partial<Awaited<ReturnType<typeof checkProxyAwareNetwork>>> = {};
+
+    try {
+      const ctx = await this.adapterFactory.forWorkspace(workspaceId);
+      if (ctx.proxy.enabled && ctx.proxy.attestation) {
+        status = {
+          checkOk: true,
+          checkedAt: ctx.proxy.attestation.checkedAt,
+          ip: ctx.proxy.attestation.ip,
+          countryCode: ctx.proxy.attestation.countryCode,
+          provider: ctx.proxy.attestation.provider,
+          proxyAvailable: true,
+          proxyActive: true,
+          countryLockSatisfied: true,
+        };
+      } else {
+        status = await checkProxyAwareNetwork(proxyConfig, createDirectFetch());
+      }
+    } catch (err: unknown) {
+      status = {
+        checkOk: false,
+        checkedAt: new Date().toISOString(),
+        checkError: err instanceof Error ? err.message : String(err),
+        proxyAvailable: false,
+        proxyActive: false,
+        countryLockSatisfied: false,
+      };
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await this.rememberLastCheck(workspaceId, status as any);
     return {
       ...status,
-      proxyConfig: publicProxyConfig(status.proxyConfig),
+      proxyConfig: publicProxyConfig(proxyConfig),
       ip: status.ip ?? 'Unknown',
       country: status.country ?? 'Unknown',
       city: status.city ?? 'Unknown',
@@ -133,29 +164,45 @@ export class SystemController {
       ? encryptToken(nextStoredProxyUrl, this.keyring)
       : null;
 
-    const savedSetting = await this.prisma.workspaceProxySetting.upsert({
-      where: { workspaceId },
-      create: {
-        workspaceId,
-        enabled: config.enabled ?? currentSetting?.enabled ?? false,
-        countryLock:
-          config.countryLock === undefined
-            ? (currentSetting?.countryLock ?? null)
-            : config.countryLock,
-        proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
-        proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
-      },
-      update: {
-        enabled: config.enabled ?? currentSetting?.enabled ?? false,
-        countryLock:
-          config.countryLock === undefined
-            ? (currentSetting?.countryLock ?? null)
-            : config.countryLock,
-        proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
-        proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
-        configVersion: { increment: 1 },
-      },
-    });
+    const savedSetting =
+      config.version === undefined
+        ? await this.prisma.workspaceProxySetting.create({
+            data: {
+              workspaceId,
+              enabled: config.enabled ?? currentSetting?.enabled ?? false,
+              countryLock:
+                config.countryLock === undefined
+                  ? (currentSetting?.countryLock ?? null)
+                  : config.countryLock,
+              proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+              proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
+              configVersion: 1,
+            },
+          })
+        : (
+              await this.prisma.workspaceProxySetting.updateMany({
+                where: { workspaceId, configVersion: config.version },
+                data: {
+                  enabled: config.enabled ?? currentSetting?.enabled ?? false,
+                  countryLock:
+                    config.countryLock === undefined
+                      ? (currentSetting?.countryLock ?? null)
+                      : config.countryLock,
+                  proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+                  proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
+                  configVersion: { increment: 1 },
+                },
+              })
+            ).count > 0
+          ? await this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId } })
+          : null;
+
+    if (!savedSetting) {
+      throw new HttpException(
+        'Cấu hình đã bị thay đổi bởi người khác, vui lòng tải lại trang.',
+        409,
+      );
+    }
 
     const updated = resolveWorkspaceProxyConfig(savedSetting, (ciphertext) =>
       decryptToken(ciphertext, this.keyring),
@@ -241,7 +288,7 @@ function changedFields(before: ProxyConfig, after: ProxyConfig): string[] {
 function isSupportedProxyUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return ['http:', 'https:', 'socks:', 'socks5:'].includes(url.protocol);
+    return ['http:', 'https:'].includes(url.protocol);
   } catch {
     return false;
   }

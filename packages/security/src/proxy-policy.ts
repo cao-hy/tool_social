@@ -51,20 +51,10 @@ export function computeProxyFingerprint(proxyUrl: string, secret: string): strin
 }
 
 export class ProxyPolicyService {
-  private readonly fingerprintSecret: string;
-
-  constructor(private readonly cache: ProxyPolicyCache) {
-    // eslint-disable-next-line no-restricted-properties
-    const secret = process.env.PROXY_FINGERPRINT_SECRET;
-    if (!secret) {
-      throw new Error('PROXY_FINGERPRINT_SECRET is required');
-    }
-    const decoded = Buffer.from(secret, 'base64');
-    if (decoded.length < 32) {
-      throw new Error('PROXY_FINGERPRINT_SECRET phải có tối thiểu 32 byte sau khi decode base64.');
-    }
-    this.fingerprintSecret = secret;
-  }
+  constructor(
+    private readonly cache: ProxyPolicyCache,
+    private readonly fingerprintSecret: string,
+  ) {}
 
   async getAttestation(
     workspaceId: string,

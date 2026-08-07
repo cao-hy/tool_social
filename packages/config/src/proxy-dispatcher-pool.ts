@@ -1,17 +1,23 @@
 import { type Dispatcher, ProxyAgent, Pool } from 'undici';
-import { Socks5ProxyAgent } from 'undici';
 import type { ValidatedProxyEndpoint, ProxyGatewayAddress } from '@socialhub/security';
 import QuickLRU from 'quick-lru';
+import { createHmac } from 'node:crypto';
 
-export class ProxyDispatcherLease {
-  constructor(
-    public readonly dispatcher: Dispatcher,
-    private readonly releaseCb: () => void,
-  ) {}
-
-  release() {
-    this.releaseCb();
+export class UnsupportedProxyProtocolError extends Error {
+  readonly code = 'UNSUPPORTED_PROXY_PROTOCOL';
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnsupportedProxyProtocolError';
   }
+}
+
+export interface ProxyRequestLease {
+  release(): void;
+}
+
+export interface ProxyDispatcherHandle {
+  readonly dispatcher: Dispatcher;
+  acquireRequestLease(): ProxyRequestLease;
 }
 
 export interface ProxyDispatcherEntry {
@@ -23,8 +29,13 @@ export interface ProxyDispatcherEntry {
 
 export class ProxyDispatcherPool {
   private dispatchers: QuickLRU<string, ProxyDispatcherEntry>;
+  private cleanupTimer: NodeJS.Timeout;
+  private isClosed = false;
 
-  constructor(maxSize = 100) {
+  constructor(
+    private readonly fingerprintSecret: string,
+    maxSize = 100,
+  ) {
     this.dispatchers = new QuickLRU<string, ProxyDispatcherEntry>({
       maxSize,
       onEviction: (_key, entry) => {
@@ -32,32 +43,83 @@ export class ProxyDispatcherPool {
         this.checkEviction(entry);
       },
     });
+
+    // Cleanup idle connections
+    this.cleanupTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of this.dispatchers.entries()) {
+        if (entry.activeRequests === 0 && now - entry.lastUsedAt > 60000) {
+          entry.evictWhenIdle = true;
+          this.checkEviction(entry);
+          if (entry.evictWhenIdle && entry.activeRequests === 0) {
+            this.dispatchers.delete(key);
+          }
+        }
+      }
+    }, 30000).unref();
   }
 
-  async acquire(endpoint: ValidatedProxyEndpoint): Promise<ProxyDispatcherLease> {
-    const key = endpoint.normalizedUrl;
+  async acquire(endpoint: ValidatedProxyEndpoint): Promise<ProxyDispatcherHandle> {
+    if (this.isClosed) throw new Error('ProxyDispatcherPool is closed');
+
+    // Reject SOCKS outright
+    if (endpoint.protocol.startsWith('socks')) {
+      throw new UnsupportedProxyProtocolError('SOCKS proxy is temporarily disabled.');
+    }
+
+    const gatewayAddressesKey = endpoint.gatewayAddresses
+      .map((a) => `${a.address}:${a.family}`)
+      .sort()
+      .join(',');
+
+    const cacheKeySource = `${endpoint.normalizedUrl}|${gatewayAddressesKey}`;
+    const key = createHmac('sha256', this.fingerprintSecret).update(cacheKeySource).digest('hex');
+
     let entry = this.dispatchers.get(key);
 
     if (!entry) {
-      const dispatcher = endpoint.protocol.startsWith('socks')
-        ? this.createPinnedSocksProxyDispatcher(endpoint)
-        : this.createPinnedHttpProxyDispatcher(endpoint);
-
+      const dispatcher = this.createPinnedHttpProxyDispatcher(endpoint);
       entry = { dispatcher, activeRequests: 0, lastUsedAt: Date.now(), evictWhenIdle: false };
       this.dispatchers.set(key, entry);
     }
 
-    entry.activeRequests++;
     entry.lastUsedAt = Date.now();
 
-    return new ProxyDispatcherLease(entry.dispatcher, () => {
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      entry!.activeRequests--;
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      entry!.lastUsedAt = Date.now();
-      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      this.checkEviction(entry!);
-    });
+    // The handle gives you a way to lease it for ONE request
+    // We bind entry so it's always referring to the same object
+    const handle: ProxyDispatcherHandle = {
+      dispatcher: entry.dispatcher,
+      acquireRequestLease: () => {
+        if (!entry) throw new Error('Cannot acquire lease on missing entry');
+        entry.activeRequests++;
+        entry.lastUsedAt = Date.now();
+        let released = false;
+
+        return {
+          release: () => {
+            if (released) return;
+            released = true;
+            if (entry) {
+              entry.activeRequests = Math.max(0, entry.activeRequests - 1);
+              entry.lastUsedAt = Date.now();
+              this.checkEviction(entry);
+            }
+          },
+        };
+      },
+    };
+
+    return handle;
+  }
+
+  closeAll() {
+    this.isClosed = true;
+    clearInterval(this.cleanupTimer);
+    for (const entry of this.dispatchers.values()) {
+      entry.evictWhenIdle = true;
+      this.checkEviction(entry);
+    }
+    this.dispatchers.clear();
   }
 
   private checkEviction(entry: ProxyDispatcherEntry) {
@@ -82,15 +144,6 @@ export class ProxyDispatcherPool {
     });
   }
 
-  private createPinnedSocksProxyDispatcher(endpoint: ValidatedProxyEndpoint): Dispatcher {
-    return new Socks5ProxyAgent(endpoint.normalizedUrl, {
-      connect: {
-        lookup: this.createPinnedLookup(endpoint.hostname, endpoint.gatewayAddresses),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-    });
-  }
-
   private createPinnedLookup(expectedHostname: string, gatewayAddresses: ProxyGatewayAddress[]) {
     return (
       hostname: string,
@@ -103,8 +156,6 @@ export class ProxyDispatcherPool {
         family?: number,
       ) => void,
     ) => {
-      // Undici passes the proxy hostname to lookup, not the target hostname.
-      // So we can assert that it matches the expected proxy hostname.
       if (hostname !== expectedHostname) {
         return callback(
           new Error(`Unexpected lookup for ${hostname} (expected proxy ${expectedHostname})`),
