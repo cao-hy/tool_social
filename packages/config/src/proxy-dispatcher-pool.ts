@@ -96,9 +96,9 @@ export class ProxyDispatcherPool {
       hostname: string,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       options: any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       callback: (
         err: NodeJS.ErrnoException | null,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         address?: string | any[],
         family?: number,
       ) => void,
