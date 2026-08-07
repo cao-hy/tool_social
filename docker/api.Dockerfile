@@ -26,8 +26,8 @@ COPY . .
 RUN npx prisma generate --schema packages/db/prisma/schema.prisma
 RUN npm run build -w @socialhub/shared \
  && npm run build -w @socialhub/security \
- && npm run build -w @socialhub/config \
  && npm run build -w @socialhub/platform-adapters \
+ && npm run build -w @socialhub/config \
  && npx tsc -p packages/db/tsconfig.build.json \
  && npm run build -w @socialhub/api
 RUN npm prune --omit=dev --include=optional --ignore-scripts \
