@@ -12,6 +12,7 @@ COPY packages/config/package.json ./packages/config/
 COPY packages/security/package.json ./packages/security/
 COPY packages/db/package.json ./packages/db/
 COPY packages/platform-adapters/package.json ./packages/platform-adapters/
+COPY packages/social-runtime/package.json ./packages/social-runtime/
 COPY apps/api/package.json ./apps/api/
 COPY apps/web/package.json ./apps/web/
 COPY apps/worker/package.json ./apps/worker/
@@ -25,8 +26,8 @@ RUN npm run build -w @socialhub/shared \
  && npm run build -w @socialhub/security \
  && npm run build -w @socialhub/platform-adapters \
  && npm run build -w @socialhub/config \
- && npm run build -w @socialhub/social-runtime \
  && npx tsc -p packages/db/tsconfig.build.json \
+ && npm run build -w @socialhub/social-runtime \
  && npm run build -w @socialhub/worker
 RUN npm prune --omit=dev --include=optional --ignore-scripts \
  && npm install --omit=dev --include=optional --ignore-scripts --os=linux --libc=musl --cpu=x64 sharp@0.35.3 \
