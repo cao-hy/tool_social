@@ -67,9 +67,8 @@ export class ProxyRuntimeService {
         configVersion,
         async () => {
           const fetchImpl = dispatcherHandle
-            ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-              createProxiedFetch(
-                { ...proxyConfig, enabled: true, proxyUrl: proxyConfig.proxyUrl! },
+            ? createProxiedFetch(
+                { ...proxyConfig, enabled: true, proxyUrl: proxyConfig.proxyUrl as string },
                 dispatcherHandle,
               )
             : createDirectFetch();

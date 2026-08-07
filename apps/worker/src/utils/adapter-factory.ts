@@ -33,9 +33,8 @@ export class WorkerAdapterFactory {
     );
 
     const fetchImpl = ctx.dispatcherHandle
-      ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        createProxiedFetch(
-          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl! },
+      ? createProxiedFetch(
+          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl as string },
           ctx.dispatcherHandle,
         )
       : createDirectFetch(); // Default global fetch or direct fetch if proxy is off

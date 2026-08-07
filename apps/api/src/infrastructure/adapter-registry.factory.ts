@@ -42,9 +42,8 @@ export class AdapterRegistryFactory {
     );
 
     const fetchImpl = ctx.dispatcherHandle
-      ? // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        createProxiedFetch(
-          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl! },
+      ? createProxiedFetch(
+          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl as string },
           ctx.dispatcherHandle,
         )
       : fetch;
