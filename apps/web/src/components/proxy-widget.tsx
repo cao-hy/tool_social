@@ -15,13 +15,14 @@ type NetworkStatus = {
   provider: string | null;
   checkOk: boolean;
   checkError: string | null;
-  checkErrors: string[];
+  checkErrors?: string[];
   proxyConfig: {
     enabled: boolean;
     countryLock: string | null;
     proxyUrlMasked?: string | null;
     source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
     version?: number;
+    configVersion?: number;
   };
   proxyAvailable: boolean;
   proxyActive: boolean;
@@ -63,6 +64,7 @@ export function ProxyWidget({
     countryLock: string | null;
     proxyUrl?: string | null;
     version?: number;
+    configVersion?: number;
   } | null>(null);
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
   const [clearProxyUrl, setClearProxyUrl] = useState(false);
@@ -114,6 +116,7 @@ export function ProxyWidget({
   async function handleSaveConfig() {
     if (!pendingConfig) return;
     setLoading(true);
+    const configVer = pendingConfig.configVersion ?? pendingConfig.version;
     try {
       await systemApi.toggleProxy(workspaceId, {
         enabled: pendingConfig.enabled,
@@ -123,7 +126,8 @@ export function ProxyWidget({
           : proxyUrlDraft.trim()
             ? { proxyUrl: proxyUrlDraft.trim() }
             : {}),
-        version: pendingConfig.version,
+        configVersion: configVer,
+        version: configVer,
       });
       await fetchStatus({ syncDraft: true });
       setOpen(false);
@@ -381,9 +385,9 @@ export function ProxyWidget({
                       ? `Proxy đang tắt; ${savedCountryLock} chỉ là target đã lưu cho lần bật sau.`
                       : 'Khóa quốc gia chỉ kiểm tra IP hiện tại; nó không tự đổi vị trí proxy.'}
           </div>
-          {isNetworkUnknown && status.checkErrors.length > 0 ? (
+          {isNetworkUnknown && (status.checkErrors?.length ?? 0) > 0 ? (
             <div className="mt-2 rounded-md bg-amber-50 px-2 py-2 text-[11px] text-amber-800">
-              {status.checkErrors.map((error) => (
+              {status.checkErrors?.map((error) => (
                 <div key={error} className="break-words">
                   {error}
                 </div>

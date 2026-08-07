@@ -65,11 +65,11 @@ describe('ProxyDispatcherPool', () => {
     vi.advanceTimersByTime(61000);
     expect(closeSpy).not.toHaveBeenCalled();
 
-    // Release lease
     lease.release();
+    handle.release();
 
-    // Đợi thêm 1 khoảng idle timeout nữa
-    vi.advanceTimersByTime(95000);
+    // Đợi thêm 1 khoảng idle timeout (15+ phút)
+    vi.advanceTimersByTime(16 * 60 * 1000);
 
     // Dispatcher.close phải được gọi
     expect(closeSpy).toHaveBeenCalled();

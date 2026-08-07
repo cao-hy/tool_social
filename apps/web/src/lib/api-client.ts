@@ -144,6 +144,7 @@ export const systemApi = {
         proxyUrlMasked?: string | null;
         source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
         version?: number;
+        configVersion?: number;
       };
       proxyAvailable: boolean;
       proxyActive: boolean;
@@ -158,6 +159,7 @@ export const systemApi = {
         proxyUrlMasked?: string | null;
         source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
         version?: number;
+        configVersion?: number;
       };
       proxyAvailable: boolean;
       summary: { total: number; proxied: number; direct: number };
@@ -170,6 +172,7 @@ export const systemApi = {
       countryLock?: string | null;
       proxyUrl?: string | null;
       version?: number;
+      configVersion?: number;
     },
   ) =>
     apiFetch<{
@@ -178,6 +181,7 @@ export const systemApi = {
       proxyUrlMasked?: string | null;
       source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
       version?: number;
+      configVersion?: number;
     }>(`/workspaces/${workspaceId}/system/proxy`, {
       method: 'POST',
       body: JSON.stringify(input),

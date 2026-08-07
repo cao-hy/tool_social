@@ -52,7 +52,10 @@ describe('Health & Platforms (e2e)', () => {
             },
           },
         },
-        { provide: RedisService, useValue: { ping: redisPing } },
+        {
+          provide: RedisService,
+          useValue: { ping: redisPing, getClient: vi.fn().mockReturnValue({}) },
+        },
         { provide: ENV, useValue: { SESSION_COOKIE_NAME: 'socialhub.sid' } },
         {
           provide: KEYRING,

@@ -15,6 +15,7 @@ import {
   maskProxyUrl,
   resolveWorkspaceProxyConfig,
   publicProxyConfig,
+  ProxyRuntimeService,
 } from '@socialhub/config';
 import {
   NETWORK_PROXY_POLICIES,
@@ -22,21 +23,29 @@ import {
   type NetworkProxyPolicyItem,
   type ProxyConfig,
 } from '@socialhub/shared';
-import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
+import {
+  decryptToken,
+  encryptToken,
+  ProxyEndpointValidator,
+  ProxyPolicyService,
+  RedisProxyPolicyCache,
+  type Keyring,
+} from '@socialhub/security';
+import dns from 'node:dns/promises';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { AuthenticatedRequest } from '../../common/auth/auth.types';
-import { requireMembership, requireUser } from '../../common/auth/request-auth';
+import { requireMembership } from '../../common/auth/request-auth';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
 import { AuthGuard } from '../../common/guards/auth.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
 import { WorkspaceGuard } from '../../common/guards/workspace.guard';
 import { zodPipe } from '../../common/pipes/zod-validation.pipe';
-import { getRequestId } from '../../common/request-context';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { KEYRING } from '../../infrastructure/tokens';
 import { AuditService } from '../audit/audit.service';
-import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
+import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
+import { RedisService } from '../../infrastructure/redis/redis.service';
 
 const updateProxySchema = z
   .object({
@@ -45,7 +54,7 @@ const updateProxySchema = z
       .string()
       .trim()
       .min(1)
-      .refine(isSupportedProxyUrl, 'Proxy URL phải bắt đầu bằng http://, https:// hoặc socks5://.')
+      .refine(isSupportedProxyUrl, 'Proxy URL phải bắt đầu bằng http:// hoặc https://.')
       .nullable()
       .optional(),
     countryLock: z
@@ -55,13 +64,14 @@ const updateProxySchema = z
       .transform((value) => value.toUpperCase())
       .nullable()
       .optional(),
-    version: z
+    configVersion: z
       .number()
       .int()
       .nonnegative(
-        'Cần version để tránh race condition (lấy từ configVersion của setting hiện tại)',
+        'Cần configVersion để tránh race condition (lấy từ configVersion của setting hiện tại)',
       )
       .optional(),
+    version: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -71,12 +81,35 @@ type UpdateProxyInput = z.infer<typeof updateProxySchema>;
 @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
 @RequirePermissions('workspace:update')
 export class SystemController {
+  private proxyRuntimeInstance?: ProxyRuntimeService;
+  private readonly endpointValidator: ProxyEndpointValidator;
+
   constructor(
+    @Inject(ENV) private readonly env: ApiEnv,
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(KEYRING) private readonly keyring: Keyring,
     @Inject(AuditService) private readonly audit: AuditService,
-    @Inject(AdapterRegistryFactory) private readonly adapterFactory: AdapterRegistryFactory,
-  ) {}
+    @Inject(RedisService) private readonly redisService: RedisService,
+  ) {
+    this.endpointValidator = new ProxyEndpointValidator(dns);
+  }
+
+  private get proxyRuntime(): ProxyRuntimeService {
+    if (!this.proxyRuntimeInstance) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const redisClient = this.redisService?.getClient
+        ? this.redisService.getClient()
+        : ({} as any);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const policyCache = new RedisProxyPolicyCache(redisClient as any);
+      const policyService = new ProxyPolicyService(policyCache, this.env.PROXY_FINGERPRINT_SECRET);
+      this.proxyRuntimeInstance = new ProxyRuntimeService(
+        policyService,
+        this.env.PROXY_FINGERPRINT_SECRET,
+      );
+    }
+    return this.proxyRuntimeInstance;
+  }
 
   @Get('network')
   async getNetworkStatus(@Req() request: FastifyRequest & AuthenticatedRequest) {
@@ -85,14 +118,20 @@ export class SystemController {
     let status: Partial<Awaited<ReturnType<typeof checkProxyAwareNetwork>>> = {};
 
     try {
-      const ctx = await this.adapterFactory.forWorkspace(workspaceId);
-      if (ctx.proxy.enabled && ctx.proxy.attestation) {
+      const prepared = await this.proxyRuntime.prepareWorkspace(
+        workspaceId,
+        (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
+        (ciphertext) => decryptToken(ciphertext, this.keyring),
+        { forceAttestation: true },
+      );
+
+      if (prepared.attestation) {
         status = {
           checkOk: true,
-          checkedAt: ctx.proxy.attestation.checkedAt,
-          ip: ctx.proxy.attestation.ip,
-          countryCode: ctx.proxy.attestation.countryCode,
-          provider: ctx.proxy.attestation.provider,
+          checkedAt: prepared.attestation.checkedAt,
+          ip: prepared.attestation.ip,
+          countryCode: prepared.attestation.countryCode,
+          provider: prepared.attestation.provider,
           proxyAvailable: true,
           proxyActive: true,
           countryLockSatisfied: true,
@@ -146,109 +185,118 @@ export class SystemController {
           ? config.proxyUrl.trim()
           : null;
 
+    if (nextStoredProxyUrl) {
+      await this.endpointValidator.validate(nextStoredProxyUrl);
+    }
+
+    const versionInput = config.configVersion ?? config.version;
     // eslint-disable-next-line no-restricted-properties
     const allowLegacyUpdate = process.env.ALLOW_LEGACY_PROXY_UPDATE_WITHOUT_VERSION === 'true';
 
-    if (currentSetting && config.version === undefined) {
-      if (!allowLegacyUpdate) {
-        throw new HttpException('Missing config version', 400);
-      }
-    } else if (currentSetting && currentSetting.configVersion !== config.version) {
-      throw new HttpException(
-        'Cấu hình đã bị thay đổi bởi người khác, vui lòng tải lại trang.',
-        409,
-      );
+    if (currentSetting && versionInput === undefined && !allowLegacyUpdate) {
+      throw new HttpException('Missing config version', 400);
     }
+
+    const expectedVersion = versionInput ?? currentSetting?.configVersion;
 
     const encryptedProxyUrl = nextStoredProxyUrl
       ? encryptToken(nextStoredProxyUrl, this.keyring)
       : null;
 
-    const savedSetting =
-      config.version === undefined
-        ? await this.prisma.workspaceProxySetting.create({
-            data: {
-              workspaceId,
-              enabled: config.enabled ?? currentSetting?.enabled ?? false,
-              countryLock:
-                config.countryLock === undefined
-                  ? (currentSetting?.countryLock ?? null)
-                  : config.countryLock,
-              proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
-              proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
-              configVersion: 1,
-            },
-          })
-        : (
-              await this.prisma.workspaceProxySetting.updateMany({
-                where: { workspaceId, configVersion: config.version },
-                data: {
-                  enabled: config.enabled ?? currentSetting?.enabled ?? false,
-                  countryLock:
-                    config.countryLock === undefined
-                      ? (currentSetting?.countryLock ?? null)
-                      : config.countryLock,
-                  proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
-                  proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
-                  configVersion: { increment: 1 },
-                },
-              })
-            ).count > 0
-          ? await this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId } })
-          : null;
+    let savedSetting = null;
 
-    if (!savedSetting) {
-      throw new HttpException(
-        'Cấu hình đã bị thay đổi bởi người khác, vui lòng tải lại trang.',
-        409,
-      );
+    if (!currentSetting) {
+      if (versionInput !== undefined && versionInput !== 0) {
+        throw new HttpException('Config version mismatch on initial creation', 409);
+      }
+
+      try {
+        savedSetting = await this.prisma.workspaceProxySetting.create({
+          data: {
+            workspaceId,
+            enabled: config.enabled ?? false,
+            countryLock: config.countryLock ?? null,
+            proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+            proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
+            configVersion: 1,
+          },
+        });
+      } catch (_error) {
+        throw new HttpException('Config version conflict during creation', 409);
+      }
+    } else {
+      const updateResult = await this.prisma.workspaceProxySetting.updateMany({
+        where: {
+          workspaceId,
+          ...(allowLegacyUpdate && versionInput === undefined
+            ? {}
+            : { configVersion: expectedVersion }),
+        },
+        data: {
+          enabled: config.enabled ?? currentSetting.enabled,
+          countryLock:
+            config.countryLock === undefined ? currentSetting.countryLock : config.countryLock,
+          proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+          proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
+          configVersion: { increment: 1 },
+        },
+      });
+
+      if (updateResult.count === 0) {
+        throw new HttpException(
+          'Cấu hình đã bị thay đổi bởi người khác, vui lòng tải lại trang.',
+          409,
+        );
+      }
+
+      savedSetting = await this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId } });
     }
 
-    const updated = resolveWorkspaceProxyConfig(savedSetting, (ciphertext) =>
+    if (!savedSetting) {
+      throw new HttpException('Không thể lưu cấu hình proxy', 500);
+    }
+
+    const nextConfig = resolveWorkspaceProxyConfig(savedSetting, (ciphertext) =>
       decryptToken(ciphertext, this.keyring),
     );
 
+    const changes = changedFields(current, nextConfig);
+
     await this.audit.record({
-      ...this.auditContext(request),
       workspaceId,
-      actorUserId: requireUser(request).id,
+      actorUserId: requireMembership(request).userId,
+      actorIp: request.ip,
+      actorUserAgent: request.headers['user-agent'],
       action: 'PROXY_CONFIG_UPDATED',
       resourceType: 'WorkspaceProxySetting',
       resourceId: workspaceId,
-      before: publicProxyConfig(current),
-      after: publicProxyConfig(updated),
       metadata: {
-        changedFields: changedFields(current, updated),
+        changes,
+        enabled: nextConfig.enabled,
+        countryLock: nextConfig.countryLock,
+        proxyUrlMasked: nextConfig.proxyUrlMasked,
+        source: nextConfig.source,
+        configVersion: nextConfig.version,
       },
     });
 
-    response.header('X-Proxy-Version', updated.version?.toString() ?? '0');
-    return publicProxyConfig(updated);
+    response.header('x-proxy-version', String(nextConfig.version ?? 1));
+    return publicProxyConfig(nextConfig);
   }
 
   @Get('proxy-policy')
-  async getProxyPolicy(@Req() request: FastifyRequest & AuthenticatedRequest): Promise<{
-    generatedAt: string;
-    proxyConfig: ProxyConfig;
-    proxyAvailable: boolean;
+  async getProxyPolicies(@Req() request: FastifyRequest & AuthenticatedRequest): Promise<{
+    policies: NetworkProxyPolicyItem[];
     summary: ReturnType<typeof summarizeNetworkProxyPolicies>;
-    items: readonly NetworkProxyPolicyItem[];
+    proxyConfig: ReturnType<typeof publicProxyConfig>;
+    proxyAvailable: boolean;
   }> {
     const proxyConfig = await this.workspaceProxyConfig(requireMembership(request).workspaceId);
     return {
-      generatedAt: new Date().toISOString(),
+      policies: [...NETWORK_PROXY_POLICIES],
+      summary: summarizeNetworkProxyPolicies(),
       proxyConfig: publicProxyConfig(proxyConfig),
       proxyAvailable: Boolean(proxyConfig.proxyUrl),
-      summary: summarizeNetworkProxyPolicies(),
-      items: NETWORK_PROXY_POLICIES,
-    };
-  }
-
-  private auditContext(request: FastifyRequest) {
-    return {
-      actorIp: request.ip,
-      actorUserAgent: request.headers['user-agent'],
-      requestId: getRequestId(request),
     };
   }
 
@@ -256,7 +304,6 @@ export class SystemController {
     const setting = await this.prisma.workspaceProxySetting.findUnique({
       where: { workspaceId },
     });
-
     return resolveWorkspaceProxyConfig(setting, (ciphertext) =>
       decryptToken(ciphertext, this.keyring),
     );
@@ -264,8 +311,10 @@ export class SystemController {
 
   private async rememberLastCheck(
     workspaceId: string,
-    status: Awaited<ReturnType<typeof checkProxyAwareNetwork>>,
+    status: Partial<Awaited<ReturnType<typeof checkProxyAwareNetwork>>>,
   ) {
+    if (!status.checkedAt) return;
+
     await this.prisma.workspaceProxySetting.updateMany({
       where: { workspaceId },
       data: {

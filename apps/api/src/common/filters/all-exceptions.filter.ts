@@ -30,16 +30,21 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     const { status, code, message, details, logLevel } = this.normalize(exception);
 
+    const safeName = exception instanceof Error ? exception.name : 'Error';
+    const safeMessage =
+      exception instanceof Error ? scrubSecretsFromText(exception.message) : String(exception);
+    const safeStack =
+      status >= 500 && exception instanceof Error
+        ? scrubSecretsFromText(exception.stack ?? '')
+        : undefined;
+
     logger[logLevel](
       {
         requestId,
         errorCode: code,
         httpStatus: status,
-        err:
-          exception instanceof Error
-            ? { name: exception.name, message: exception.message }
-            : exception,
-        stack: status >= 500 && exception instanceof Error ? exception.stack : undefined,
+        err: { name: safeName, message: safeMessage },
+        stack: safeStack,
       },
       `Request thất bại: ${code}`,
     );

@@ -206,236 +206,242 @@ async function publishPlatformPost(
   });
 
   const adaptersContext = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  const adapters = adaptersContext.adapters;
-  const adapter = adapters.get(platformPost.platform);
-  if (
-    platformPost.socialAccount.scopes.includes('development-fixture') &&
-    !(adapter instanceof DevelopmentFixtureAdapter)
-  ) {
-    const message =
-      'Social account này được tạo bằng development fixture. Hãy disconnect và kết nối lại bằng OAuth thật trước khi publish.';
-    await markFailed(input.prisma, platformPost.id, 'ACCOUNT_RECONNECT_REQUIRED', message);
-    await input.prisma.socialAccount.update({
-      where: { id: platformPost.socialAccountId },
-      data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
-    });
-    await updateParentStatus(input.prisma, platformPost.contentPostId);
-    return { published: false, reason: 'fixture_account_with_real_adapter' };
-  }
-
-  const publishNetworkProof = adaptersContext.proxy?.attestation || null;
-
   try {
-    const accessToken = await getFreshAccessToken({
-      prisma: input.prisma,
-      keyring: input.keyring,
-      locks: input.locks,
-      adapter,
-      account: {
-        id: platformPost.socialAccount.id,
-        workspaceId: platformPost.socialAccount.workspaceId,
-        platform: platformPost.socialAccount.platform,
-        token: platformPost.socialAccount.token,
-      },
-    });
-    const sourceMedia =
-      platformPost.media.length > 0 ? platformPost.media : platformPost.contentPost.media;
-    const options = jsonObject(platformPost.options);
-    const media = await Promise.all(
-      sourceMedia
-        .filter((item) => item.mediaAsset.status === 'READY')
-        .map((item) => mediaInputFromAsset(input.storage, item.mediaAsset)),
-    );
-    const thumbnail = await thumbnailInputFromOptions({
-      storage: input.storage,
-      prisma: input.prisma,
-      workspaceId: payload.workspaceId,
-      platform: platformPost.platform,
-      options,
-      sourceMedia,
-    });
-    logger.info(
-      {
-        correlationId: payload.correlationId,
-        platformPostId: platformPost.id,
-        platform: platformPost.platform,
-        mediaCount: media.length,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        media: platformPost.contentPost.media.map((item: any, index: number) => ({
-          index,
-          type: item.type,
-          mimeType: item.mimeType,
-          sizeBytes: item.sizeBytes,
-          byteLength: item.bytes?.byteLength ?? 0,
-        })),
-        thumbnailSelection: {
-          mode:
-            options?.thumbnailMode ??
-            (platformPost.platform === 'FACEBOOK' && thumbnail ? 'GENERATED_FALLBACK' : undefined),
-          mediaAssetId: options?.thumbnailMediaAssetId,
-        },
-        thumbnail: thumbnail
-          ? {
-              type: thumbnail.type,
-              mimeType: thumbnail.mimeType,
-              sizeBytes: thumbnail.sizeBytes,
-              byteLength: thumbnail.bytes?.byteLength ?? 0,
-            }
-          : undefined,
-      },
-      'Chuẩn bị media trước khi gọi platform publish',
-    );
-
-    const publishInput = {
-      caption: platformPost.caption ?? platformPost.contentPost.body ?? undefined,
-      title: platformPost.title ?? platformPost.contentPost.title ?? undefined,
-      description: platformPost.description ?? platformPost.contentPost.body ?? undefined,
-      linkUrl: platformPost.linkUrl ?? platformPost.contentPost.linkUrl ?? undefined,
-      hashtags: platformPost.contentPost.hashtags,
-      media,
-      thumbnail,
-      options,
-    };
-
-    const validation = adapter.validatePost(publishInput);
-    if (!validation.valid) {
-      await markFailed(
-        input.prisma,
-        platformPost.id,
-        'VALIDATION',
-        validation.issues
-          .map((issue: { field: string; message: string }) => `${issue.field}: ${issue.message}`)
-          .join('; '),
-      );
-      await updateParentStatus(input.prisma, platformPost.contentPostId);
-      return { published: false, reason: 'validation' };
-    }
-
-    const adapterContext = {
-      accessToken,
-      externalAccountId: platformPost.socialAccount.externalAccountId,
-      externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-      correlationId: payload.correlationId,
-      logger: adapterLogger,
-    } satisfies AdapterContext;
-
-    // (Proxy validity is already attested by ProxyRuntimeService)
-
-    const result = await adapter.publishPost(adapterContext, publishInput);
-    const platformState = await platformStateAfterPublish(
-      adapter,
-      adapterContext,
-      result.externalPostId,
-    );
-    const platformStateWithNetwork = mergePlatformStateWithNetworkProof(
-      platformState,
-      publishNetworkProof,
-    );
-
-    await input.prisma.$transaction([
-      input.prisma.platformPost.update({
-        where: { id: platformPost.id },
-        data: {
-          status: 'PUBLISHED',
-          externalPostId: result.externalPostId,
-          externalUrl: result.externalUrl,
-          publishedAt: result.publishedAt,
-          errorCode: null,
-          errorMessage: null,
-          platformState: platformStateWithNetwork as Prisma.InputJsonValue,
-        },
-      }),
-      input.prisma.auditLog.create({
-        data: {
-          workspaceId: payload.workspaceId,
-          actorUserId: platformPost.contentPost.createdById,
-          action: 'POST_PUBLISHED',
-          resourceType: 'PlatformPost',
-          resourceId: platformPost.id,
-          metadata: {
-            platform: platformPost.platform,
-            externalPostId: result.externalPostId,
-            jobId: job.id,
-            publishNetwork: publishNetworkProof,
-          } as unknown as Prisma.InputJsonValue,
-        },
-      }),
-      input.prisma.notification.create({
-        data: {
-          workspaceId: payload.workspaceId,
-          userId: platformPost.contentPost.createdById,
-          type: 'POST_PUBLISHED',
-          title: 'Bài đăng đã publish',
-          body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name} đã publish thành công.`,
-          linkUrl: `/posts/${platformPost.contentPostId}`,
-          data: {
-            platformPostId: platformPost.id,
-            platform: platformPost.platform,
-            accountName: platformPost.socialAccount.name,
-            socialAccountId: platformPost.socialAccountId,
-            externalPostId: result.externalPostId,
-            postTitle: platformPost.contentPost.title,
-          },
-        },
-      }),
-    ]);
-
-    await updateParentStatus(input.prisma, platformPost.contentPostId);
-    return { published: true, externalPostId: result.externalPostId };
-  } catch (error) {
-    const attempt = (job.attemptsMade ?? 0) + 1;
-    const maxAttempts = job.opts?.attempts ?? 1;
-    const decision = decideOnError(error, attempt, maxAttempts);
-    const code = isPlatformError(error) ? error.kind : 'UNKNOWN';
-    const message = error instanceof Error ? error.message : 'Lỗi không xác định khi publish.';
-
-    await input.prisma.platformPost.update({
-      where: { id: platformPost.id },
-      data: {
-        status: decision.action === 'RETRY' ? 'QUEUED' : 'FAILED',
-        errorCode: code,
-        errorMessage: message,
-        platformState: publishNetworkProof
-          ? (mergePlatformStateWithNetworkProof(
-              jsonObject(platformPost.platformState),
-              publishNetworkProof,
-            ) as Prisma.InputJsonValue)
-          : undefined,
-      },
-    });
-
-    if (decision.markAccountDisconnected) {
+    const adapters = adaptersContext.adapters;
+    const adapter = adapters.get(platformPost.platform);
+    if (
+      platformPost.socialAccount.scopes.includes('development-fixture') &&
+      !(adapter instanceof DevelopmentFixtureAdapter)
+    ) {
+      const message =
+        'Social account này được tạo bằng development fixture. Hãy disconnect và kết nối lại bằng OAuth thật trước khi publish.';
+      await markFailed(input.prisma, platformPost.id, 'ACCOUNT_RECONNECT_REQUIRED', message);
       await input.prisma.socialAccount.update({
         where: { id: platformPost.socialAccountId },
         data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
       });
+      await updateParentStatus(input.prisma, platformPost.contentPostId);
+      return { published: false, reason: 'fixture_account_with_real_adapter' };
     }
 
-    if (decision.notifyUser) {
-      await input.prisma.notification.create({
-        data: {
-          workspaceId: payload.workspaceId,
-          userId: platformPost.contentPost.createdById,
-          type: 'POST_FAILED',
-          title: 'Publish thất bại',
-          body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name}: ${message}`,
-          linkUrl: `/posts/${platformPost.contentPostId}`,
-          data: {
-            platformPostId: platformPost.id,
-            platform: platformPost.platform,
-            accountName: platformPost.socialAccount.name,
-            socialAccountId: platformPost.socialAccountId,
-            code,
-            postTitle: platformPost.contentPost.title,
-          },
+    const publishNetworkProof = adaptersContext.proxy?.attestation || null;
+
+    try {
+      const accessToken = await getFreshAccessToken({
+        prisma: input.prisma,
+        keyring: input.keyring,
+        locks: input.locks,
+        adapter,
+        account: {
+          id: platformPost.socialAccount.id,
+          workspaceId: platformPost.socialAccount.workspaceId,
+          platform: platformPost.socialAccount.platform,
+          token: platformPost.socialAccount.token,
         },
       });
+      const sourceMedia =
+        platformPost.media.length > 0 ? platformPost.media : platformPost.contentPost.media;
+      const options = jsonObject(platformPost.options);
+      const media = await Promise.all(
+        sourceMedia
+          .filter((item) => item.mediaAsset.status === 'READY')
+          .map((item) => mediaInputFromAsset(input.storage, item.mediaAsset)),
+      );
+      const thumbnail = await thumbnailInputFromOptions({
+        storage: input.storage,
+        prisma: input.prisma,
+        workspaceId: payload.workspaceId,
+        platform: platformPost.platform,
+        options,
+        sourceMedia,
+      });
+      logger.info(
+        {
+          correlationId: payload.correlationId,
+          platformPostId: platformPost.id,
+          platform: platformPost.platform,
+          mediaCount: media.length,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          media: platformPost.contentPost.media.map((item: any, index: number) => ({
+            index,
+            type: item.type,
+            mimeType: item.mimeType,
+            sizeBytes: item.sizeBytes,
+            byteLength: item.bytes?.byteLength ?? 0,
+          })),
+          thumbnailSelection: {
+            mode:
+              options?.thumbnailMode ??
+              (platformPost.platform === 'FACEBOOK' && thumbnail
+                ? 'GENERATED_FALLBACK'
+                : undefined),
+            mediaAssetId: options?.thumbnailMediaAssetId,
+          },
+          thumbnail: thumbnail
+            ? {
+                type: thumbnail.type,
+                mimeType: thumbnail.mimeType,
+                sizeBytes: thumbnail.sizeBytes,
+                byteLength: thumbnail.bytes?.byteLength ?? 0,
+              }
+            : undefined,
+        },
+        'Chuẩn bị media trước khi gọi platform publish',
+      );
+
+      const publishInput = {
+        caption: platformPost.caption ?? platformPost.contentPost.body ?? undefined,
+        title: platformPost.title ?? platformPost.contentPost.title ?? undefined,
+        description: platformPost.description ?? platformPost.contentPost.body ?? undefined,
+        linkUrl: platformPost.linkUrl ?? platformPost.contentPost.linkUrl ?? undefined,
+        hashtags: platformPost.contentPost.hashtags,
+        media,
+        thumbnail,
+        options,
+      };
+
+      const validation = adapter.validatePost(publishInput);
+      if (!validation.valid) {
+        await markFailed(
+          input.prisma,
+          platformPost.id,
+          'VALIDATION',
+          validation.issues
+            .map((issue: { field: string; message: string }) => `${issue.field}: ${issue.message}`)
+            .join('; '),
+        );
+        await updateParentStatus(input.prisma, platformPost.contentPostId);
+        return { published: false, reason: 'validation' };
+      }
+
+      const adapterContext = {
+        accessToken,
+        externalAccountId: platformPost.socialAccount.externalAccountId,
+        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+        correlationId: payload.correlationId,
+        logger: adapterLogger,
+      } satisfies AdapterContext;
+
+      // (Proxy validity is already attested by ProxyRuntimeService)
+
+      const result = await adapter.publishPost(adapterContext, publishInput);
+      const platformState = await platformStateAfterPublish(
+        adapter,
+        adapterContext,
+        result.externalPostId,
+      );
+      const platformStateWithNetwork = mergePlatformStateWithNetworkProof(
+        platformState,
+        publishNetworkProof,
+      );
+
+      await input.prisma.$transaction([
+        input.prisma.platformPost.update({
+          where: { id: platformPost.id },
+          data: {
+            status: 'PUBLISHED',
+            externalPostId: result.externalPostId,
+            externalUrl: result.externalUrl,
+            publishedAt: result.publishedAt,
+            errorCode: null,
+            errorMessage: null,
+            platformState: platformStateWithNetwork as Prisma.InputJsonValue,
+          },
+        }),
+        input.prisma.auditLog.create({
+          data: {
+            workspaceId: payload.workspaceId,
+            actorUserId: platformPost.contentPost.createdById,
+            action: 'POST_PUBLISHED',
+            resourceType: 'PlatformPost',
+            resourceId: platformPost.id,
+            metadata: {
+              platform: platformPost.platform,
+              externalPostId: result.externalPostId,
+              jobId: job.id,
+              publishNetwork: publishNetworkProof,
+            } as unknown as Prisma.InputJsonValue,
+          },
+        }),
+        input.prisma.notification.create({
+          data: {
+            workspaceId: payload.workspaceId,
+            userId: platformPost.contentPost.createdById,
+            type: 'POST_PUBLISHED',
+            title: 'Bài đăng đã publish',
+            body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name} đã publish thành công.`,
+            linkUrl: `/posts/${platformPost.contentPostId}`,
+            data: {
+              platformPostId: platformPost.id,
+              platform: platformPost.platform,
+              accountName: platformPost.socialAccount.name,
+              socialAccountId: platformPost.socialAccountId,
+              externalPostId: result.externalPostId,
+              postTitle: platformPost.contentPost.title,
+            },
+          },
+        }),
+      ]);
+
+      await updateParentStatus(input.prisma, platformPost.contentPostId);
+      return { published: true, externalPostId: result.externalPostId };
+    } catch (error) {
+      const attempt = (job.attemptsMade ?? 0) + 1;
+      const maxAttempts = job.opts?.attempts ?? 1;
+      const decision = decideOnError(error, attempt, maxAttempts);
+      const code = isPlatformError(error) ? error.kind : 'UNKNOWN';
+      const message = error instanceof Error ? error.message : 'Lỗi không xác định khi publish.';
+
+      await input.prisma.platformPost.update({
+        where: { id: platformPost.id },
+        data: {
+          status: decision.action === 'RETRY' ? 'QUEUED' : 'FAILED',
+          errorCode: code,
+          errorMessage: message,
+          platformState: publishNetworkProof
+            ? (mergePlatformStateWithNetworkProof(
+                jsonObject(platformPost.platformState),
+                publishNetworkProof,
+              ) as Prisma.InputJsonValue)
+            : undefined,
+        },
+      });
+
+      if (decision.markAccountDisconnected) {
+        await input.prisma.socialAccount.update({
+          where: { id: platformPost.socialAccountId },
+          data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
+        });
+      }
+
+      if (decision.notifyUser) {
+        await input.prisma.notification.create({
+          data: {
+            workspaceId: payload.workspaceId,
+            userId: platformPost.contentPost.createdById,
+            type: 'POST_FAILED',
+            title: 'Publish thất bại',
+            body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name}: ${message}`,
+            linkUrl: `/posts/${platformPost.contentPostId}`,
+            data: {
+              platformPostId: platformPost.id,
+              platform: platformPost.platform,
+              accountName: platformPost.socialAccount.name,
+              socialAccountId: platformPost.socialAccountId,
+              code,
+              postTitle: platformPost.contentPost.title,
+            },
+          },
+        });
+      }
+
+      await updateParentStatus(input.prisma, platformPost.contentPostId);
+
+      if (decision.action === 'RETRY') throw error;
+      return { published: false, reason: decision.reason };
     }
-
-    await updateParentStatus(input.prisma, platformPost.contentPostId);
-
-    if (decision.action === 'RETRY') throw error;
-    return { published: false, reason: decision.reason };
+  } finally {
+    await adaptersContext.release();
   }
 }
 

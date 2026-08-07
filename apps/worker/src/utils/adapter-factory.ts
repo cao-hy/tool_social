@@ -1,14 +1,37 @@
 import {
   createProxiedFetch,
+  createDirectFetch,
   ProxyRuntimeService,
-  type WorkerEnv,
-  type WorkspaceAdapterContext,
+  ProxyConfigurationError,
 } from '@socialhub/config';
 import { decryptToken, ProxyPolicyService, RedisProxyPolicyCache } from '@socialhub/security';
 import type { PrismaClient } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import { createRuntimeAdapterRegistry, TIKTOK_OAUTH_SCOPES } from '@socialhub/platform-adapters';
-import { createDirectFetch } from '@socialhub/config';
+import {
+  createRuntimeAdapterRegistry,
+  TIKTOK_OAUTH_SCOPES,
+  type PinterestApiEnvironment,
+} from '@socialhub/platform-adapters';
+import type { WorkspaceAdapterContext } from '@socialhub/config';
+
+export interface WorkerEnv {
+  NODE_ENV: string;
+  PROXY_FINGERPRINT_SECRET: string;
+  FACEBOOK_APP_ID?: string;
+  FACEBOOK_APP_SECRET?: string;
+  FACEBOOK_API_VERSION?: string;
+  FACEBOOK_LOGIN_CONFIG_ID?: string;
+  INSTAGRAM_APP_ID?: string;
+  INSTAGRAM_APP_SECRET?: string;
+  PINTEREST_APP_ID?: string;
+  PINTEREST_APP_SECRET?: string;
+  PINTEREST_DEFAULT_BOARD_NAME?: string;
+  PINTEREST_API_ENVIRONMENT?: string;
+  YOUTUBE_CLIENT_ID?: string;
+  YOUTUBE_CLIENT_SECRET?: string;
+  TIKTOK_CLIENT_KEY?: string;
+  TIKTOK_CLIENT_SECRET?: string;
+}
 
 export class WorkerAdapterFactory {
   private readonly proxyRuntime: ProxyRuntimeService;
@@ -32,12 +55,18 @@ export class WorkerAdapterFactory {
       (ciphertext) => decryptToken(ciphertext, this.keyring),
     );
 
-    const fetchImpl = ctx.dispatcherHandle
-      ? createProxiedFetch(
-          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl as string },
-          ctx.dispatcherHandle,
-        )
-      : createDirectFetch(); // Default global fetch or direct fetch if proxy is off
+    let fetchImpl: typeof fetch;
+    if (!ctx.config.enabled) {
+      fetchImpl = createDirectFetch();
+    } else {
+      if (!ctx.dispatcherHandle) {
+        throw new ProxyConfigurationError('Validated proxy dispatcher is missing.');
+      }
+      fetchImpl = createProxiedFetch(
+        { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl as string },
+        ctx.dispatcherHandle,
+      );
+    }
 
     const adapters = createRuntimeAdapterRegistry({
       nodeEnv: this.env.NODE_ENV,
@@ -57,7 +86,7 @@ export class WorkerAdapterFactory {
         appId: this.env.PINTEREST_APP_ID,
         appSecret: this.env.PINTEREST_APP_SECRET,
         defaultBoardName: this.env.PINTEREST_DEFAULT_BOARD_NAME,
-        environment: this.env.PINTEREST_API_ENVIRONMENT,
+        environment: this.env.PINTEREST_API_ENVIRONMENT as PinterestApiEnvironment | undefined,
       },
       youtube: {
         clientId: this.env.YOUTUBE_CLIENT_ID,
@@ -70,14 +99,21 @@ export class WorkerAdapterFactory {
       },
     });
 
+    let released = false;
+
     return {
       adapters,
-      proxy: {
-        enabled: ctx.config.enabled,
-        configVersion: ctx.configVersion,
-        fingerprint: ctx.fingerprint,
-        attestation: ctx.attestation,
+      proxy: ctx,
+      release: async () => {
+        if (!released) {
+          released = true;
+          ctx.dispatcherHandle?.release();
+        }
       },
     };
+  }
+
+  async close(): Promise<void> {
+    await this.proxyRuntime.closeAll();
   }
 }

@@ -46,6 +46,28 @@ export interface ProxyPolicyCache {
   getLock(): ProxyAttestationLock;
 }
 
+export class ProxyAttestationLockLostError extends Error {
+  readonly code = 'PROXY_ATTESTATION_LOCK_LOST';
+  constructor() {
+    super('Lost attestation lock ownership during check execution');
+    this.name = 'ProxyAttestationLockLostError';
+  }
+}
+
+export function computeProxyRouteFingerprint(
+  proxyUrl: string,
+  gatewayAddresses: { address: string; family: number }[],
+  secret: string,
+): string {
+  const gateways = [...gatewayAddresses]
+    .map((x) => `${x.family}:${x.address}`)
+    .sort()
+    .filter((x, i, arr) => i === 0 || x !== arr[i - 1]);
+
+  const input = ['proxy-route-v1', proxyUrl, ...gateways].join('\0');
+  return createHmac('sha256', secret).update(input).digest('hex');
+}
+
 export function computeProxyFingerprint(proxyUrl: string, secret: string): string {
   return createHmac('sha256', secret).update(proxyUrl).digest('hex');
 }
@@ -61,6 +83,7 @@ export class ProxyPolicyService {
     config: ProxyConfig,
     configVersion: number,
     checkNetworkFn: () => Promise<CheckNetworkResult>,
+    forceAttestation = false,
   ): Promise<ProxyAttestation> {
     if (!config.enabled || !config.proxyUrl) {
       throw new Error('Proxy is not enabled or proxyUrl is missing');
@@ -70,32 +93,49 @@ export class ProxyPolicyService {
     const countryLock = config.countryLock ?? 'none';
     const cacheKey = `proxy-attestation:${workspaceId}:${configVersion}:${fingerprint}:${countryLock}`;
 
-    let cached = await this.cache.get(cacheKey);
-    if (cached) {
-      if (cached.kind === 'FAILURE') throw new Error(cached.safeMessage);
-      return cached.attestation;
+    if (!forceAttestation) {
+      const cached = await this.cache.get(cacheKey);
+      if (cached) {
+        if (cached.kind === 'FAILURE') throw new Error(cached.safeMessage);
+        return cached.attestation;
+      }
     }
 
     const lockKey = `proxy-attestation-lock:${cacheKey}`;
     const token = randomUUID();
     const lock = this.cache.getLock();
-    const locked = await lock.acquire(lockKey, token, 15000);
+    const LOCK_TTL = 30000;
+    const HEARTBEAT_MS = 10000;
+    const SUCCESS_TTL = 120000;
+    const FAILURE_TTL = 10000;
+
+    const locked = await lock.acquire(lockKey, token, LOCK_TTL);
 
     if (!locked) {
       let attempts = 0;
-      while (attempts < 10) {
+      while (attempts < 15) {
         await new Promise((resolve) =>
-          setTimeout(resolve, 100 * Math.pow(1.5, attempts) + Math.random() * 50),
+          setTimeout(resolve, 100 * Math.pow(1.3, attempts) + Math.random() * 50),
         );
-        cached = await this.cache.get(cacheKey);
+        const cached = await this.cache.get(cacheKey);
         if (cached) {
           if (cached.kind === 'FAILURE') throw new Error(cached.safeMessage);
           return cached.attestation;
         }
         attempts++;
       }
-      throw new Error('Timeout waiting for proxy attestation');
+      throw new Error('Timeout waiting for proxy attestation lock');
     }
+
+    let lockOwned = true;
+    const heartbeatTimer = setInterval(async () => {
+      try {
+        const extended = await lock.extend(lockKey, token, LOCK_TTL);
+        if (!extended) lockOwned = false;
+      } catch {
+        lockOwned = false;
+      }
+    }, HEARTBEAT_MS);
 
     try {
       const status = await checkNetworkFn();
@@ -109,35 +149,42 @@ export class ProxyPolicyService {
         );
       }
 
+      if (!lockOwned) {
+        throw new ProxyAttestationLockLostError();
+      }
+
       const attestation: ProxyAttestation = {
         workspaceId,
         configVersion,
         proxyFingerprint: fingerprint,
         checkedAt: status.checkedAt,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+        expiresAt: new Date(Date.now() + SUCCESS_TTL).toISOString(),
         ip: status.ip,
         countryCode: status.countryCode ?? null,
         provider: status.provider ?? 'unknown',
       };
 
-      await this.cache.set(cacheKey, { kind: 'SUCCESS', attestation }, 5 * 60 * 1000);
+      await this.cache.set(cacheKey, { kind: 'SUCCESS', attestation }, SUCCESS_TTL);
       return attestation;
     } catch (error) {
-      const errMessage = error instanceof Error ? error.message : 'Unknown proxy error';
-      await this.cache.set(
-        cacheKey,
-        {
-          kind: 'FAILURE',
-          errorCode: 'CHECK_FAILED',
-          safeMessage: errMessage,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 15000).toISOString(),
-        },
-        15000,
-      );
+      if (lockOwned) {
+        const errMessage = error instanceof Error ? error.message : 'Unknown proxy error';
+        await this.cache.set(
+          cacheKey,
+          {
+            kind: 'FAILURE',
+            errorCode: 'CHECK_FAILED',
+            safeMessage: errMessage,
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + FAILURE_TTL).toISOString(),
+          },
+          FAILURE_TTL,
+        );
+      }
       throw error;
     } finally {
-      await lock.release(lockKey, token);
+      clearInterval(heartbeatTimer);
+      await lock.release(lockKey, token).catch(() => {});
     }
   }
 }

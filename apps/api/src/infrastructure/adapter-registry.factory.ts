@@ -1,5 +1,10 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { createProxiedFetch, ProxyRuntimeService } from '@socialhub/config';
+import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
+import {
+  createProxiedFetch,
+  createDirectFetch,
+  ProxyRuntimeService,
+  ProxyConfigurationError,
+} from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -19,7 +24,7 @@ import { RedisService } from './redis/redis.service';
 import type { WorkspaceAdapterContext } from '@socialhub/config';
 
 @Injectable()
-export class AdapterRegistryFactory {
+export class AdapterRegistryFactory implements OnModuleDestroy {
   private readonly proxyRuntime: ProxyRuntimeService;
 
   constructor(
@@ -34,6 +39,10 @@ export class AdapterRegistryFactory {
     this.proxyRuntime = new ProxyRuntimeService(policyService, this.env.PROXY_FINGERPRINT_SECRET);
   }
 
+  async onModuleDestroy() {
+    await this.proxyRuntime.closeAll();
+  }
+
   async forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> {
     const ctx = await this.proxyRuntime.prepareWorkspace(
       workspaceId,
@@ -41,20 +50,29 @@ export class AdapterRegistryFactory {
       (ciphertext) => decryptToken(ciphertext, this.keyring),
     );
 
-    const fetchImpl = ctx.dispatcherHandle
-      ? createProxiedFetch(
-          { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl as string },
-          ctx.dispatcherHandle,
-        )
-      : fetch;
+    let fetchImpl: typeof fetch;
+    if (!ctx.config.enabled) {
+      fetchImpl = createDirectFetch();
+    } else {
+      if (!ctx.dispatcherHandle) {
+        throw new ProxyConfigurationError('Validated proxy dispatcher is missing.');
+      }
+      fetchImpl = createProxiedFetch(
+        { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl as string },
+        ctx.dispatcherHandle,
+      );
+    }
+
+    let released = false;
 
     return {
       adapters: this.createInternal(fetchImpl),
-      proxy: {
-        enabled: ctx.config.enabled,
-        configVersion: ctx.configVersion,
-        fingerprint: ctx.fingerprint,
-        attestation: ctx.attestation,
+      proxy: ctx,
+      release: async () => {
+        if (!released) {
+          released = true;
+          ctx.dispatcherHandle?.release();
+        }
       },
     };
   }

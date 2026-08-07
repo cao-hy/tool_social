@@ -28,6 +28,7 @@ RUN npm run build -w @socialhub/shared \
  && npm run build -w @socialhub/security \
  && npm run build -w @socialhub/platform-adapters \
  && npm run build -w @socialhub/config \
+ && npm run build -w @socialhub/social-runtime \
  && npx tsc -p packages/db/tsconfig.build.json \
  && npm run build -w @socialhub/api
 RUN npm prune --omit=dev --include=optional --ignore-scripts \

@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "PlatformPostStatus" ADD VALUE IF NOT EXISTS 'REMOTE_RESULT_UNKNOWN';

@@ -64,22 +64,24 @@ export function maskSecret(value: string, visibleChars = 4): string {
 
 /**
  * Quét một chuỗi tự do (thường là error message từ platform API) và che các
- * mẫu trông giống token trước khi ghi log.
- *
- * Đây là lưới an toàn cuối cùng, KHÔNG phải biện pháp chính: lớp phòng thủ chính
- * vẫn là không đưa token vào chuỗi ngay từ đầu.
+ * mẫu trông giống token hoặc proxy credential trước khi ghi log.
  */
 const TOKEN_LIKE_PATTERNS: ReadonlyArray<RegExp> = [
   /\b(?:access_token|refresh_token|client_secret|api_key)=[\w.-]+/gi,
   /\bBearer\s+[\w.-]{16,}/gi,
   /\bEA[A-Za-z0-9]{40,}/g, // token dài dạng Meta
   /\bya29\.[\w.-]{20,}/g, // token dạng Google
+  /((?:https?):\/\/)[^:\s/@]+:[^@\s/]+@/gi, // proxy URL credentials
 ];
 
 export function scrubSecretsFromText(text: string): string {
   let output = text;
   for (const pattern of TOKEN_LIKE_PATTERNS) {
-    output = output.replace(pattern, REDACTION_PLACEHOLDER);
+    if (pattern.source.includes('https?')) {
+      output = output.replace(pattern, '$1***:***@');
+    } else {
+      output = output.replace(pattern, REDACTION_PLACEHOLDER);
+    }
   }
   return output;
 }

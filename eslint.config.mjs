@@ -112,6 +112,32 @@ export default tseslint.config(
     },
   },
 
+  /* Social outbound code không được phép dùng createDirectFetch */
+  {
+    files: [
+      'packages/platform-adapters/**/*.ts',
+      'apps/worker/src/processors/**/*.ts',
+      'apps/api/src/modules/posts/**/*.ts',
+      'apps/api/src/modules/comments/**/*.ts',
+      'apps/api/src/modules/social-accounts/**/*.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@socialhub/config',
+              importNames: ['createDirectFetch'],
+              message:
+                'Social outbound traffic must use WorkspaceAdapterFactory (direct fetch bypasses proxy protection).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   /* UI không được chứa logic nền tảng hay truy cập DB — prompt §19 */
   {
     files: ['apps/web/**/*.{ts,tsx}'],

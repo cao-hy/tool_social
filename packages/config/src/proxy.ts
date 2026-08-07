@@ -207,7 +207,7 @@ export async function checkProxyAwareNetwork(
         provider: provider.name,
         checkOk: true,
         checkError: null,
-        checkErrors: [],
+        checkErrors: errors,
         countryLockSatisfied:
           !normalizedProxyConfig.enabled ||
           (proxyActive && (!activeCountryLock || countryCode === activeCountryLock)),

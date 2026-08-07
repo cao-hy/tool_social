@@ -1,34 +1,33 @@
 {
-  "name": "@socialhub/worker",
+  "name": "@socialhub/social-runtime",
   "version": "0.1.0",
   "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch src/main.ts",
-    "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit --declaration false --declarationMap false",
     "lint": "eslint src",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1095.0",
-    "@smithy/node-http-handler": "^4.9.13",
     "@socialhub/config": "*",
-    "@socialhub/db": "*",
     "@socialhub/platform-adapters": "*",
     "@socialhub/security": "*",
-    "@socialhub/shared": "*",
-    "@socialhub/social-runtime": "*",
-    "bullmq": "^5.34.10",
-    "ioredis": "^5.4.2",
-    "pino": "^9.6.0",
-    "sharp": "0.35.3",
-    "undici": "^8.9.0"
+    "@socialhub/shared": "*"
   },
   "devDependencies": {
     "postcss": "^8.5.25",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vite": "^6.0.0",
     "vitest": "^3.0.0"

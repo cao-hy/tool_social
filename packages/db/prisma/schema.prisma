@@ -65,6 +65,7 @@ enum PlatformPostStatus {
   FAILED
   CANCELLED
   DELETED
+  REMOTE_RESULT_UNKNOWN
 }
 
 enum MediaType {
@@ -400,6 +401,7 @@ model SocialAccount {
   profileUrl String?
 
   status           SocialAccountStatus @default(CONNECTED)
+  tokenVersion     Int                 @default(0)
   scopes           String[]
   lastSyncedAt     DateTime?
   lastErrorAt      DateTime?

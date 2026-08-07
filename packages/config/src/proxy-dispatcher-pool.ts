@@ -18,11 +18,13 @@ export interface ProxyRequestLease {
 export interface ProxyDispatcherHandle {
   readonly dispatcher: Dispatcher;
   acquireRequestLease(): ProxyRequestLease;
+  release(): void;
 }
 
 export interface ProxyDispatcherEntry {
   dispatcher: Dispatcher;
   activeRequests: number;
+  activeHandles: number;
   lastUsedAt: number;
   evictWhenIdle: boolean;
 }
@@ -44,19 +46,23 @@ export class ProxyDispatcherPool {
       },
     });
 
-    // Cleanup idle connections
+    // Cleanup idle connections (15-minute idle TTL)
     this.cleanupTimer = setInterval(() => {
       const now = Date.now();
       for (const [key, entry] of this.dispatchers.entries()) {
-        if (entry.activeRequests === 0 && now - entry.lastUsedAt > 60000) {
+        if (
+          entry.activeRequests === 0 &&
+          entry.activeHandles === 0 &&
+          now - entry.lastUsedAt > 15 * 60 * 1000
+        ) {
           entry.evictWhenIdle = true;
           this.checkEviction(entry);
-          if (entry.evictWhenIdle && entry.activeRequests === 0) {
+          if (entry.evictWhenIdle && entry.activeRequests === 0 && entry.activeHandles === 0) {
             this.dispatchers.delete(key);
           }
         }
       }
-    }, 30000).unref();
+    }, 60000).unref();
   }
 
   async acquire(endpoint: ValidatedProxyEndpoint): Promise<ProxyDispatcherHandle> {
@@ -79,51 +85,65 @@ export class ProxyDispatcherPool {
 
     if (!entry) {
       const dispatcher = this.createPinnedHttpProxyDispatcher(endpoint);
-      entry = { dispatcher, activeRequests: 0, lastUsedAt: Date.now(), evictWhenIdle: false };
+      entry = {
+        dispatcher,
+        activeRequests: 0,
+        activeHandles: 0,
+        lastUsedAt: Date.now(),
+        evictWhenIdle: false,
+      };
       this.dispatchers.set(key, entry);
     }
 
     entry.lastUsedAt = Date.now();
+    entry.activeHandles++;
 
-    // The handle gives you a way to lease it for ONE request
-    // We bind entry so it's always referring to the same object
+    const targetEntry = entry;
+    let handleReleased = false;
+
     const handle: ProxyDispatcherHandle = {
-      dispatcher: entry.dispatcher,
+      dispatcher: targetEntry.dispatcher,
       acquireRequestLease: () => {
-        if (!entry) throw new Error('Cannot acquire lease on missing entry');
-        entry.activeRequests++;
-        entry.lastUsedAt = Date.now();
-        let released = false;
+        targetEntry.activeRequests++;
+        targetEntry.lastUsedAt = Date.now();
+        let leaseReleased = false;
 
         return {
           release: () => {
-            if (released) return;
-            released = true;
-            if (entry) {
-              entry.activeRequests = Math.max(0, entry.activeRequests - 1);
-              entry.lastUsedAt = Date.now();
-              this.checkEviction(entry);
-            }
+            if (leaseReleased) return;
+            leaseReleased = true;
+            targetEntry.activeRequests = Math.max(0, targetEntry.activeRequests - 1);
+            targetEntry.lastUsedAt = Date.now();
+            this.checkEviction(targetEntry);
           },
         };
+      },
+      release: () => {
+        if (handleReleased) return;
+        handleReleased = true;
+        targetEntry.activeHandles = Math.max(0, targetEntry.activeHandles - 1);
+        targetEntry.lastUsedAt = Date.now();
+        this.checkEviction(targetEntry);
       },
     };
 
     return handle;
   }
 
-  closeAll() {
+  async closeAll(): Promise<void> {
     this.isClosed = true;
     clearInterval(this.cleanupTimer);
+    const closePromises: Promise<void>[] = [];
     for (const entry of this.dispatchers.values()) {
       entry.evictWhenIdle = true;
-      this.checkEviction(entry);
+      closePromises.push(entry.dispatcher.close().catch(() => {}));
     }
     this.dispatchers.clear();
+    await Promise.allSettled(closePromises);
   }
 
   private checkEviction(entry: ProxyDispatcherEntry) {
-    if (entry.activeRequests === 0 && entry.evictWhenIdle) {
+    if (entry.activeRequests === 0 && entry.activeHandles === 0 && entry.evictWhenIdle) {
       entry.dispatcher.close().catch(() => {});
     }
   }

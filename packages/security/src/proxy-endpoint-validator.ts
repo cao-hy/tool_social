@@ -45,8 +45,8 @@ export class ProxyEndpointValidator {
       throw new ProxyEndpointBlockedError('URL không hợp lệ');
     }
 
-    if (!['http:', 'https:', 'socks:', 'socks5:'].includes(url.protocol)) {
-      throw new ProxyEndpointBlockedError(`Giao thức proxy không hỗ trợ: ${url.protocol}`);
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      throw new ProxyEndpointBlockedError('SOCKS proxy là giao thức tạm thời chưa được hỗ trợ.');
     }
 
     let hostname = url.hostname;
