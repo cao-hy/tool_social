@@ -240,7 +240,7 @@ jobs:
             docker container prune -f || true
             cleanup_socialhub_images || true
             docker image prune -f || true
-            docker builder prune -af || true
+            docker builder prune -f --filter "until=48h" || true
             echo "Disk usage after Docker cleanup:"
             df -h /
             docker system df || true
@@ -267,6 +267,6 @@ jobs:
             $COMPOSE -f docker/docker-compose.prod.yml --env-file .env ps
             cleanup_socialhub_images || true
             docker image prune -f
-            docker builder prune -af
+            docker builder prune -f --filter "until=48h" || true
             docker logout ghcr.io || true
             rm -f "$RELEASE_ARCHIVE"
