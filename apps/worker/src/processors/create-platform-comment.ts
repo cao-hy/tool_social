@@ -117,83 +117,88 @@ async function createPlatformComment(
     return { created: false, reason: 'account_disconnected' };
   }
 
-  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  const adapter = adapters.requireCapability(account.platform, 'createComment');
-  const createComment = adapter.createComment?.bind(adapter);
-  if (!createComment) return { created: false, reason: 'capability_unsupported' };
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  try {
+    const { adapters } = adapterCtx;
+    const adapter = adapters.requireCapability(account.platform, 'createComment');
+    const createComment = adapter.createComment?.bind(adapter);
+    if (!createComment) return { created: false, reason: 'capability_unsupported' };
 
-  const accessToken = await getFreshAccessToken({
-    prisma: input.prisma,
-    keyring: input.keyring,
-    adapter,
-    account: {
-      id: account.id,
-      workspaceId: account.workspaceId,
-      platform: account.platform,
-      token: account.token,
-    },
-  });
-
-  const result = await createComment(
-    {
-      accessToken,
-      externalAccountId: account.externalAccountId,
-      externalPageId: account.externalPageId ?? undefined,
-      correlationId: payload.correlationId,
-      logger,
-    },
-    platformPost.externalPostId,
-    payload.message,
-  );
-
-  const comment = await input.prisma.comment.upsert({
-    where: {
-      socialAccountId_externalCommentId: {
-        socialAccountId: account.id,
-        externalCommentId: result.externalCommentId,
+    const accessToken = await getFreshAccessToken({
+      prisma: input.prisma,
+      keyring: input.keyring,
+      adapter,
+      account: {
+        id: account.id,
+        workspaceId: account.workspaceId,
+        platform: account.platform,
+        token: account.token,
       },
-    },
-    create: {
-      workspaceId: payload.workspaceId,
-      platformPostId: platformPost.id,
-      socialAccountId: account.id,
-      platform: account.platform,
-      externalCommentId: result.externalCommentId,
-      parentId: null,
-      authorExternalId: account.externalPageId ?? account.externalAccountId,
-      authorName: account.name,
-      authorAvatarUrl: account.avatarUrl,
-      message: payload.message,
-      likeCount: 0,
-      postedAt: result.postedAt,
-      status: 'RESOLVED',
-      isHidden: false,
-      isFromPage: true,
-    },
-    update: {
-      message: payload.message,
-      postedAt: result.postedAt,
-      isFromPage: true,
-      deletedAt: null,
-    },
-  });
+    });
 
-  logger.info(
-    {
-      platformPostId: platformPost.id,
+    const result = await createComment(
+      {
+        accessToken,
+        externalAccountId: account.externalAccountId,
+        externalPageId: account.externalPageId ?? undefined,
+        correlationId: payload.correlationId,
+        logger,
+      },
+      platformPost.externalPostId,
+      payload.message,
+    );
+
+    const comment = await input.prisma.comment.upsert({
+      where: {
+        socialAccountId_externalCommentId: {
+          socialAccountId: account.id,
+          externalCommentId: result.externalCommentId,
+        },
+      },
+      create: {
+        workspaceId: payload.workspaceId,
+        platformPostId: platformPost.id,
+        socialAccountId: account.id,
+        platform: account.platform,
+        externalCommentId: result.externalCommentId,
+        parentId: null,
+        authorExternalId: account.externalPageId ?? account.externalAccountId,
+        authorName: account.name,
+        authorAvatarUrl: account.avatarUrl,
+        message: payload.message,
+        likeCount: 0,
+        postedAt: result.postedAt,
+        status: 'RESOLVED',
+        isHidden: false,
+        isFromPage: true,
+      },
+      update: {
+        message: payload.message,
+        postedAt: result.postedAt,
+        isFromPage: true,
+        deletedAt: null,
+      },
+    });
+
+    logger.info(
+      {
+        platformPostId: platformPost.id,
+        commentId: comment.id,
+        externalCommentId: result.externalCommentId,
+        platform: account.platform,
+      },
+      'Đã tạo top-level comment trên platform',
+    );
+
+    return {
+      created: true,
       commentId: comment.id,
       externalCommentId: result.externalCommentId,
-      platform: account.platform,
-    },
-    'Đã tạo top-level comment trên platform',
-  );
-
-  return {
-    created: true,
-    commentId: comment.id,
-    externalCommentId: result.externalCommentId,
-    platform: PLATFORM_LABELS[account.platform],
-  };
+      platform: PLATFORM_LABELS[account.platform],
+    };
+  } finally {
+    await adapterCtx.release();
+  }
 }
 
 async function markJob(

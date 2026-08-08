@@ -110,75 +110,80 @@ async function syncPostMetrics(
     select: { timezone: true },
   });
 
-  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  const adapter = adapters.get(account.platform);
-  const accessToken = await getFreshAccessToken({
-    prisma: input.prisma,
-    keyring: input.keyring,
-    adapter,
-    account: {
-      id: account.id,
-      workspaceId: account.workspaceId,
-      platform: account.platform,
-      token: account.token,
-    },
-  });
-
-  let metrics: PostMetrics;
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
   try {
-    metrics = await adapter.getPostMetrics(
-      {
-        accessToken,
-        externalAccountId: account.externalAccountId,
-        externalPageId: account.externalPageId ?? undefined,
-        correlationId: `sync-post-metrics-${platformPost.id}`,
+    const { adapters } = adapterCtx;
+    const adapter = adapters.get(account.platform);
+    const accessToken = await getFreshAccessToken({
+      prisma: input.prisma,
+      keyring: input.keyring,
+      adapter,
+      account: {
+        id: account.id,
+        workspaceId: account.workspaceId,
+        platform: account.platform,
+        token: account.token,
       },
-      platformPost.externalPostId,
-    );
-  } catch (error) {
-    const metricUnavailableError = platformMetricUnavailableError(error);
-    if (metricUnavailableError) {
-      const fallbackMetrics = emptyPostMetrics('UNSUPPORTED');
-      await persistPostMetrics({
-        prisma: input.prisma,
-        workspaceId: payload.workspaceId,
-        platformPost,
-        timezone: workspace?.timezone ?? 'UTC',
-        metrics: fallbackMetrics,
-        errorCode: metricUnavailableError.kind,
-        errorMessage: metricUnavailableError.message,
-      });
-      logger.warn(
+    });
+
+    let metrics: PostMetrics;
+    try {
+      metrics = await adapter.getPostMetrics(
         {
-          platformPostId: platformPost.id,
-          platform: platformPost.platform,
-          kind: metricUnavailableError.kind,
-          message: metricUnavailableError.message,
+          accessToken,
+          externalAccountId: account.externalAccountId,
+          externalPageId: account.externalPageId ?? undefined,
+          correlationId: `sync-post-metrics-${platformPost.id}`,
         },
-        'Metric bài không lấy được; đã ghi UNSUPPORTED thay vì retry',
+        platformPost.externalPostId,
       );
-      return {
-        synced: false,
-        reason: metricUnavailableError.kind,
-        platformPostId: platformPost.id,
-      };
+    } catch (error) {
+      const metricUnavailableError = platformMetricUnavailableError(error);
+      if (metricUnavailableError) {
+        const fallbackMetrics = emptyPostMetrics('UNSUPPORTED');
+        await persistPostMetrics({
+          prisma: input.prisma,
+          workspaceId: payload.workspaceId,
+          platformPost,
+          timezone: workspace?.timezone ?? 'UTC',
+          metrics: fallbackMetrics,
+          errorCode: metricUnavailableError.kind,
+          errorMessage: metricUnavailableError.message,
+        });
+        logger.warn(
+          {
+            platformPostId: platformPost.id,
+            platform: platformPost.platform,
+            kind: metricUnavailableError.kind,
+            message: metricUnavailableError.message,
+          },
+          'Metric bài không lấy được; đã ghi UNSUPPORTED thay vì retry',
+        );
+        return {
+          synced: false,
+          reason: metricUnavailableError.kind,
+          platformPostId: platformPost.id,
+        };
+      }
+      throw error;
     }
-    throw error;
+
+    await persistPostMetrics({
+      prisma: input.prisma,
+      workspaceId: payload.workspaceId,
+      platformPost,
+      timezone: workspace?.timezone ?? 'UTC',
+      metrics,
+    });
+
+    logger.info(
+      { platformPostId: platformPost.id, platform: platformPost.platform },
+      'Đã sync post metrics',
+    );
+    return { synced: true, platformPostId: platformPost.id };
+  } finally {
+    await adapterCtx.release();
   }
-
-  await persistPostMetrics({
-    prisma: input.prisma,
-    workspaceId: payload.workspaceId,
-    platformPost,
-    timezone: workspace?.timezone ?? 'UTC',
-    metrics,
-  });
-
-  logger.info(
-    { platformPostId: platformPost.id, platform: platformPost.platform },
-    'Đã sync post metrics',
-  );
-  return { synced: true, platformPostId: platformPost.id };
 }
 
 async function persistPostMetrics(input: {

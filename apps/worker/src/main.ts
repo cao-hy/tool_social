@@ -151,11 +151,14 @@ async function main(): Promise<void> {
     process.exit(0);
   };
 
-  fetch('https://api.ipify.org?format=json')
-    .then((r) => r.json())
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .then((data: any) => logger.info(`🌐 Direct outbound IP của Worker: ${data.ip}`))
-    .catch((err) => logger.warn(`Không lấy được Outbound IP: ${err.message}`));
+  // eslint-disable-next-line no-restricted-properties
+  if (env.NODE_ENV !== 'production' && process.env.LOG_DIRECT_OUTBOUND_IP === 'true') {
+    fetch('https://api.ipify.org?format=json')
+      .then((r) => r.json())
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .then((data: any) => logger.info(`🌐 Direct outbound IP của Worker: ${data.ip}`))
+      .catch((err) => logger.warn(`Không lấy được Outbound IP: ${err.message}`));
+  }
 
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));

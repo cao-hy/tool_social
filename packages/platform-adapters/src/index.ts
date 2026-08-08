@@ -1,4 +1,5 @@
 export * from './core/types';
+export * from './core/utils';
 export * from './core/adapter.interface';
 export * from './core/platform-error';
 export * from './core/capability-table';

@@ -13,6 +13,7 @@ import { capabilityUnsupported } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
+  AdapterFetch,
   AuthUrlInput,
   PublishPostInput,
   PublishResult,
@@ -56,7 +57,10 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
   private readonly appSecret: string;
 
   constructor(config: FacebookPagesAdapterConfig) {
-    this.client = new FacebookGraphClient(config);
+    this.client = new FacebookGraphClient({
+      ...config,
+      fetch: config.fetch ?? (globalThis.fetch.bind(globalThis) as AdapterFetch),
+    });
     this.scopes = config.scopes ?? [...FACEBOOK_PAGES_OAUTH_SCOPES];
     this.appSecret = config.appSecret;
   }

@@ -57,7 +57,11 @@ const IP_LOOKUP_PROVIDERS = [
         countryCode: stringOrNull(value.country_code),
         country: stringOrNull(value.country),
         city: stringOrNull(value.city),
-        isp: stringOrNull(connection.isp),
+        isp:
+          stringOrNull(connection.isp) ||
+          stringOrNull(connection.org) ||
+          stringOrNull(value.isp) ||
+          stringOrNull(value.org),
       };
     },
   },
@@ -69,7 +73,21 @@ const IP_LOOKUP_PROVIDERS = [
       return {
         ip: stringOrNull(value.ip),
         countryCode: stringOrNull(value.country_code),
-        country: stringOrNull(value.country_name),
+        country: stringOrNull(value.country_name) || stringOrNull(value.country),
+        city: stringOrNull(value.city),
+        isp: stringOrNull(value.org) || stringOrNull(value.asn) || stringOrNull(value.isp),
+      };
+    },
+  },
+  {
+    name: 'ipinfo.io',
+    url: 'https://ipinfo.io/json',
+    parse: (data: unknown): ParsedIpLookup => {
+      const value = asRecord(data);
+      return {
+        ip: stringOrNull(value.ip),
+        countryCode: stringOrNull(value.country),
+        country: stringOrNull(value.country),
         city: stringOrNull(value.city),
         isp: stringOrNull(value.org),
       };
@@ -356,7 +374,10 @@ async function fetchJsonWithTimeout(fetchImpl: typeof fetch, url: string): Promi
   try {
     const response = await fetchImpl(url, {
       signal: controller.signal,
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) SocialHub/1.0',
+      },
     });
 
     if (!response.ok) {

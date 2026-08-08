@@ -45,10 +45,13 @@ export class FacebookGraphClient {
   private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: FacebookGraphClientConfig) {
+    if (!config.fetch) {
+      throw new Error('FacebookGraphClient requires an explicit fetch implementation.');
+    }
     this.graphBaseUrl = `https://graph.facebook.com/${config.apiVersion}`;
     this.videoBaseUrl = `https://graph-video.facebook.com/${config.apiVersion}`;
     this.dialogBaseUrl = `https://www.facebook.com/${config.apiVersion}`;
-    this.fetch = config.fetch ?? fetch;
+    this.fetch = config.fetch;
   }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {

@@ -21,12 +21,13 @@ export interface AdapterRegistryRuntimeConfig {
 export function createRuntimeAdapterRegistry(
   config: AdapterRegistryRuntimeConfig,
 ): AdapterRegistry {
+  const fetchImpl = config.fetch ?? (globalThis.fetch.bind(globalThis) as AdapterFetch);
   const registry = new AdapterRegistry();
-  const facebookConfig = completeFacebookConfig(config.facebook, config.fetch);
-  const instagramConfig = completeInstagramConfig(config.instagram, config.fetch);
-  const pinterestConfig = completePinterestConfig(config.nodeEnv, config.pinterest, config.fetch);
-  const youtubeConfig = completeYouTubeConfig(config.youtube, config.fetch);
-  const tiktokConfig = completeTikTokConfig(config.tiktok, config.fetch);
+  const facebookConfig = completeFacebookConfig(config.facebook, fetchImpl);
+  const instagramConfig = completeInstagramConfig(config.instagram, fetchImpl);
+  const pinterestConfig = completePinterestConfig(config.nodeEnv, config.pinterest, fetchImpl);
+  const youtubeConfig = completeYouTubeConfig(config.youtube, fetchImpl);
+  const tiktokConfig = completeTikTokConfig(config.tiktok, fetchImpl);
 
   if (facebookConfig) {
     registry.register(new FacebookPagesAdapter(facebookConfig));
@@ -59,7 +60,7 @@ export function createRuntimeAdapterRegistry(
 
 function completeTikTokConfig(
   config: Partial<TikTokAdapterConfig> | undefined,
-  fetch: AdapterFetch | undefined,
+  fetch: AdapterFetch,
 ): TikTokAdapterConfig | null {
   const values = [config?.clientKey, config?.clientSecret];
   const hasAny = values.some((value) => Boolean(value));
@@ -82,7 +83,7 @@ function completeTikTokConfig(
 
 function completeYouTubeConfig(
   config: Partial<YouTubeAdapterConfig> | undefined,
-  fetch: AdapterFetch | undefined,
+  fetch: AdapterFetch,
 ): YouTubeAdapterConfig | null {
   const values = [config?.clientId, config?.clientSecret];
   const hasAny = values.some((value) => Boolean(value));
@@ -105,7 +106,7 @@ function completeYouTubeConfig(
 
 function completeFacebookConfig(
   config: Partial<FacebookPagesAdapterConfig> | undefined,
-  fetch: AdapterFetch | undefined,
+  fetch: AdapterFetch,
 ): FacebookPagesAdapterConfig | null {
   const values = [config?.appId, config?.appSecret, config?.apiVersion];
   const hasAny = values.some((value) => Boolean(value));
@@ -130,7 +131,7 @@ function completeFacebookConfig(
 
 function completeInstagramConfig(
   config: Partial<InstagramAdapterConfig> | undefined,
-  fetch: AdapterFetch | undefined,
+  fetch: AdapterFetch,
 ): InstagramAdapterConfig | null {
   const values = [config?.appId, config?.appSecret, config?.apiVersion];
   const hasAny = values.some((value) => Boolean(value));
@@ -155,7 +156,7 @@ function completeInstagramConfig(
 function completePinterestConfig(
   nodeEnv: string,
   config: Partial<PinterestAdapterConfig> | undefined,
-  fetch: AdapterFetch | undefined,
+  fetch: AdapterFetch,
 ): PinterestAdapterConfig | null {
   const values = [config?.appId, config?.appSecret];
   const hasAny = values.some((value) => Boolean(value));

@@ -176,140 +176,143 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(payload.workspaceId)).adapters.get(
-      input.platform,
-    );
-    logger.debug(
-      { requestId: input.auditContext.requestId, platform: input.platform },
-      'OAuth callback: bắt đầu exchange token',
-    );
-    const tokenSet = await adapter.exchangeCodeForToken(
-      input.code,
-      this.redirectUri(input.platform),
-      payload.codeVerifier,
-    );
-    logger.debug(
-      {
-        requestId: input.auditContext.requestId,
-        platform: input.platform,
-        hasProfile: Boolean(tokenSet.accountProfile),
-      },
-      'OAuth callback: exchange token xong',
-    );
+    const adapterCtx = await this.adapterFactory.forWorkspace(payload.workspaceId);
+    try {
+      const adapter = adapterCtx.adapters.get(input.platform);
+      logger.debug(
+        { requestId: input.auditContext.requestId, platform: input.platform },
+        'OAuth callback: bắt đầu exchange token',
+      );
+      const tokenSet = await adapter.exchangeCodeForToken(
+        input.code,
+        this.redirectUri(input.platform),
+        payload.codeVerifier,
+      );
+      logger.debug(
+        {
+          requestId: input.auditContext.requestId,
+          platform: input.platform,
+          hasProfile: Boolean(tokenSet.accountProfile),
+        },
+        'OAuth callback: exchange token xong',
+      );
 
-    const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
-    const encryptedRefreshToken = tokenSet.refreshToken
-      ? encryptToken(tokenSet.refreshToken, this.keyring)
-      : null;
+      const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
+      const encryptedRefreshToken = tokenSet.refreshToken
+        ? encryptToken(tokenSet.refreshToken, this.keyring)
+        : null;
 
-    const profile =
-      tokenSet.accountProfile ??
-      (await adapter.getAccountProfile({
-        accessToken: tokenSet.accessToken,
-        externalAccountId: 'pending',
-        correlationId: input.auditContext.requestId ?? 'oauth-callback',
-      }));
-    logger.debug(
-      {
-        requestId: input.auditContext.requestId,
-        platform: input.platform,
-        externalAccountId: profile.externalAccountId,
-      },
-      'OAuth callback: có profile account',
-    );
-
-    const account = await this.prisma.$transaction(async (tx) => {
-      const existingAccount = await tx.socialAccount.findFirst({
-        where: {
-          workspaceId: payload.workspaceId,
+      const profile =
+        tokenSet.accountProfile ??
+        (await adapter.getAccountProfile({
+          accessToken: tokenSet.accessToken,
+          externalAccountId: 'pending',
+          correlationId: input.auditContext.requestId ?? 'oauth-callback',
+        }));
+      logger.debug(
+        {
+          requestId: input.auditContext.requestId,
           platform: input.platform,
           externalAccountId: profile.externalAccountId,
-          externalPageId: profile.externalPageId ?? null,
+        },
+        'OAuth callback: có profile account',
+      );
+
+      const account = await this.prisma.$transaction(async (tx) => {
+        const existingAccount = await tx.socialAccount.findFirst({
+          where: {
+            workspaceId: payload.workspaceId,
+            platform: input.platform,
+            externalAccountId: profile.externalAccountId,
+            externalPageId: profile.externalPageId ?? null,
+          },
+        });
+
+        const socialAccount = existingAccount
+          ? await tx.socialAccount.update({
+              where: { id: existingAccount.id },
+              data: {
+                name: profile.name,
+                username: profile.username,
+                avatarUrl: profile.avatarUrl,
+                profileUrl: profile.profileUrl,
+                status: 'CONNECTED',
+                scopes: tokenSet.scopes,
+                lastErrorAt: null,
+                lastErrorMessage: null,
+                deletedAt: null,
+              },
+            })
+          : await tx.socialAccount.create({
+              data: {
+                workspaceId: payload.workspaceId,
+                platform: input.platform,
+                externalAccountId: profile.externalAccountId,
+                externalPageId: profile.externalPageId,
+                name: profile.name,
+                username: profile.username,
+                avatarUrl: profile.avatarUrl,
+                profileUrl: profile.profileUrl,
+                status: 'CONNECTED',
+                scopes: tokenSet.scopes,
+              },
+            });
+
+        await tx.socialToken.upsert({
+          where: { socialAccountId: socialAccount.id },
+          create: this.tokenCreateData(
+            socialAccount.id,
+            tokenSet,
+            encryptedAccessToken,
+            encryptedRefreshToken,
+          ),
+          update: this.tokenUpdateData(tokenSet, encryptedAccessToken, encryptedRefreshToken),
+        });
+
+        return socialAccount;
+      });
+      logger.debug(
+        {
+          requestId: input.auditContext.requestId,
+          platform: input.platform,
+          socialAccountId: account.id,
+        },
+        'OAuth callback: đã lưu social account/token',
+      );
+
+      await this.audit.record({
+        ...input.auditContext,
+        actorUserId: payload.userId,
+        workspaceId: payload.workspaceId,
+        action: 'SOCIAL_ACCOUNT_CONNECTED',
+        resourceType: 'SocialAccount',
+        resourceId: account.id,
+        metadata: {
+          platform: input.platform,
+          developmentFixture: adapter instanceof DevelopmentFixtureAdapter,
         },
       });
 
-      const socialAccount = existingAccount
-        ? await tx.socialAccount.update({
-            where: { id: existingAccount.id },
-            data: {
-              name: profile.name,
-              username: profile.username,
-              avatarUrl: profile.avatarUrl,
-              profileUrl: profile.profileUrl,
-              status: 'CONNECTED',
-              scopes: tokenSet.scopes,
-              lastErrorAt: null,
-              lastErrorMessage: null,
-              deletedAt: null,
-            },
-          })
-        : await tx.socialAccount.create({
-            data: {
-              workspaceId: payload.workspaceId,
-              platform: input.platform,
-              externalAccountId: profile.externalAccountId,
-              externalPageId: profile.externalPageId,
-              name: profile.name,
-              username: profile.username,
-              avatarUrl: profile.avatarUrl,
-              profileUrl: profile.profileUrl,
-              status: 'CONNECTED',
-              scopes: tokenSet.scopes,
-            },
-          });
+      if (tokenSet.refreshToken) {
+        await this.enqueueRefreshJob(account.id, payload.workspaceId);
+      }
+      logger.debug(
+        {
+          requestId: input.auditContext.requestId,
+          platform: input.platform,
+          socialAccountId: account.id,
+        },
+        'OAuth callback: hoàn tất service',
+      );
 
-      await tx.socialToken.upsert({
-        where: { socialAccountId: socialAccount.id },
-        create: this.tokenCreateData(
-          socialAccount.id,
-          tokenSet,
-          encryptedAccessToken,
-          encryptedRefreshToken,
-        ),
-        update: this.tokenUpdateData(tokenSet, encryptedAccessToken, encryptedRefreshToken),
-      });
-
-      return socialAccount;
-    });
-    logger.debug(
-      {
-        requestId: input.auditContext.requestId,
-        platform: input.platform,
+      return {
+        workspaceId: payload.workspaceId,
         socialAccountId: account.id,
-      },
-      'OAuth callback: đã lưu social account/token',
-    );
-
-    await this.audit.record({
-      ...input.auditContext,
-      actorUserId: payload.userId,
-      workspaceId: payload.workspaceId,
-      action: 'SOCIAL_ACCOUNT_CONNECTED',
-      resourceType: 'SocialAccount',
-      resourceId: account.id,
-      metadata: {
         platform: input.platform,
-        developmentFixture: adapter instanceof DevelopmentFixtureAdapter,
-      },
-    });
-
-    if (tokenSet.refreshToken) {
-      await this.enqueueRefreshJob(account.id, payload.workspaceId);
+      };
+    } finally {
+      await adapterCtx.release();
     }
-    logger.debug(
-      {
-        requestId: input.auditContext.requestId,
-        platform: input.platform,
-        socialAccountId: account.id,
-      },
-      'OAuth callback: hoàn tất service',
-    );
-
-    return {
-      workspaceId: payload.workspaceId,
-      socialAccountId: account.id,
-      platform: input.platform,
-    };
   }
 
   async disconnect(

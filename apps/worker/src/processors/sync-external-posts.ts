@@ -121,94 +121,99 @@ async function syncPostsLoop(
   });
   if (!account) throw new Error('Account not found');
 
-  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  const adapter = adapters.requireCapability(account.platform, 'getPosts');
-  const getPosts = adapter.getPosts;
-  if (!getPosts) {
-    throw new Error(`Adapter ${account.platform} chưa triển khai getPosts.`);
-  }
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  try {
+    const { adapters } = adapterCtx;
+    const adapter = adapters.requireCapability(account.platform, 'getPosts');
+    const getPosts = adapter.getPosts;
+    if (!getPosts) {
+      throw new Error(`Adapter ${account.platform} chưa triển khai getPosts.`);
+    }
 
-  if (!account.token || account.status !== 'CONNECTED') {
-    throw new Error('Account disconnected');
-  }
+    if (!account.token || account.status !== 'CONNECTED') {
+      throw new Error('Account disconnected');
+    }
 
-  const accessToken = await getFreshAccessToken({
-    prisma: input.prisma,
-    keyring: input.keyring,
-    adapter: adapter,
-    account,
-  });
-
-  const ctx = {
-    accessToken,
-    externalAccountId: account.externalAccountId,
-    externalPageId: account.externalPageId ?? undefined,
-    correlationId: syncJob.id,
-  };
-
-  let cursor = syncJob.cursor;
-  let hasMore = true;
-  let scannedCount = syncJob.scannedCount;
-  let importedCount = syncJob.importedCount;
-  let updatedCount = syncJob.updatedCount;
-  let skippedCount = syncJob.skippedCount;
-  let failedCount = syncJob.failedCount;
-  const cutoffDate = syncJob.cutoffDate;
-
-  while (hasMore) {
-    const page = await getPosts.call(adapter, ctx, {
-      cursor: cursor ?? undefined,
-      since: cutoffDate,
-      limit: 50,
+    const accessToken = await getFreshAccessToken({
+      prisma: input.prisma,
+      keyring: input.keyring,
+      adapter: adapter,
+      account,
     });
 
-    let reachedCutoff = false;
-    for (const post of page.items) {
-      if (post.publishedAt < cutoffDate) {
-        reachedCutoff = true;
-        skippedCount++;
-        continue;
+    const ctx = {
+      accessToken,
+      externalAccountId: account.externalAccountId,
+      externalPageId: account.externalPageId ?? undefined,
+      correlationId: syncJob.id,
+    };
+
+    let cursor = syncJob.cursor;
+    let hasMore = true;
+    let scannedCount = syncJob.scannedCount;
+    let importedCount = syncJob.importedCount;
+    let updatedCount = syncJob.updatedCount;
+    let skippedCount = syncJob.skippedCount;
+    let failedCount = syncJob.failedCount;
+    const cutoffDate = syncJob.cutoffDate;
+
+    while (hasMore) {
+      const page = await getPosts.call(adapter, ctx, {
+        cursor: cursor ?? undefined,
+        since: cutoffDate,
+        limit: 50,
+      });
+
+      let reachedCutoff = false;
+      for (const post of page.items) {
+        if (post.publishedAt < cutoffDate) {
+          reachedCutoff = true;
+          skippedCount++;
+          continue;
+        }
+
+        scannedCount++;
+        try {
+          const result = await importPost(input.prisma, account, payload.requestedByUserId, post);
+          if (result === 'created') importedCount++;
+          if (result === 'updated') updatedCount++;
+        } catch (error) {
+          failedCount++;
+          logger.warn(
+            {
+              syncJobId: syncJob.id,
+              socialAccountId: account.id,
+              platform: account.platform,
+              externalPostId: post.externalPostId,
+              err: error,
+            },
+            'Không import được bài external',
+          );
+        }
       }
 
-      scannedCount++;
-      try {
-        const result = await importPost(input.prisma, account, payload.requestedByUserId, post);
-        if (result === 'created') importedCount++;
-        if (result === 'updated') updatedCount++;
-      } catch (error) {
-        failedCount++;
-        logger.warn(
-          {
-            syncJobId: syncJob.id,
-            socialAccountId: account.id,
-            platform: account.platform,
-            externalPostId: post.externalPostId,
-            err: error,
-          },
-          'Không import được bài external',
-        );
+      cursor = page.nextCursor ?? null;
+      hasMore = !reachedCutoff && page.hasMore && !!cursor;
+
+      await input.prisma.externalPostSyncJob.update({
+        where: { id: syncJob.id },
+        data: { cursor, scannedCount, importedCount, updatedCount, skippedCount, failedCount },
+      });
+
+      if (hasMore) {
+        await new Promise((r) => setTimeout(r, 2000));
       }
     }
 
-    cursor = page.nextCursor ?? null;
-    hasMore = !reachedCutoff && page.hasMore && !!cursor;
-
-    await input.prisma.externalPostSyncJob.update({
-      where: { id: syncJob.id },
-      data: { cursor, scannedCount, importedCount, updatedCount, skippedCount, failedCount },
+    await input.prisma.socialAccount.update({
+      where: { id: account.id },
+      data: { lastSyncedAt: new Date() },
     });
 
-    if (hasMore) {
-      await new Promise((r) => setTimeout(r, 2000));
-    }
+    return { scannedCount, importedCount, updatedCount, skippedCount, failedCount };
+  } finally {
+    await adapterCtx.release();
   }
-
-  await input.prisma.socialAccount.update({
-    where: { id: account.id },
-    data: { lastSyncedAt: new Date() },
-  });
-
-  return { scannedCount, importedCount, updatedCount, skippedCount, failedCount };
 }
 
 async function importPost(

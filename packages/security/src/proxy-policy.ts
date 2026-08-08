@@ -10,6 +10,9 @@ export interface ProxyAttestation {
   expiresAt: string;
   ip: string;
   countryCode: string | null;
+  country?: string | null;
+  city?: string | null;
+  isp?: string | null;
   provider: string;
 }
 
@@ -30,6 +33,9 @@ export interface CheckNetworkResult {
   checkOk: boolean;
   ip: string | null;
   countryCode: string | null;
+  country?: string | null;
+  city?: string | null;
+  isp?: string | null;
   provider: string | null;
   checkError: string | null;
   checkedAt: string;
@@ -191,6 +197,9 @@ export class ProxyPolicyService {
         expiresAt: new Date(Date.now() + SUCCESS_TTL).toISOString(),
         ip: status.ip,
         countryCode: status.countryCode ?? null,
+        country: status.country ?? null,
+        city: status.city ?? null,
+        isp: status.isp ?? null,
         provider: status.provider ?? 'unknown',
       };
 

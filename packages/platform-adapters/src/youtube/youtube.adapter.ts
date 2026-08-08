@@ -13,6 +13,7 @@ import { capabilityUnsupported } from '../core/platform-error';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
+  AdapterFetch,
   AuthUrlInput,
   ExternalPostPage,
   PlatformComment,
@@ -80,7 +81,10 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
   private readonly scopes: string[];
 
   constructor(config: YouTubeAdapterConfig) {
-    this.client = new YouTubeClient(config);
+    this.client = new YouTubeClient({
+      ...config,
+      fetch: config.fetch ?? (globalThis.fetch.bind(globalThis) as AdapterFetch),
+    });
     this.scopes = config.scopes ?? [...YOUTUBE_OAUTH_SCOPES];
   }
 

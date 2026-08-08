@@ -12,6 +12,7 @@ import { capabilityUnsupported, createPlatformError } from '../core/platform-err
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
+  AdapterFetch,
   AuthUrlInput,
   ExternalPostPage,
   PlatformComment,
@@ -98,7 +99,10 @@ export class InstagramAdapter implements SocialPlatformAdapter {
   private readonly appSecret: string;
 
   constructor(config: InstagramAdapterConfig) {
-    this.client = new InstagramGraphClient(config);
+    this.client = new InstagramGraphClient({
+      ...config,
+      fetch: config.fetch ?? (globalThis.fetch.bind(globalThis) as AdapterFetch),
+    });
     this.scopes = config.scopes ?? [...INSTAGRAM_OAUTH_SCOPES];
     this.appSecret = config.appSecret;
   }

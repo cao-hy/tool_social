@@ -32,6 +32,8 @@ import {
   type PinterestBoardSection,
 } from './pinterest.schemas';
 
+import { discardResponseBody } from '../core/utils';
+
 export interface PinterestClientConfig {
   appId: string;
   appSecret: string;
@@ -48,11 +50,14 @@ export class PinterestClient {
   private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: PinterestClientConfig) {
+    if (!config.fetch) {
+      throw new Error('PinterestClient requires an explicit fetch implementation.');
+    }
     this.apiBaseUrl =
       config.environment === 'sandbox'
         ? 'https://api-sandbox.pinterest.com/v5'
         : 'https://api.pinterest.com/v5';
-    this.fetch = config.fetch ?? fetch;
+    this.fetch = config.fetch;
   }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
@@ -459,6 +464,8 @@ export class PinterestClient {
         retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
       });
     }
+
+    await discardResponseBody(response);
   }
 
   getMediaDetails(accessToken: string, mediaId: string): Promise<PinterestMediaDetailsResponse> {

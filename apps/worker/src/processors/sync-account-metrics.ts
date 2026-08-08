@@ -82,67 +82,72 @@ async function syncAccountMetrics(
     return { synced: false, reason: 'account_disconnected' };
   }
 
-  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  const adapter = adapters.get(account.platform);
-  const accessToken = await getFreshAccessToken({
-    prisma: input.prisma,
-    keyring: input.keyring,
-    adapter,
-    account: {
-      id: account.id,
-      workspaceId: account.workspaceId,
-      platform: account.platform,
-      token: account.token,
-    },
-  });
-
-  const now = new Date();
-  const today = metricDate(now, account.workspace.timezone);
-  const metrics = adapter.getAccountMetrics
-    ? await adapter.getAccountMetrics(
-        {
-          accessToken,
-          externalAccountId: account.externalAccountId,
-          externalPageId: account.externalPageId ?? undefined,
-          correlationId: `sync-account-metrics-${account.id}`,
-        },
-        { from: addDays(today, -30), to: today },
-      )
-    : emptyAccountMetrics('UNSUPPORTED');
-
-  await input.prisma.metricSnapshot.upsert({
-    where: {
-      socialAccountId_metricDate: {
-        socialAccountId: account.id,
-        metricDate: today,
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  try {
+    const { adapters } = adapterCtx;
+    const adapter = adapters.get(account.platform);
+    const accessToken = await getFreshAccessToken({
+      prisma: input.prisma,
+      keyring: input.keyring,
+      adapter,
+      account: {
+        id: account.id,
+        workspaceId: account.workspaceId,
+        platform: account.platform,
+        token: account.token,
       },
-    },
-    create: {
-      workspaceId: payload.workspaceId,
-      socialAccountId: account.id,
-      capturedAt: now,
-      metricDate: today,
-      followers: metrics.followers.value,
-      reach: metrics.reach.value,
-      impressions: metrics.impressions.value,
-      source: dominantSource(metrics),
-      raw: rawMetrics(metrics),
-    },
-    update: {
-      capturedAt: now,
-      followers: metrics.followers.value,
-      reach: metrics.reach.value,
-      impressions: metrics.impressions.value,
-      source: dominantSource(metrics),
-      raw: rawMetrics(metrics),
-    },
-  });
+    });
 
-  logger.info(
-    { socialAccountId: account.id, platform: account.platform },
-    'Đã sync account metrics',
-  );
-  return { synced: true, socialAccountId: account.id };
+    const now = new Date();
+    const today = metricDate(now, account.workspace.timezone);
+    const metrics = adapter.getAccountMetrics
+      ? await adapter.getAccountMetrics(
+          {
+            accessToken,
+            externalAccountId: account.externalAccountId,
+            externalPageId: account.externalPageId ?? undefined,
+            correlationId: `sync-account-metrics-${account.id}`,
+          },
+          { from: addDays(today, -30), to: today },
+        )
+      : emptyAccountMetrics('UNSUPPORTED');
+
+    await input.prisma.metricSnapshot.upsert({
+      where: {
+        socialAccountId_metricDate: {
+          socialAccountId: account.id,
+          metricDate: today,
+        },
+      },
+      create: {
+        workspaceId: payload.workspaceId,
+        socialAccountId: account.id,
+        capturedAt: now,
+        metricDate: today,
+        followers: metrics.followers.value,
+        reach: metrics.reach.value,
+        impressions: metrics.impressions.value,
+        source: dominantSource(metrics),
+        raw: rawMetrics(metrics),
+      },
+      update: {
+        capturedAt: now,
+        followers: metrics.followers.value,
+        reach: metrics.reach.value,
+        impressions: metrics.impressions.value,
+        source: dominantSource(metrics),
+        raw: rawMetrics(metrics),
+      },
+    });
+
+    logger.info(
+      { socialAccountId: account.id, platform: account.platform },
+      'Đã sync account metrics',
+    );
+    return { synced: true, socialAccountId: account.id };
+  } finally {
+    await adapterCtx.release();
+  }
 }
 
 function emptyAccountMetrics(source: MetricSource): AccountMetrics {

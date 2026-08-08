@@ -4,6 +4,7 @@ import {
   Get,
   HttpException,
   Inject,
+  OnModuleDestroy,
   Post,
   Req,
   Res,
@@ -81,9 +82,13 @@ type UpdateProxyInput = z.infer<typeof updateProxySchema>;
 @Controller('workspaces/:workspaceId/system')
 @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
 @RequirePermissions('workspace:update')
-export class SystemController {
+export class SystemController implements OnModuleDestroy {
   private proxyRuntimeInstance?: ProxyRuntimeService;
   private readonly endpointValidator: ProxyEndpointValidator;
+
+  async onModuleDestroy() {
+    await this.proxyRuntimeInstance?.closeAll();
+  }
 
   constructor(
     @Inject(ENV) private readonly env: ApiEnv,
@@ -115,9 +120,10 @@ export class SystemController {
     const workspaceId = requireMembership(request).workspaceId;
     const proxyConfig = await this.workspaceProxyConfig(workspaceId);
     let status: Partial<Awaited<ReturnType<typeof checkProxyAwareNetwork>>> = {};
+    let prepared: Awaited<ReturnType<typeof this.proxyRuntime.prepareWorkspace>> | undefined;
 
     try {
-      const prepared = await this.proxyRuntime.prepareWorkspace(
+      prepared = await this.proxyRuntime.prepareWorkspace(
         workspaceId,
         (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
         (ciphertext) => decryptToken(ciphertext, this.keyring),
@@ -130,6 +136,9 @@ export class SystemController {
           checkedAt: prepared.attestation.checkedAt,
           ip: prepared.attestation.ip,
           countryCode: prepared.attestation.countryCode,
+          country: prepared.attestation.country ?? null,
+          city: prepared.attestation.city ?? null,
+          isp: prepared.attestation.isp ?? null,
           provider: prepared.attestation.provider,
           proxyAvailable: true,
           proxyActive: true,
@@ -147,6 +156,8 @@ export class SystemController {
         proxyActive: false,
         countryLockSatisfied: false,
       };
+    } finally {
+      prepared?.dispatcherHandle?.release();
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

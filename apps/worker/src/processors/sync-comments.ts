@@ -76,72 +76,56 @@ async function syncComments(
   });
   if (!account) return { synced: 0, reason: 'account_not_found' };
 
-  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  const adapter = adapters.get(account.platform);
-  const getComments = adapter.getComments?.bind(adapter);
-  if (!getComments) {
-    await input.prisma.notification.create({
-      data: {
-        workspaceId: payload.workspaceId,
-        userId: await workspaceOwnerId(input.prisma, payload.workspaceId),
-        type: 'SYNC_JOB_FAILED',
-        title: 'Sync comments chưa khả dụng',
-        body: `${account.platform} chưa có adapter getComments được xác minh.`,
-        linkUrl: '/inbox',
-        data: { socialAccountId: account.id, platform: account.platform },
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  try {
+    const { adapters } = adapterCtx;
+    const adapter = adapters.get(account.platform);
+    const getComments = adapter.getComments?.bind(adapter);
+    if (!getComments) {
+      await input.prisma.notification.create({
+        data: {
+          workspaceId: payload.workspaceId,
+          userId: await workspaceOwnerId(input.prisma, payload.workspaceId),
+          type: 'SYNC_JOB_FAILED',
+          title: 'Sync comments chưa khả dụng',
+          body: `${account.platform} chưa có adapter getComments được xác minh.`,
+          linkUrl: '/inbox',
+          data: { socialAccountId: account.id, platform: account.platform },
+        },
+      });
+      logger.warn({ platform: account.platform }, 'Adapter chưa hỗ trợ getComments');
+      return { synced: 0, reason: 'capability_unsupported' };
+    }
+
+    if (!account.token || account.status !== 'CONNECTED') {
+      return { synced: 0, reason: 'account_disconnected' };
+    }
+
+    const accessToken = await getFreshAccessToken({
+      prisma: input.prisma,
+      keyring: input.keyring,
+      adapter,
+      account: {
+        id: account.id,
+        workspaceId: account.workspaceId,
+        platform: account.platform,
+        token: account.token,
       },
     });
-    logger.warn({ platform: account.platform }, 'Adapter chưa hỗ trợ getComments');
-    return { synced: 0, reason: 'capability_unsupported' };
-  }
 
-  if (!account.token || account.status !== 'CONNECTED') {
-    return { synced: 0, reason: 'account_disconnected' };
-  }
+    const ctx = {
+      accessToken,
+      externalAccountId: account.externalAccountId,
+      externalPageId: account.externalPageId ?? undefined,
+      correlationId: payload.correlationId ?? `sync-comments:${account.id}`,
+    };
 
-  const accessToken = await getFreshAccessToken({
-    prisma: input.prisma,
-    keyring: input.keyring,
-    adapter,
-    account: {
-      id: account.id,
-      workspaceId: account.workspaceId,
-      platform: account.platform,
-      token: account.token,
-    },
-  });
-
-  const ctx = {
-    accessToken,
-    externalAccountId: account.externalAccountId,
-    externalPageId: account.externalPageId ?? undefined,
-    correlationId: payload.correlationId ?? `sync-comments:${account.id}`,
-  };
-
-  if (payload.platformPostId) {
-    const platformPost = await input.prisma.platformPost.findFirst({
-      where: { id: payload.platformPostId, workspaceId: payload.workspaceId },
-    });
-    if (!platformPost?.externalPostId) return { synced: 0, reason: 'platform_post_not_found' };
-    return syncPlatformPostComments(input.prisma, getComments, ctx, payload, account, platformPost);
-  }
-
-  const platformPosts = await input.prisma.platformPost.findMany({
-    where: {
-      workspaceId: payload.workspaceId,
-      socialAccountId: account.id,
-      externalPostId: { not: null },
-    },
-    orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
-    take: 25,
-  });
-
-  let synced = 0;
-  let failedPosts = 0;
-  let lastErrorMessage: string | null = null;
-  for (const platformPost of platformPosts) {
-    try {
-      const result = await syncPlatformPostComments(
+    if (payload.platformPostId) {
+      const platformPost = await input.prisma.platformPost.findFirst({
+        where: { id: payload.platformPostId, workspaceId: payload.workspaceId },
+      });
+      if (!platformPost?.externalPostId) return { synced: 0, reason: 'platform_post_not_found' };
+      return syncPlatformPostComments(
         input.prisma,
         getComments,
         ctx,
@@ -149,37 +133,65 @@ async function syncComments(
         account,
         platformPost,
       );
-      synced += result.synced;
-    } catch (error) {
-      failedPosts += 1;
-      lastErrorMessage =
-        error instanceof Error ? error.message : 'Lỗi không xác định khi sync comment cho post.';
-      logger.warn(
-        {
-          workspaceId: payload.workspaceId,
-          socialAccountId: account.id,
-          platformPostId: platformPost.id,
-          externalPostId: platformPost.externalPostId,
-          err: isPlatformError(error) ? error.toLogObject() : error,
-        },
-        'Bỏ qua một platform post không sync được comments',
-      );
     }
+
+    const platformPosts = await input.prisma.platformPost.findMany({
+      where: {
+        workspaceId: payload.workspaceId,
+        socialAccountId: account.id,
+        externalPostId: { not: null },
+      },
+      orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
+      take: 25,
+    });
+
+    let synced = 0;
+    let failedPosts = 0;
+    let lastErrorMessage: string | null = null;
+    for (const platformPost of platformPosts) {
+      try {
+        const result = await syncPlatformPostComments(
+          input.prisma,
+          getComments,
+          ctx,
+          payload,
+          account,
+          platformPost,
+        );
+        synced += result.synced;
+      } catch (error) {
+        failedPosts += 1;
+        lastErrorMessage =
+          error instanceof Error ? error.message : 'Lỗi không xác định khi sync comment cho post.';
+        logger.warn(
+          {
+            workspaceId: payload.workspaceId,
+            socialAccountId: account.id,
+            platformPostId: platformPost.id,
+            externalPostId: platformPost.externalPostId,
+            err: isPlatformError(error) ? error.toLogObject() : error,
+          },
+          'Bỏ qua một platform post không sync được comments',
+        );
+      }
+    }
+
+    await input.prisma.socialAccount.update({
+      where: { id: account.id },
+      data: {
+        lastSyncedAt: new Date(),
+        lastErrorAt: failedPosts > 0 ? new Date() : null,
+        lastErrorMessage:
+          failedPosts > 0
+            ? `Không sync được comments của ${failedPosts}/${platformPosts.length} bài. Lỗi gần nhất: ${lastErrorMessage}`
+            : null,
+      },
+    });
+
+    return { synced, scannedPosts: platformPosts.length, failedPosts };
+  } finally {
+    await adapterCtx.release();
   }
-
-  await input.prisma.socialAccount.update({
-    where: { id: account.id },
-    data: {
-      lastSyncedAt: new Date(),
-      lastErrorAt: failedPosts > 0 ? new Date() : null,
-      lastErrorMessage:
-        failedPosts > 0
-          ? `Không sync được comments của ${failedPosts}/${platformPosts.length} bài. Lỗi gần nhất: ${lastErrorMessage}`
-          : null,
-    },
-  });
-
-  return { synced, scannedPosts: platformPosts.length, failedPosts };
 }
 
 async function syncPlatformPostComments(

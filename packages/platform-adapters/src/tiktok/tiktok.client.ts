@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
+import { discardResponseBody } from '../core/utils';
 import {
   normalizeTikTokError,
   tiktokApiEnvelopeError,
@@ -76,7 +77,10 @@ export class TikTokClient {
   private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: TikTokClientConfig) {
-    this.fetch = config.fetch ?? fetch;
+    if (!config.fetch) {
+      throw new Error('TikTokClient requires an explicit fetch implementation.');
+    }
+    this.fetch = config.fetch;
   }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
@@ -333,6 +337,8 @@ export class TikTokClient {
           retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
         });
       }
+
+      await discardResponseBody(response);
     }
   }
 

@@ -111,110 +111,115 @@ async function replyPlatformComment(
     return { replied: false, reason: 'account_disconnected' };
   }
 
-  const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  const adapter = adapters.requireCapability(account.platform, 'replyToComment');
-  const replyToComment = adapter.replyToComment?.bind(adapter);
-  if (!replyToComment) return { replied: false, reason: 'capability_unsupported' };
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  try {
+    const { adapters } = adapterCtx;
+    const adapter = adapters.requireCapability(account.platform, 'replyToComment');
+    const replyToComment = adapter.replyToComment?.bind(adapter);
+    if (!replyToComment) return { replied: false, reason: 'capability_unsupported' };
 
-  const reply = payload.replyRecordId
-    ? await input.prisma.commentReply.findFirst({
-        where: { id: payload.replyRecordId, workspaceId: payload.workspaceId },
-      })
-    : await input.prisma.commentReply.create({
-        data: {
-          workspaceId: payload.workspaceId,
-          commentId: comment.id,
-          message: payload.message,
-          sentById: payload.requestedByUserId,
-        },
-      });
-  if (!reply) return { replied: false, reason: 'reply_record_not_found' };
+    const reply = payload.replyRecordId
+      ? await input.prisma.commentReply.findFirst({
+          where: { id: payload.replyRecordId, workspaceId: payload.workspaceId },
+        })
+      : await input.prisma.commentReply.create({
+          data: {
+            workspaceId: payload.workspaceId,
+            commentId: comment.id,
+            message: payload.message,
+            sentById: payload.requestedByUserId,
+          },
+        });
+    if (!reply) return { replied: false, reason: 'reply_record_not_found' };
 
-  const targetExternalCommentId =
-    account.platform === 'YOUTUBE' && comment.parent?.externalCommentId
-      ? comment.parent.externalCommentId
-      : comment.externalCommentId;
-  const accessToken = await getFreshAccessToken({
-    prisma: input.prisma,
-    keyring: input.keyring,
-    adapter,
-    account: {
-      id: account.id,
-      workspaceId: account.workspaceId,
-      platform: account.platform,
-      token: account.token,
-    },
-  });
-  const result = await replyToComment(
-    {
-      accessToken,
-      externalAccountId: account.externalAccountId,
-      externalPageId: account.externalPageId ?? undefined,
-      correlationId: payload.correlationId,
-      logger,
-    },
-    targetExternalCommentId,
-    payload.message,
-  );
-
-  await input.prisma.$transaction([
-    input.prisma.commentReply.update({
-      where: { id: reply.id },
-      data: { status: 'SENT', externalReplyId: result.externalReplyId, sentAt: result.sentAt },
-    }),
-    input.prisma.comment.update({
-      where: { id: comment.id },
-      data: { status: 'RESOLVED' },
-    }),
-    input.prisma.comment.upsert({
-      where: {
-        socialAccountId_externalCommentId: {
-          socialAccountId: account.id,
-          externalCommentId: result.externalReplyId,
-        },
-      },
-      create: {
-        workspaceId: payload.workspaceId,
-        platformPostId: comment.platformPostId,
-        socialAccountId: account.id,
+    const targetExternalCommentId =
+      account.platform === 'YOUTUBE' && comment.parent?.externalCommentId
+        ? comment.parent.externalCommentId
+        : comment.externalCommentId;
+    const accessToken = await getFreshAccessToken({
+      prisma: input.prisma,
+      keyring: input.keyring,
+      adapter,
+      account: {
+        id: account.id,
+        workspaceId: account.workspaceId,
         platform: account.platform,
-        externalCommentId: result.externalReplyId,
-        parentId: comment.id,
-        authorExternalId: account.externalPageId ?? account.externalAccountId,
-        authorName: account.name,
-        authorAvatarUrl: account.avatarUrl,
-        message: payload.message,
-        likeCount: 0,
-        postedAt: result.sentAt,
-        status: 'RESOLVED',
-        isHidden: false,
-        isFromPage: true,
+        token: account.token,
       },
-      update: {
-        parentId: comment.id,
-        message: payload.message,
-        postedAt: result.sentAt,
-        isFromPage: true,
-        deletedAt: null,
+    });
+    const result = await replyToComment(
+      {
+        accessToken,
+        externalAccountId: account.externalAccountId,
+        externalPageId: account.externalPageId ?? undefined,
+        correlationId: payload.correlationId,
+        logger,
       },
-    }),
-  ]);
+      targetExternalCommentId,
+      payload.message,
+    );
 
-  logger.info(
-    {
+    await input.prisma.$transaction([
+      input.prisma.commentReply.update({
+        where: { id: reply.id },
+        data: { status: 'SENT', externalReplyId: result.externalReplyId, sentAt: result.sentAt },
+      }),
+      input.prisma.comment.update({
+        where: { id: comment.id },
+        data: { status: 'RESOLVED' },
+      }),
+      input.prisma.comment.upsert({
+        where: {
+          socialAccountId_externalCommentId: {
+            socialAccountId: account.id,
+            externalCommentId: result.externalReplyId,
+          },
+        },
+        create: {
+          workspaceId: payload.workspaceId,
+          platformPostId: comment.platformPostId,
+          socialAccountId: account.id,
+          platform: account.platform,
+          externalCommentId: result.externalReplyId,
+          parentId: comment.id,
+          authorExternalId: account.externalPageId ?? account.externalAccountId,
+          authorName: account.name,
+          authorAvatarUrl: account.avatarUrl,
+          message: payload.message,
+          likeCount: 0,
+          postedAt: result.sentAt,
+          status: 'RESOLVED',
+          isHidden: false,
+          isFromPage: true,
+        },
+        update: {
+          parentId: comment.id,
+          message: payload.message,
+          postedAt: result.sentAt,
+          isFromPage: true,
+          deletedAt: null,
+        },
+      }),
+    ]);
+
+    logger.info(
+      {
+        commentId: comment.id,
+        externalReplyId: result.externalReplyId,
+        platform: account.platform,
+      },
+      'Đã reply comment trên platform',
+    );
+
+    return {
+      replied: true,
       commentId: comment.id,
       externalReplyId: result.externalReplyId,
-      platform: account.platform,
-    },
-    'Đã reply comment trên platform',
-  );
-
-  return {
-    replied: true,
-    commentId: comment.id,
-    externalReplyId: result.externalReplyId,
-    platform: PLATFORM_LABELS[account.platform],
-  };
+      platform: PLATFORM_LABELS[account.platform],
+    };
+  } finally {
+    await adapterCtx.release();
+  }
 }
 
 async function markReplyFailed(

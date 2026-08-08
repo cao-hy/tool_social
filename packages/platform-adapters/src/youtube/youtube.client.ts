@@ -61,7 +61,10 @@ export class YouTubeClient {
   private readonly fetch: AdapterFetch;
 
   constructor(private readonly config: YouTubeClientConfig) {
-    this.fetch = config.fetch ?? fetch;
+    if (!config.fetch) {
+      throw new Error('YouTubeClient requires an explicit fetch implementation.');
+    }
+    this.fetch = config.fetch;
   }
 
   buildAuthorizationUrl(input: { redirectUri: string; state: string; scopes: string[] }): string {
