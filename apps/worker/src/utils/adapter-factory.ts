@@ -12,7 +12,7 @@ import {
   TIKTOK_OAUTH_SCOPES,
   type PinterestApiEnvironment,
 } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/config';
+import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 
 export interface WorkerEnv {
   NODE_ENV: string;
@@ -111,6 +111,18 @@ export class WorkerAdapterFactory {
         }
       },
     };
+  }
+
+  async withWorkspace<T>(
+    workspaceId: string,
+    fn: (ctx: WorkspaceAdapterContext) => Promise<T>,
+  ): Promise<T> {
+    const ctx = await this.forWorkspace(workspaceId);
+    try {
+      return await fn(ctx);
+    } finally {
+      await ctx.release();
+    }
   }
 
   async close(): Promise<void> {

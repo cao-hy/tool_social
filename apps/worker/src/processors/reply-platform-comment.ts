@@ -1,5 +1,5 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/config';
+import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import { PLATFORM_LABELS, type QueuePayload } from '@socialhub/shared';
@@ -91,9 +91,7 @@ async function replyPlatformComment(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapterFactory: {
-      forWorkspace(
-        workspaceId: string,
-      ): Promise<import('@socialhub/config').WorkspaceAdapterContext>;
+      forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
     };
   },
   payload: ReplyPlatformCommentPayload,

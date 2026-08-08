@@ -22,7 +22,6 @@
   },
   "dependencies": {
     "@socialhub/security": "*",
-    "@socialhub/platform-adapters": "*",
     "@socialhub/shared": "*",
     "dotenv": "^16.4.7",
     "quick-lru": "^7.3.0",

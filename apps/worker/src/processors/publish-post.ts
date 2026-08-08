@@ -13,15 +13,18 @@ import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3
 
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import type { WorkspaceAdapterContext } from '@socialhub/config';
+import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import { randomUUID } from 'node:crypto';
 import {
   deriveContentPostStatus,
   PLATFORM_LABELS,
+  RemoteRequestError,
   type MediaType,
   type Platform,
   type PlatformPostStatus,
 } from '@socialhub/shared';
 import sharp from 'sharp';
+import type { Queue } from 'bullmq';
 import { UnrecoverableError } from 'bullmq';
 import { z } from 'zod';
 import { logger } from '../logger';
@@ -59,6 +62,7 @@ export function createPublishPostProcessor(input: {
   adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
   locks: JobLockService;
   storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
+  reconcileQueue?: Queue;
 }) {
   return async (job: {
     data: unknown;
@@ -153,6 +157,7 @@ async function publishPlatformPost(
     adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
     locks: JobLockService;
     storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
+    reconcileQueue?: Queue;
   },
   payload: z.infer<typeof publishPostPayloadSchema>,
   job: { id?: string; attemptsMade?: number; opts?: { attempts?: number } },
@@ -324,6 +329,16 @@ async function publishPlatformPost(
 
       // (Proxy validity is already attested by ProxyRuntimeService)
 
+      const publishAttemptId = randomUUID();
+      await input.prisma.platformPost.update({
+        where: { id: platformPost.id },
+        data: {
+          publishAttemptId,
+          publishAttemptStartedAt: new Date(),
+          publishFence: { increment: 1 },
+        },
+      });
+
       const result = await adapter.publishPost(adapterContext, publishInput);
       const platformState = await platformStateAfterPublish(
         adapter,
@@ -392,11 +407,23 @@ async function publishPlatformPost(
       const code = isPlatformError(error) ? error.kind : 'UNKNOWN';
       const message = error instanceof Error ? error.message : 'Lỗi không xác định khi publish.';
 
+      const isRemoteUnknown =
+        (error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
+        (isPlatformError(error) && error.kind === 'NETWORK');
+
+      const targetStatus: PlatformPostStatus = isRemoteUnknown
+        ? 'REMOTE_RESULT_UNKNOWN'
+        : decision.action === 'RETRY'
+          ? 'QUEUED'
+          : 'FAILED';
+
+      const targetCode = isRemoteUnknown ? 'REMOTE_RESULT_UNKNOWN' : code;
+
       await input.prisma.platformPost.update({
         where: { id: platformPost.id },
         data: {
-          status: decision.action === 'RETRY' ? 'QUEUED' : 'FAILED',
-          errorCode: code,
+          status: targetStatus,
+          errorCode: targetCode,
           errorMessage: message,
           platformState: publishNetworkProof
             ? (mergePlatformStateWithNetworkProof(
@@ -406,6 +433,24 @@ async function publishPlatformPost(
             : undefined,
         },
       });
+
+      if (isRemoteUnknown && input.reconcileQueue) {
+        const reconcileJobId = `reconcile-${platformPost.id}-${job.id ?? 'attempt'}`;
+        await input.reconcileQueue.add(
+          'reconcile-platform-post',
+          {
+            platformPostId: platformPost.id,
+            workspaceId: payload.workspaceId,
+            publishAttemptId: job.id ?? 'attempt',
+          },
+          {
+            jobId: reconcileJobId,
+            delay: 60_000,
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 60_000 },
+          },
+        );
+      }
 
       if (decision.markAccountDisconnected) {
         await input.prisma.socialAccount.update({

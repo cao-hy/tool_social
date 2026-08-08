@@ -247,4 +247,16 @@ export interface ExternalPostPage {
   hasMore: boolean;
 }
 
+export interface ReconcilePublishInput {
+  platformPostId: string;
+  publishAttemptId?: string;
+  providerRequestId?: string;
+  payloadHash?: string;
+}
+
+export type PublishReconciliationResult =
+  | { result: 'FOUND'; remotePostId: string; remoteUrl?: string }
+  | { result: 'CONFIRMED_ABSENT' }
+  | { result: 'INDETERMINATE'; reason: string };
+
 export type { AccountMetrics, Paginated, Platform, PostMetrics };

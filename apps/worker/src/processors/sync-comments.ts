@@ -2,7 +2,7 @@ import { isPlatformError, type SocialPlatformAdapter } from '@socialhub/platform
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 
-import type { WorkspaceAdapterContext } from '@socialhub/config';
+import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import type { PlatformComment } from '@socialhub/platform-adapters';
 import { z } from 'zod';
 

@@ -13,17 +13,19 @@ export interface DnsResolver {
   >;
 }
 
-export interface ProxyGatewayAddress {
+export interface ValidatedGatewayAddress {
   address: string;
   family: 4 | 6;
 }
+
+export type ProxyGatewayAddress = ValidatedGatewayAddress;
 
 export interface ValidatedProxyEndpoint {
   normalizedUrl: string;
   hostname: string;
   port: number;
   protocol: 'http:' | 'https:' | 'socks:' | 'socks5:';
-  gatewayAddresses: ProxyGatewayAddress[];
+  gatewayAddresses: ValidatedGatewayAddress[];
   validatedAt: number;
 }
 

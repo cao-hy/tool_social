@@ -5,7 +5,22 @@ import type { WorkspacePlatformResolver } from './types';
 
 export interface TokenRefreshLock {
   acquire(key: string, token: string, ttlMs: number): Promise<boolean>;
+  extend(key: string, token: string, ttlMs: number): Promise<boolean>;
   release(key: string, token: string): Promise<boolean>;
+}
+
+export class TokenRefreshBusyError extends Error {
+  constructor(accountId: string) {
+    super(`Timeout waiting for token refresh lock on account ${accountId}`);
+    this.name = 'TokenRefreshBusyError';
+  }
+}
+
+export class RefreshCasLostError extends Error {
+  constructor() {
+    super('Token refresh CAS lost to concurrent winner');
+    this.name = 'RefreshCasLostError';
+  }
 }
 
 export class TokenRefreshService {
@@ -19,12 +34,15 @@ export class TokenRefreshService {
   async getValidAccessToken(accountId: string): Promise<string> {
     const lockKey = `token-refresh:${accountId}`;
     const token = Math.random().toString(36).substring(2);
-    const acquired = await this.lock.acquire(lockKey, token, 15000);
+    const LOCK_TTL = 120000;
+    const HEARTBEAT_MS = 30000;
+
+    const acquired = await this.lock.acquire(lockKey, token, LOCK_TTL);
 
     if (!acquired) {
       let attempts = 0;
-      while (attempts < 10) {
-        await new Promise((r) => setTimeout(r, 200 * Math.pow(1.2, attempts)));
+      while (attempts < 15) {
+        await new Promise((r) => setTimeout(r, 200 * Math.pow(1.2, attempts) + Math.random() * 50));
         const acc = await this.prisma.socialAccount.findUnique({
           where: { id: accountId },
           include: { token: true },
@@ -38,7 +56,18 @@ export class TokenRefreshService {
         }
         attempts++;
       }
+      throw new TokenRefreshBusyError(accountId);
     }
+
+    let lockOwned = true;
+    const heartbeatTimer = setInterval(async () => {
+      try {
+        const extended = await this.lock.extend(lockKey, token, LOCK_TTL);
+        if (!extended) lockOwned = false;
+      } catch {
+        lockOwned = false;
+      }
+    }, HEARTBEAT_MS);
 
     try {
       const account = await this.prisma.socialAccount.findUnique({
@@ -59,62 +88,84 @@ export class TokenRefreshService {
         throw new Error(`SocialAccount ${accountId} missing refresh token`);
       }
 
-      const decryptedRefreshToken = decryptToken(account.token.refreshToken, this.keyring);
-      const adapterContext = await this.platformResolver.forWorkspace(account.workspaceId);
-
-      try {
-        const adapter = adapterContext.adapters.get(account.platform);
-        if (!adapter || !adapter.refreshToken) {
-          throw new Error(
-            `Adapter for platform ${account.platform} does not support token refresh`,
-          );
-        }
-
-        const refreshed = await adapter.refreshToken(decryptedRefreshToken);
-
-        const encryptedAccessToken = encryptToken(refreshed.accessToken, this.keyring);
-        const encryptedRefreshToken = refreshed.refreshToken
-          ? encryptToken(refreshed.refreshToken, this.keyring)
-          : null;
-
-        const updatedAccount = await this.prisma.socialAccount.updateMany({
-          where: {
-            id: accountId,
-            tokenVersion: account.tokenVersion ?? 0,
-          },
-          data: {
-            tokenVersion: { increment: 1 },
-          },
-        });
-
-        if (updatedAccount.count === 0) {
-          const latestAcc = await this.prisma.socialAccount.findUnique({
-            where: { id: accountId },
-            include: { token: true },
-          });
-          if (latestAcc?.token?.accessToken) {
-            return decryptToken(latestAcc.token.accessToken, this.keyring);
-          }
-        }
-
-        await this.prisma.socialToken.update({
-          where: { socialAccountId: accountId },
-          data: {
-            accessToken: encryptedAccessToken.ciphertext,
-            refreshToken: encryptedRefreshToken ? encryptedRefreshToken.ciphertext : undefined,
-            encryptionKeyVersion: encryptedAccessToken.keyVersion,
-            accessTokenExpiresAt: refreshed.accessTokenExpiresAt,
-            refreshTokenExpiresAt: refreshed.refreshTokenExpiresAt,
-            lastRefreshedAt: new Date(),
-            refreshFailedCount: 0,
-          },
-        });
-
-        return refreshed.accessToken;
-      } finally {
-        await adapterContext.release();
+      if (!lockOwned) {
+        throw new Error('Lost token refresh lock ownership before provider call');
       }
+
+      const decryptedRefreshToken = decryptToken(account.token.refreshToken, this.keyring);
+
+      return await this.platformResolver.withWorkspace(
+        account.workspaceId,
+        async ({ adapters }) => {
+          const adapter = adapters.get(account.platform);
+          if (!adapter || !adapter.refreshToken) {
+            throw new Error(
+              `Adapter for platform ${account.platform} does not support token refresh`,
+            );
+          }
+
+          if (!lockOwned) {
+            console.warn(`[TOKEN_REFRESH_LOCK_LOST_IN_FLIGHT] Account ${accountId}`);
+          }
+
+          const refreshed = await adapter.refreshToken(decryptedRefreshToken);
+
+          const encryptedAccessToken = encryptToken(refreshed.accessToken, this.keyring);
+          const encryptedRefreshToken = refreshed.refreshToken
+            ? encryptToken(refreshed.refreshToken, this.keyring)
+            : null;
+
+          const oldVersion = account.tokenVersion ?? 0;
+
+          try {
+            await this.prisma.$transaction(async (tx) => {
+              const won = await tx.socialAccount.updateMany({
+                where: {
+                  id: accountId,
+                  tokenVersion: oldVersion,
+                },
+                data: {
+                  tokenVersion: { increment: 1 },
+                },
+              });
+
+              if (won.count !== 1) {
+                throw new RefreshCasLostError();
+              }
+
+              await tx.socialToken.update({
+                where: { socialAccountId: accountId },
+                data: {
+                  accessToken: encryptedAccessToken.ciphertext,
+                  refreshToken: encryptedRefreshToken
+                    ? encryptedRefreshToken.ciphertext
+                    : undefined,
+                  encryptionKeyVersion: encryptedAccessToken.keyVersion,
+                  accessTokenExpiresAt: refreshed.accessTokenExpiresAt,
+                  refreshTokenExpiresAt: refreshed.refreshTokenExpiresAt,
+                  lastRefreshedAt: new Date(),
+                  refreshFailedCount: 0,
+                },
+              });
+            });
+          } catch (err) {
+            if (err instanceof RefreshCasLostError) {
+              const latestAcc = await this.prisma.socialAccount.findUnique({
+                where: { id: accountId },
+                include: { token: true },
+              });
+              if (latestAcc?.token?.accessToken) {
+                return decryptToken(latestAcc.token.accessToken, this.keyring);
+              }
+            }
+            throw err;
+          }
+
+          return refreshed.accessToken;
+        },
+      );
     } finally {
+      clearInterval(heartbeatTimer);
       if (acquired) {
         await this.lock.release(lockKey, token).catch(() => {});
       }

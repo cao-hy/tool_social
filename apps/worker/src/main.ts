@@ -26,6 +26,7 @@ import { createSyncCommentsProcessor } from './processors/sync-comments';
 import { createSyncExternalPostsProcessor } from './processors/sync-external-posts';
 import { createSyncPostMetricsProcessor } from './processors/sync-post-metrics';
 import { createCleanupUnusedMediaProcessor } from './processors/cleanup-unused-media';
+import { createReconciliationProcessor } from './processors/reconciliation.processor';
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
 import { startScheduledPostScanner } from './schedulers/scheduled-post-scanner';
@@ -63,13 +64,19 @@ async function main(): Promise<void> {
   const locks = new JobLockService(connection);
   const storage = createStorageClient(env);
 
+  const reconcileQueue = registry.getQueue('reconcile-platform-post');
+
   registry.registerWorker(
     'publish-post',
-    createPublishPostProcessor({ prisma, keyring, adapterFactory, locks, storage }),
+    createPublishPostProcessor({ prisma, keyring, adapterFactory, locks, storage, reconcileQueue }),
   );
   registry.registerWorker(
     'retry-failed-post',
-    createPublishPostProcessor({ prisma, keyring, adapterFactory, locks, storage }),
+    createPublishPostProcessor({ prisma, keyring, adapterFactory, locks, storage, reconcileQueue }),
+  );
+  registry.registerWorker(
+    'reconcile-platform-post',
+    createReconciliationProcessor({ prisma, keyring, platformResolver: adapterFactory }),
   );
   registry.registerWorker(
     'refresh-social-token',
@@ -137,6 +144,7 @@ async function main(): Promise<void> {
     scheduledPostScanner.stop();
     healthServer.close();
     await registry.shutdown(30_000);
+    await adapterFactory.close();
     await prisma.$disconnect();
     await connection.quit().catch(() => connection.disconnect());
     logger.info('Worker đã dừng');

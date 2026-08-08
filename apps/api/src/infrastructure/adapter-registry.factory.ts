@@ -22,7 +22,7 @@ import { ENV, type ApiEnv } from './env.provider';
 import { PrismaService } from './prisma/prisma.service';
 import { KEYRING } from './tokens';
 import { RedisService } from './redis/redis.service';
-import type { WorkspaceAdapterContext } from '@socialhub/config';
+import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 
 @Injectable()
 export class AdapterRegistryFactory implements OnModuleDestroy {
@@ -77,6 +77,18 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
         }
       },
     };
+  }
+
+  async withWorkspace<T>(
+    workspaceId: string,
+    fn: (ctx: WorkspaceAdapterContext) => Promise<T>,
+  ): Promise<T> {
+    const ctx = await this.forWorkspace(workspaceId);
+    try {
+      return await fn(ctx);
+    } finally {
+      await ctx.release();
+    }
   }
 
   private createInternal(fetchImpl: typeof fetch): AdapterRegistry {

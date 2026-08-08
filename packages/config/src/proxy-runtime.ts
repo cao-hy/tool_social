@@ -18,8 +18,6 @@ import type { ProxyConfig } from '@socialhub/shared';
 import type { WorkspaceProxySettingRecord } from './proxy';
 import dns from 'node:dns/promises';
 
-import type { AdapterRegistry } from '@socialhub/platform-adapters';
-
 export interface PreparedProxyContext {
   enabled: boolean;
   config: ProxyConfig;
@@ -27,16 +25,6 @@ export interface PreparedProxyContext {
   routeFingerprint: string | null;
   attestation: ProxyAttestation | null;
   dispatcherHandle?: ProxyDispatcherHandle;
-}
-
-export interface WorkspaceAdapterContext {
-  adapters: AdapterRegistry;
-  proxy: PreparedProxyContext;
-  release(): Promise<void>;
-}
-
-export interface WorkspacePlatformResolver {
-  forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
 }
 
 export class ProxyRuntimeService {
@@ -82,6 +70,7 @@ export class ProxyRuntimeService {
           workspaceId,
           proxyConfig,
           snapshotVersion,
+          validatedEndpoint.gatewayAddresses,
           async () => {
             const fetchImpl = createProxiedFetch(
               { ...proxyConfig, enabled: true, proxyUrl: proxyConfig.proxyUrl as string },

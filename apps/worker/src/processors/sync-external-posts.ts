@@ -1,4 +1,4 @@
-import type { WorkspaceAdapterContext } from '@socialhub/config';
+import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { isPlatformError, type ExternalPost } from '@socialhub/platform-adapters';
 import { Prisma, type Platform, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';

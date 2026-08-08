@@ -17,6 +17,8 @@ import type {
   TokenSet,
   ValidationResult,
   ExternalPostPage,
+  ReconcilePublishInput,
+  PublishReconciliationResult,
 } from './types';
 import type { PlatformCapabilityTable } from './capability-table';
 
@@ -65,6 +67,10 @@ export interface SocialPlatformAdapter {
   /** Đồng bộ, không gọi mạng — kiểm tra luật riêng của nền tảng. */
   validatePost(input: PublishPostInput): ValidationResult;
   publishPost(ctx: AdapterContext, input: PublishPostInput): Promise<PublishResult>;
+  reconcilePublish?(
+    ctx: AdapterContext,
+    input: ReconcilePublishInput,
+  ): Promise<PublishReconciliationResult>;
   editPost?(ctx: AdapterContext, externalPostId: string, input: EditPostInput): Promise<void>;
   deletePost?(ctx: AdapterContext, externalPostId: string): Promise<void>;
 

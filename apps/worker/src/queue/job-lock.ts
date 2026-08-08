@@ -27,6 +27,11 @@ export interface JobLock {
   token: string;
 }
 
+export interface OwnedJobLock extends JobLock {
+  isOwned(): boolean;
+  assertOwned(): void;
+}
+
 export class JobLockService {
   constructor(private readonly redis: Redis) {}
 
@@ -52,17 +57,37 @@ export class JobLockService {
     return result === 1;
   }
 
-  /** Chạy `fn` khi giành được khóa; trả `null` nếu tài nguyên đang bận. */
+  /** Chạy `fn` khi giành được khóa; tự động heartbeat gia hạn lock mỗi 30s; trả `null` nếu tài nguyên đang bận. */
   async withLock<T>(
     resource: string,
     ttlMs: number,
-    fn: (lock: JobLock) => Promise<T>,
+    fn: (lock: OwnedJobLock) => Promise<T>,
   ): Promise<T | null> {
     const lock = await this.acquire(resource, ttlMs);
     if (!lock) return null;
+
+    let lockOwned = true;
+    const heartbeatTimer = setInterval(async () => {
+      try {
+        const extended = await this.extend(lock, ttlMs);
+        if (!extended) lockOwned = false;
+      } catch {
+        lockOwned = false;
+      }
+    }, 30000);
+
+    const ownedLock: OwnedJobLock = {
+      ...lock,
+      isOwned: () => lockOwned,
+      assertOwned: () => {
+        if (!lockOwned) throw new Error(`Lost lock ownership for resource ${resource}`);
+      },
+    };
+
     try {
-      return await fn(lock);
+      return await fn(ownedLock);
     } finally {
+      clearInterval(heartbeatTimer);
       await this.release(lock).catch(() => {});
     }
   }

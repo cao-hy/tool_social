@@ -1,5 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import type { ProxyConfig } from '@socialhub/shared';
+import type { ValidatedGatewayAddress } from './proxy-endpoint-validator';
 
 export interface ProxyAttestation {
   workspaceId: string;
@@ -43,6 +44,13 @@ export interface ProxyAttestationLock {
 export interface ProxyPolicyCache {
   get(key: string): Promise<CachedProxyPolicyResult | null>;
   set(key: string, value: CachedProxyPolicyResult, ttlMs: number): Promise<void>;
+  setIfLockOwned?(
+    key: string,
+    lockKey: string,
+    token: string,
+    value: CachedProxyPolicyResult,
+    ttlMs: number,
+  ): Promise<boolean>;
   getLock(): ProxyAttestationLock;
 }
 
@@ -56,7 +64,7 @@ export class ProxyAttestationLockLostError extends Error {
 
 export function computeProxyRouteFingerprint(
   proxyUrl: string,
-  gatewayAddresses: { address: string; family: number }[],
+  gatewayAddresses: ValidatedGatewayAddress[],
   secret: string,
 ): string {
   const gateways = [...gatewayAddresses]
@@ -78,10 +86,28 @@ export class ProxyPolicyService {
     private readonly fingerprintSecret: string,
   ) {}
 
+  private async safeSetCache(
+    cacheKey: string,
+    lockKey: string,
+    token: string,
+    value: CachedProxyPolicyResult,
+    ttlMs: number,
+    lock: ProxyAttestationLock,
+  ): Promise<boolean> {
+    if (this.cache.setIfLockOwned) {
+      return await this.cache.setIfLockOwned(cacheKey, lockKey, token, value, ttlMs);
+    }
+    const owned = await lock.extend(lockKey, token, 30000).catch(() => false);
+    if (!owned) return false;
+    await this.cache.set(cacheKey, value, ttlMs);
+    return true;
+  }
+
   async getAttestation(
     workspaceId: string,
     config: ProxyConfig,
     configVersion: number,
+    gateways: ValidatedGatewayAddress[],
     checkNetworkFn: () => Promise<CheckNetworkResult>,
     forceAttestation = false,
   ): Promise<ProxyAttestation> {
@@ -89,7 +115,11 @@ export class ProxyPolicyService {
       throw new Error('Proxy is not enabled or proxyUrl is missing');
     }
 
-    const fingerprint = computeProxyFingerprint(config.proxyUrl, this.fingerprintSecret);
+    const fingerprint = computeProxyRouteFingerprint(
+      config.proxyUrl,
+      gateways,
+      this.fingerprintSecret,
+    );
     const countryLock = config.countryLock ?? 'none';
     const cacheKey = `proxy-attestation:${workspaceId}:${configVersion}:${fingerprint}:${countryLock}`;
 
@@ -164,13 +194,27 @@ export class ProxyPolicyService {
         provider: status.provider ?? 'unknown',
       };
 
-      await this.cache.set(cacheKey, { kind: 'SUCCESS', attestation }, SUCCESS_TTL);
+      const setSuccess = await this.safeSetCache(
+        cacheKey,
+        lockKey,
+        token,
+        { kind: 'SUCCESS', attestation },
+        SUCCESS_TTL,
+        lock,
+      );
+
+      if (!setSuccess) {
+        throw new ProxyAttestationLockLostError();
+      }
+
       return attestation;
     } catch (error) {
-      if (lockOwned) {
+      if (lockOwned && !(error instanceof ProxyAttestationLockLostError)) {
         const errMessage = error instanceof Error ? error.message : 'Unknown proxy error';
-        await this.cache.set(
+        await this.safeSetCache(
           cacheKey,
+          lockKey,
+          token,
           {
             kind: 'FAILURE',
             errorCode: 'CHECK_FAILED',
@@ -179,7 +223,8 @@ export class ProxyPolicyService {
             expiresAt: new Date(Date.now() + FAILURE_TTL).toISOString(),
           },
           FAILURE_TTL,
-        );
+          lock,
+        ).catch(() => {});
       }
       throw error;
     } finally {

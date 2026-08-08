@@ -1,5 +1,5 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/config';
+import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
 import { z } from 'zod';

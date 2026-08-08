@@ -29,6 +29,7 @@ export const PLATFORM_POST_STATUSES = [
   'FAILED',
   'CANCELLED',
   'DELETED',
+  'REMOTE_RESULT_UNKNOWN',
 ] as const;
 
 export type PlatformPostStatus = (typeof PLATFORM_POST_STATUSES)[number];
@@ -67,7 +68,8 @@ export function deriveContentPostStatus(children: readonly PlatformPostStatus[])
     return 'PARTIALLY_PUBLISHED';
   }
 
-  // Vẫn còn việc đang chạy.
+  // Vẫn còn việc đang chạy hoặc đang đối soát kết quả remote
+  if (has('REMOTE_RESULT_UNKNOWN')) return 'PROCESSING';
   if (has('PROCESSING')) return 'PROCESSING';
   if (has('QUEUED')) return 'QUEUED';
   return 'QUEUED';

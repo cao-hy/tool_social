@@ -10,3 +10,4 @@ export * from './audit';
 export * from './proxy';
 export * from './network-policy';
 export * from './social-text';
+export * from './remote-request-error';

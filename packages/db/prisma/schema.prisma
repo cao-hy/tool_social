@@ -590,6 +590,14 @@ model PlatformPost {
   errorCode    String?
   errorMessage String? @db.Text
 
+  publishAttemptId        String?
+  publishAttemptStartedAt DateTime?
+  publishFence            Int       @default(0)
+  reconciliationAttempts  Int       @default(0)
+  requiresManualReview    Boolean   @default(false)
+  lastReconciledAt        DateTime?
+  reconciliationError     String?   @db.Text
+
   /// Trạng thái riêng do nền tảng trả về, ví dụ YouTube processing/privacy.
   /// Không chứa token hay dữ liệu nhạy cảm.
   platformState Json?

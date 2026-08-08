@@ -73,6 +73,33 @@ export class RedisProxyPolicyCache implements ProxyPolicyCache {
     await this.redis.set(key, JSON.stringify(value), 'PX', ttlMs);
   }
 
+  async setIfLockOwned(
+    key: string,
+    lockKey: string,
+    token: string,
+    value: CachedProxyPolicyResult,
+    ttlMs: number,
+  ): Promise<boolean> {
+    const script = `
+      if redis.call("get", KEYS[1]) == ARGV[1] then
+        redis.call("set", KEYS[2], ARGV[2], "PX", ARGV[3])
+        return 1
+      else
+        return 0
+      end
+    `;
+    const result = await this.redis.eval(
+      script,
+      2,
+      lockKey,
+      key,
+      token,
+      JSON.stringify(value),
+      ttlMs.toString(),
+    );
+    return result === 1;
+  }
+
   getLock(): ProxyAttestationLock {
     return this.lock;
   }
