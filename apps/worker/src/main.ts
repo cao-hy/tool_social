@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { S3Client } from '@aws-sdk/client-s3';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import { createDirectFetch, loadEnvOrExit, loadWorkerEnv, type WorkerEnv } from '@socialhub/config';
+import { loadEnvOrExit, loadWorkerEnv, type WorkerEnv } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -206,7 +206,7 @@ function createStorageClient(env: WorkerEnv): {
 function createWebhookAdapterRegistry(env: WorkerEnv): AdapterRegistry {
   return createRuntimeAdapterRegistry({
     nodeEnv: env.NODE_ENV,
-    fetch: createDirectFetch(), // Webhooks run directly, no proxy
+    fetch: createWebhookParsingFetch(),
     facebook: {
       appId: env.FACEBOOK_APP_ID,
       appSecret: env.FACEBOOK_APP_SECRET,
@@ -234,6 +234,12 @@ function createWebhookAdapterRegistry(env: WorkerEnv): AdapterRegistry {
       scopes: [...TIKTOK_OAUTH_SCOPES],
     },
   });
+}
+
+function createWebhookParsingFetch(): typeof fetch {
+  return (() => {
+    throw new Error('Webhook parsing registry must not perform outbound social HTTP requests.');
+  }) as typeof fetch;
 }
 
 /**

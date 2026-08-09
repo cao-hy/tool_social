@@ -21,10 +21,12 @@ describe('WebhooksService', () => {
   };
 
   const webhookCreate = vi.fn();
+  const webhookFindUnique = vi.fn();
   const prisma = {
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => await fn(prisma)),
     webhookEvent: {
       create: webhookCreate,
+      findUnique: webhookFindUnique,
     },
     outboxEvent: {
       create: vi.fn(async ({ data }) => ({ ...data, id: 'outbox_1' })),
@@ -90,6 +92,7 @@ describe('WebhooksService', () => {
 
   it('replay theo unique constraint trả 200-equivalent và không enqueue lại', async () => {
     webhookCreate.mockRejectedValueOnce({ code: 'P2002' });
+    webhookFindUnique.mockResolvedValueOnce({ id: 'webhook_existing' });
     const service = new WebhooksService(prisma, redis, adapters, env);
 
     await expect(service.receive('FACEBOOK', request as never)).resolves.toEqual({
@@ -97,5 +100,14 @@ describe('WebhooksService', () => {
       duplicate: true,
     });
     expect(queueAdd).not.toHaveBeenCalled();
+    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          topic: 'process-webhook',
+          aggregateType: 'WebhookEvent',
+          aggregateId: 'webhook_existing',
+        }),
+      }),
+    );
   });
 });

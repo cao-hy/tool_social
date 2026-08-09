@@ -1,4 +1,4 @@
-import type { Prisma } from '../generated/client';
+import type { OutboundOperation, Prisma } from '../generated/client';
 import type { QueueJobOptions, QueueName, QueuePayload } from '@socialhub/shared';
 
 export interface QueueOutboxPayload<Q extends QueueName = QueueName> {
@@ -55,6 +55,66 @@ export async function findOrCreateOutboundOperation(
       state: 'PREPARED',
     },
     update: {},
+  });
+}
+
+export type GenerationDecision =
+  | { action: 'REUSE_ACTIVE'; operationId: string }
+  | { action: 'CREATE_NEXT'; nextGeneration: number }
+  | { action: 'REJECT'; reason: string };
+
+export function canCreateNextGeneration(
+  latestOperation: Pick<OutboundOperation, 'id' | 'operationGeneration' | 'state'> | null,
+): GenerationDecision {
+  if (!latestOperation) return { action: 'CREATE_NEXT', nextGeneration: 1 };
+
+  switch (latestOperation.state) {
+    case 'PREPARED':
+      return { action: 'REUSE_ACTIVE', operationId: latestOperation.id };
+    case 'CONFIRMED_ABSENT':
+      return {
+        action: 'CREATE_NEXT',
+        nextGeneration: latestOperation.operationGeneration + 1,
+      };
+    case 'FAILED':
+      return {
+        action: 'REJECT',
+        reason: 'Latest operation is FAILED and cannot prove the remote mutation was absent.',
+      };
+    case 'DISPATCHING':
+    case 'REMOTE_UNKNOWN':
+    case 'REMOTE_CONFIRMED':
+    case 'LOCAL_COMMITTED':
+    case 'MANUAL_REVIEW':
+      return {
+        action: 'REJECT',
+        reason: `Cannot create a new generation while latest operation is ${latestOperation.state}.`,
+      };
+    default: {
+      const exhaustive: never = latestOperation.state;
+      return { action: 'REJECT', reason: `Unhandled operation state ${String(exhaustive)}` };
+    }
+  }
+}
+
+export function mutationJobId<Q extends QueueName>(
+  queueName: Q,
+  payload: QueuePayload<Q> & { operationId?: string },
+): string {
+  return payload.operationId ? `${queueName}-outbound-${payload.operationId}` : '';
+}
+
+export async function latestOutboundOperation(
+  tx: Prisma.TransactionClient,
+  input: {
+    operationType: Prisma.OutboundOperationCreateInput['operationType'];
+    resourceType: string;
+    resourceId: string;
+  },
+) {
+  return await tx.outboundOperation.findFirst({
+    where: input,
+    orderBy: { operationGeneration: 'desc' },
   });
 }
 

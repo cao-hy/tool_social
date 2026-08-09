@@ -36,21 +36,45 @@ function createPost(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createOperation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'operation-1',
+    workspaceId: 'workspace-1',
+    operationType: 'PUBLISH_POST',
+    resourceType: 'PlatformPost',
+    resourceId: 'platform-post-1',
+    state: 'REMOTE_UNKNOWN',
+    attemptId: 'attempt-1',
+    fence: 3,
+    ...overrides,
+  };
+}
+
 function createHarness({
   post = createPost(),
+  operation = createOperation(),
   reconcilePublish = vi.fn(async () => ({
     result: 'INDETERMINATE' as const,
     reason: 'Chưa xác định được kết quả phía remote.',
   })),
   childStatuses = ['REMOTE_RESULT_UNKNOWN'],
+  operationUpdateCount = 1,
 }: {
   post?: ReturnType<typeof createPost>;
+  operation?: ReturnType<typeof createOperation> | null;
   reconcilePublish?: ReturnType<typeof vi.fn>;
   childStatuses?: string[];
+  operationUpdateCount?: number;
 } = {}) {
   const updates: unknown[] = [];
   const adapter = { reconcilePublish };
   const prisma = {
+    $transaction: vi.fn(async (fn) => fn(prisma)),
+    outboundOperation: {
+      findUnique: vi.fn(async () => operation),
+      findFirst: vi.fn(async () => operation),
+      updateMany: vi.fn(async () => ({ count: operationUpdateCount })),
+    },
     platformPost: {
       findUnique: vi.fn(async () => post),
       update: vi.fn(async (args) => {
@@ -91,10 +115,25 @@ describe('createReconciliationProcessor', () => {
           platformPostId: 'platform-post-1',
           workspaceId: 'workspace-1',
           publishAttemptId: 'attempt-1',
+          operationId: 'operation-1',
         },
       }),
     ).rejects.toThrow('Chưa xác định được kết quả phía remote.');
 
+    expect(prisma.outboundOperation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 'operation-1',
+          state: 'REMOTE_UNKNOWN',
+          attemptId: 'attempt-1',
+          fence: 3,
+        },
+        data: expect.objectContaining({
+          reconciliationAttempts: { increment: 1 },
+          requiresManualReview: false,
+        }),
+      }),
+    );
     expect(prisma.platformPost.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'platform-post-1' },
@@ -117,6 +156,7 @@ describe('createReconciliationProcessor', () => {
           platformPostId: 'platform-post-1',
           workspaceId: 'workspace-1',
           publishAttemptId: 'attempt-1',
+          operationId: 'operation-1',
         },
       }),
     ).resolves.toMatchObject({ status: 'MANUAL_REVIEW_REQUIRED' });
@@ -147,6 +187,7 @@ describe('createReconciliationProcessor', () => {
           platformPostId: 'platform-post-1',
           workspaceId: 'workspace-1',
           publishAttemptId: 'attempt-1',
+          operationId: 'operation-1',
         },
       }),
     ).resolves.toMatchObject({
@@ -170,6 +211,14 @@ describe('createReconciliationProcessor', () => {
         }),
       }),
     );
+    expect(prisma.outboundOperation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          state: 'LOCAL_COMMITTED',
+          remoteId: 'remote-post-1',
+        }),
+      }),
+    );
     expect(prisma.contentPost.update).toHaveBeenCalled();
   });
 
@@ -185,6 +234,7 @@ describe('createReconciliationProcessor', () => {
           platformPostId: 'platform-post-1',
           workspaceId: 'workspace-1',
           publishAttemptId: 'attempt-1',
+          operationId: 'operation-1',
         },
       }),
     ).resolves.toMatchObject({ status: 'RESOLVED_FAILED' });
@@ -202,7 +252,7 @@ describe('createReconciliationProcessor', () => {
 
   it('bỏ qua reconciliation job thuộc publish attempt cũ', async () => {
     const { processor, platformResolver } = createHarness({
-      post: createPost({ publishAttemptId: 'attempt-2' }),
+      operation: createOperation({ attemptId: 'attempt-2' }),
     });
 
     await expect(
@@ -211,10 +261,36 @@ describe('createReconciliationProcessor', () => {
           platformPostId: 'platform-post-1',
           workspaceId: 'workspace-1',
           publishAttemptId: 'attempt-1',
+          operationId: 'operation-1',
         },
       }),
     ).resolves.toMatchObject({ status: 'STALE_ATTEMPT' });
 
     expect(platformResolver.withWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('discard stale reconciliation result when operation fence changed', async () => {
+    const { processor, prisma } = createHarness({
+      reconcilePublish: vi.fn(async () => ({
+        result: 'FOUND' as const,
+        remotePostId: 'remote-post-1',
+        remoteUrl: 'https://social.test/post/remote-post-1',
+      })),
+      operationUpdateCount: 0,
+    });
+
+    await expect(
+      processor({
+        data: {
+          platformPostId: 'platform-post-1',
+          workspaceId: 'workspace-1',
+          publishAttemptId: 'attempt-1',
+          operationId: 'operation-1',
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'STALE_OPERATION' });
+
+    expect(prisma.platformPost.update).not.toHaveBeenCalled();
+    expect(prisma.contentPost.update).not.toHaveBeenCalled();
   });
 });

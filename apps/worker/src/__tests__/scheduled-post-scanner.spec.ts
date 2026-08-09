@@ -55,7 +55,7 @@ describe('scheduled post scanner', () => {
         operationId: 'op_platform_post_1',
       },
       expect.objectContaining({
-        jobId: 'publish-post-platform_post_1',
+        jobId: 'publish-post-outbound-op_platform_post_1',
         attempts: 5,
         delay: 0,
       }),
@@ -70,7 +70,7 @@ describe('scheduled post scanner', () => {
         operationId: 'op_platform_post_2',
       },
       expect.objectContaining({
-        jobId: 'publish-post-platform_post_2',
+        jobId: 'publish-post-outbound-op_platform_post_2',
         attempts: 5,
         delay: 0,
       }),

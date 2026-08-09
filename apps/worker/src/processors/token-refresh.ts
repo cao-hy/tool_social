@@ -1,14 +1,12 @@
-import {
-  isPlatformError,
-  type SocialPlatformAdapter,
-  type TokenSet,
-} from '@socialhub/platform-adapters';
+import { type SocialPlatformAdapter } from '@socialhub/platform-adapters';
 import type { PrismaClientInstance } from '@socialhub/db';
-import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
+import { decryptToken, type Keyring } from '@socialhub/security';
+import { InMemoryTokenRefreshLock, TokenRefreshService } from '@socialhub/social-runtime';
 import type { Platform } from '@socialhub/shared';
 import type { JobLockService } from '../queue/job-lock';
 
 const REFRESH_THRESHOLD_MS = 2 * 60 * 1000;
+const localTokenRefreshLock = new InMemoryTokenRefreshLock();
 
 export async function getFreshAccessToken(input: {
   prisma: PrismaClientInstance;
@@ -38,7 +36,7 @@ export async function getFreshAccessToken(input: {
     return decryptToken(account.token.accessToken, keyring);
   }
 
-  if (!account.token.refreshToken || !adapter.refreshToken) {
+  if (!account.token.refreshToken) {
     await markDisconnected(
       prisma,
       account.id,
@@ -47,68 +45,18 @@ export async function getFreshAccessToken(input: {
     throw new Error('Token đã hết hạn. Hãy kết nối lại tài khoản.');
   }
 
-  const refreshToken = decryptToken(account.token.refreshToken, keyring);
-  const tokenId = account.token.id;
-  const refreshTokenFn = adapter.refreshToken.bind(adapter);
+  const service = new TokenRefreshService(prisma, keyring, localTokenRefreshLock, {
+    withWorkspace: async (_workspaceId, fn) =>
+      fn({
+        adapters: {
+          get: (platform: Platform) => (platform === account.platform ? adapter : undefined),
+        } as never,
+        proxy: undefined as never,
+        release: async () => undefined,
+      }),
+  });
 
-  const doRefresh = async () => {
-    // Đọc lại từ DB xem token đã được refresh chưa (lớp bảo vệ thứ 2)
-    const currentToken = await prisma.socialToken.findUnique({ where: { id: tokenId } });
-    if (
-      currentToken?.accessTokenExpiresAt &&
-      currentToken.accessTokenExpiresAt.getTime() > Date.now() + REFRESH_THRESHOLD_MS
-    ) {
-      return decryptToken(currentToken.accessToken, keyring);
-    }
-
-    try {
-      return await refreshTokenFn(refreshToken);
-    } catch (error) {
-      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
-        await markDisconnected(prisma, account.id, error.message);
-      }
-      throw error;
-    }
-  };
-
-  const lockKey = `token-refresh:${account.id}`;
-  let tokenSet: TokenSet | string;
-  if (input.locks) {
-    const result = await input.locks.withLock(lockKey, 15000, doRefresh);
-    if (!result) throw new Error('Tiến trình khác đang refresh token, vui lòng thử lại sau.');
-    tokenSet = result;
-  } else {
-    tokenSet = await doRefresh();
-  }
-
-  if (typeof tokenSet === 'string') return tokenSet;
-
-  const encryptedAccessToken = encryptToken(tokenSet.accessToken, keyring);
-  const encryptedRefreshToken = tokenSet.refreshToken
-    ? encryptToken(tokenSet.refreshToken, keyring)
-    : null;
-
-  await prisma.$transaction([
-    prisma.socialToken.update({
-      where: { id: account.token.id },
-      data: {
-        accessToken: encryptedAccessToken.ciphertext,
-        refreshToken: encryptedRefreshToken?.ciphertext ?? account.token.refreshToken,
-        encryptionKeyVersion: encryptedAccessToken.keyVersion,
-        accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
-        refreshTokenExpiresAt:
-          tokenSet.refreshTokenExpiresAt ?? account.token.refreshTokenExpiresAt,
-        lastRefreshedAt: new Date(),
-        refreshFailedCount: 0,
-      },
-    }),
-    prisma.socialAccount.update({
-      where: { id: account.id },
-      data: { status: 'CONNECTED', lastErrorAt: null, lastErrorMessage: null },
-    }),
-  ]);
-
-  return tokenSet.accessToken;
+  return await service.getValidAccessToken(account.id);
 }
 
 function markDisconnected(

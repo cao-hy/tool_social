@@ -19,33 +19,65 @@ describe('cấu hình queue', () => {
   });
 });
 
-describe('buildJobId — khóa idempotency (chống rủi ro R9: double post)', () => {
-  it('cùng platformPostId → cùng jobId, dù correlationId khác nhau', () => {
+describe('buildJobId — transport dedupe key', () => {
+  it('mutation jobs use operationId so generations cannot suppress each other', () => {
     const a = buildJobId('publish-post', {
       platformPostId: 'pp_1',
       workspaceId: 'ws_1',
       correlationId: 'req-a',
+      operationId: 'op_1',
     });
     const b = buildJobId('publish-post', {
       platformPostId: 'pp_1',
       workspaceId: 'ws_1',
       correlationId: 'req-b',
-    });
-    expect(a).toBe(b);
-  });
-
-  it('platformPostId khác nhau → jobId khác nhau', () => {
-    const a = buildJobId('publish-post', {
-      platformPostId: 'pp_1',
-      workspaceId: 'ws_1',
-      correlationId: 'r',
-    });
-    const b = buildJobId('publish-post', {
-      platformPostId: 'pp_2',
-      workspaceId: 'ws_1',
-      correlationId: 'r',
+      operationId: 'op_2',
     });
     expect(a).not.toBe(b);
+    expect(a).toContain('outbound-op_1');
+  });
+
+  it('legacy mutation payloads without operationId get a non-authorizing legacy id', () => {
+    expect(
+      buildJobId('retry-failed-post', {
+        platformPostId: 'pp_1',
+        workspaceId: 'ws_1',
+        requestedByUserId: 'user_1',
+      }),
+    ).toContain('legacy-missing-operation');
+  });
+
+  it('create/reply comment job IDs are operation-scoped', () => {
+    const create = buildJobId('create-platform-comment', {
+      commandId: 'cmd_1',
+      platformPostId: 'pp_1',
+      socialAccountId: 'sa_1',
+      workspaceId: 'ws_1',
+      message: 'hello',
+      requestedByUserId: 'user_1',
+      correlationId: 'req_1',
+      operationId: 'op_comment_1',
+    });
+    const reply = buildJobId('reply-platform-comment', {
+      commentId: 'comment_1',
+      workspaceId: 'ws_1',
+      message: 'hello',
+      requestedByUserId: 'user_1',
+      correlationId: 'req_2',
+      operationId: 'op_reply_1',
+    });
+    expect(create).toContain('outbound-op_comment_1');
+    expect(reply).toContain('outbound-op_reply_1');
+  });
+
+  it('reconciliation job IDs prefer operation identity over legacy attempt identity', () => {
+    const id = buildJobId('reconcile-platform-post', {
+      platformPostId: 'pp_1',
+      workspaceId: 'ws_1',
+      publishAttemptId: 'attempt_1',
+      operationId: 'op_reconcile_1',
+    });
+    expect(id).toContain('outbound-op_reconcile_1');
   });
 
   it('webhook idempotent theo event id — chống replay', () => {

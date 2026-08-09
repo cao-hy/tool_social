@@ -1,7 +1,12 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { createQueueOutboxEvent, findOrCreateOutboundOperation, type Prisma } from '@socialhub/db';
+import {
+  canCreateNextGeneration,
+  createQueueOutboxEvent,
+  findOrCreateOutboundOperation,
+  type Prisma,
+} from '@socialhub/db';
 import {
   type AdapterContext,
   type PostMetrics,
@@ -9,9 +14,8 @@ import {
   type TikTokPublishPlatformState,
   type YouTubeVideoPlatformState,
   isPlatformError,
-  type TokenSet,
 } from '@socialhub/platform-adapters';
-import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
+import { decryptToken, type Keyring } from '@socialhub/security';
 import { deriveContentPostStatus, buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import type { MediaType, Platform, PlatformPostStatus } from '@socialhub/shared';
 import type { QueuePayload } from '@socialhub/shared';
@@ -20,6 +24,7 @@ import { AppError, isAppError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
 import { KEYRING } from '../../infrastructure/infrastructure.module';
 import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
+import { getFreshAccessTokenViaCentralService } from '../../infrastructure/token-refresh';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -534,8 +539,15 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     await this.removeScheduledJobs(postId, workspaceId, auditContext.requestId);
-    const queued = await this.prepareForPublishing(workspaceId, postId, input.socialAccountIds);
-    await this.enqueuePlatformPosts(queued.id, workspaceId, auditContext.requestId);
+    const queued = await this.prepareForPublishing(
+      workspaceId,
+      postId,
+      input.socialAccountIds,
+      auditContext.requestId,
+    );
+    await Promise.all(
+      queued.outboxEventIds.map((outboxEventId) => this.dispatchPublishOutboxEvent(outboxEventId)),
+    );
 
     await this.audit.record({
       ...auditContext,
@@ -841,6 +853,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     workspaceId: string,
     postId: string,
     socialAccountIds: string[] | undefined,
+    correlationId = 'manual',
   ) {
     return this.prisma.$transaction(async (tx) => {
       const post = await tx.contentPost.findFirst({
@@ -868,6 +881,9 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         .filter((item) => !requestedTargets || requestedTargets.includes(item.socialAccountId))
         .map((item) => item.socialAccountId);
       if (targets.length === 0) throw AppError.validation('Cần chọn ít nhất một social account.');
+      const targetPlatformPosts = post.platformPosts.filter((item) =>
+        targets.includes(item.socialAccountId),
+      );
 
       await tx.contentPost.update({
         where: { id: postId },
@@ -883,7 +899,35 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         data: { status: 'QUEUED', errorCode: null, errorMessage: null },
       });
 
-      return { id: postId };
+      const outboxEventIds: string[] = [];
+      for (const platformPost of targetPlatformPosts) {
+        const operation = await findOrCreateOutboundOperation(tx, {
+          workspaceId,
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: platformPost.id,
+          operationGeneration: 1,
+        });
+        const payload: QueuePayload<'publish-post'> = {
+          platformPostId: platformPost.id,
+          workspaceId,
+          correlationId,
+          operationId: operation.id,
+        };
+        const jobId = buildJobId('publish-post', payload);
+        const outboxEvent = await createQueueOutboxEvent(tx, {
+          workspaceId,
+          queueName: 'publish-post',
+          jobId,
+          payload,
+          options: buildQueueJobOptions('publish-post', jobId),
+          aggregateType: 'OutboundOperation',
+          aggregateId: operation.id,
+        });
+        outboxEventIds.push(outboxEvent.id);
+      }
+
+      return { id: postId, outboxEventIds };
     });
   }
 
@@ -980,18 +1024,20 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
           resourceId: platformPostId,
         },
         orderBy: { operationGeneration: 'desc' },
-        select: { operationGeneration: true, state: true },
+        select: { id: true, operationGeneration: true, state: true },
       });
-      if (latest?.state === 'REMOTE_UNKNOWN' || latest?.state === 'MANUAL_REVIEW') {
-        throw AppError.conflict('Không thể retry tự động khi kết quả remote chưa xác định.');
-      }
-      const operation = await findOrCreateOutboundOperation(tx, {
-        workspaceId,
-        operationType: 'PUBLISH_POST',
-        resourceType: 'PlatformPost',
-        resourceId: platformPostId,
-        operationGeneration: (latest?.operationGeneration ?? 0) + 1,
-      });
+      const decision = canCreateNextGeneration(latest);
+      if (decision.action === 'REJECT') throw AppError.conflict(decision.reason);
+      const operation =
+        decision.action === 'REUSE_ACTIVE'
+          ? await tx.outboundOperation.findUniqueOrThrow({ where: { id: decision.operationId } })
+          : await findOrCreateOutboundOperation(tx, {
+              workspaceId,
+              operationType: 'PUBLISH_POST',
+              resourceType: 'PlatformPost',
+              resourceId: platformPostId,
+              operationGeneration: decision.nextGeneration,
+            });
       const payload: QueuePayload<'retry-failed-post'> = {
         platformPostId,
         workspaceId,
@@ -2033,47 +2079,19 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       return decryptToken(account.token.accessToken, this.keyring);
     }
 
-    if (!account.token.refreshToken || !adapter.refreshToken) {
+    if (!account.token.refreshToken) {
       throw AppError.conflict('Token đã hết hạn. Hãy ngắt kết nối rồi kết nối lại tài khoản.');
     }
 
-    const refreshToken = decryptToken(account.token.refreshToken, this.keyring);
-    let tokenSet: TokenSet;
-    try {
-      tokenSet = await adapter.refreshToken(refreshToken);
-    } catch (error) {
-      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
-        await this.prisma.socialAccount.update({
-          where: { id: account.id },
-          data: {
-            status: 'DISCONNECTED',
-            lastErrorAt: new Date(),
-            lastErrorMessage: error.message,
-          },
-        });
-      }
-      throw error;
-    }
-    const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
-    const encryptedRefreshToken = tokenSet.refreshToken
-      ? encryptToken(tokenSet.refreshToken, this.keyring)
-      : null;
-
-    await this.prisma.socialToken.update({
-      where: { id: account.token.id },
-      data: {
-        accessToken: encryptedAccessToken.ciphertext,
-        refreshToken: encryptedRefreshToken?.ciphertext ?? account.token.refreshToken,
-        encryptionKeyVersion: encryptedAccessToken.keyVersion,
-        accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
-        refreshTokenExpiresAt:
-          tokenSet.refreshTokenExpiresAt ?? account.token.refreshTokenExpiresAt,
-        lastRefreshedAt: new Date(),
-        refreshFailedCount: 0,
+    return await getFreshAccessTokenViaCentralService(
+      {
+        prisma: this.prisma,
+        keyring: this.keyring,
+        adapterFactory: this.adapterFactory,
+        account,
       },
-    });
-
-    return tokenSet.accessToken;
+      adapter,
+    );
   }
 }
 

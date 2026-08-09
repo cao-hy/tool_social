@@ -27,8 +27,6 @@ export interface PreparedProxyContext {
   routeFingerprint: string | null;
   attestation: ProxyAttestation | null;
   dispatcherHandle?: ProxyDispatcherHandle;
-  assertCurrentVersion: () => Promise<void>;
-  reAttest?: () => Promise<ProxyAttestation | null>;
 }
 
 export class ProxyRuntimeService {
@@ -75,9 +73,8 @@ export class ProxyRuntimeService {
 
     let attestation: ProxyAttestation | null = null;
     let dispatcherHandle: ProxyDispatcherHandle | undefined = undefined;
-    let reAttest: (() => Promise<ProxyAttestation | null>) | undefined = undefined;
     const snapshotVersion = setting?.configVersion ?? 0;
-    const assertCurrentVersion = async () => {
+    const verifySnapshotStillCurrent = async () => {
       const currentVersion = options?.getWorkspaceConfigVersion
         ? ((await options.getWorkspaceConfigVersion(workspaceId)) ?? 0)
         : ((await getWorkspaceSetting(workspaceId))?.configVersion ?? 0);
@@ -123,13 +120,7 @@ export class ProxyRuntimeService {
         attestation = await runAttestation(options?.forceAttestation);
 
         // Before returning context, verify that the setting hasn't changed.
-        await assertCurrentVersion();
-        reAttest = async () => {
-          await assertCurrentVersion();
-          attestation = await runAttestation(true);
-          await assertCurrentVersion();
-          return attestation;
-        };
+        await verifySnapshotStillCurrent();
       } catch (err) {
         dispatcherHandle.release();
         throw err;
@@ -144,8 +135,6 @@ export class ProxyRuntimeService {
       routeFingerprint: attestation?.proxyFingerprint ?? null,
       attestation,
       dispatcherHandle,
-      assertCurrentVersion,
-      reAttest,
     };
   }
 

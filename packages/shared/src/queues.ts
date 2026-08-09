@@ -42,7 +42,7 @@ export const QUEUE_SETTINGS: Record<QueueName, QueueSettings> = {
   'sync-account-metrics': { concurrency: 1, attempts: 3, backoffDelayMs: 15_000 },
   'refresh-social-token': { concurrency: 3, attempts: 3, backoffDelayMs: 30_000 },
   'process-webhook': { concurrency: 10, attempts: 5, backoffDelayMs: 5_000 },
-  'retry-failed-post': { concurrency: 3, attempts: 1, backoffDelayMs: 0 },
+  'retry-failed-post': { concurrency: 1, attempts: 1, backoffDelayMs: 0 },
   'generate-thumbnail': { concurrency: 1, attempts: 3, backoffDelayMs: 5_000 },
   'cleanup-unused-media': { concurrency: 1, attempts: 1, backoffDelayMs: 0 },
   'sync-external-posts': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
@@ -72,6 +72,7 @@ export interface QueuePayloads {
     since?: string;
   };
   'create-platform-comment': {
+    commandId: string;
     platformPostId: string;
     socialAccountId: string;
     workspaceId: string;
@@ -112,6 +113,7 @@ export interface QueuePayloads {
     platformPostId: string;
     workspaceId: string;
     publishAttemptId: string;
+    operationId?: string;
   };
 }
 
@@ -134,7 +136,7 @@ export interface QueueJobOptions {
 export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<Q>): string {
   switch (queue) {
     case 'publish-post':
-      return jobId(queue, (payload as QueuePayloads['publish-post']).platformPostId);
+      return mutationJobId(queue, (payload as QueuePayloads['publish-post']).operationId);
     case 'sync-posts': {
       const p = payload as QueuePayloads['sync-posts'];
       return jobId(queue, p.socialAccountId, p.cursor ?? 'start');
@@ -145,11 +147,11 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
     }
     case 'create-platform-comment': {
       const p = payload as QueuePayloads['create-platform-comment'];
-      return jobId(queue, p.platformPostId, p.correlationId);
+      return mutationJobId(queue, p.operationId);
     }
     case 'reply-platform-comment': {
       const p = payload as QueuePayloads['reply-platform-comment'];
-      return jobId(queue, p.commentId, p.correlationId);
+      return mutationJobId(queue, p.operationId);
     }
     case 'sync-post-metrics': {
       const p = payload as QueuePayloads['sync-post-metrics'];
@@ -164,7 +166,7 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
     case 'process-webhook':
       return jobId(queue, (payload as QueuePayloads['process-webhook']).webhookEventId);
     case 'retry-failed-post':
-      return jobId(queue, (payload as QueuePayloads['retry-failed-post']).platformPostId);
+      return mutationJobId(queue, (payload as QueuePayloads['retry-failed-post']).operationId);
     case 'generate-thumbnail':
       return jobId(queue, (payload as QueuePayloads['generate-thumbnail']).mediaAssetId);
     case 'cleanup-unused-media':
@@ -175,6 +177,7 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
     }
     case 'reconcile-platform-post': {
       const p = payload as QueuePayloads['reconcile-platform-post'];
+      if (p.operationId) return jobId(queue, 'outbound', p.operationId);
       return jobId(queue, p.platformPostId, p.publishAttemptId);
     }
     default: {
@@ -186,6 +189,11 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
 
 function jobId(queue: QueueName, ...parts: string[]): string {
   return [queue, ...parts.map(encodeJobIdPart)].join('-');
+}
+
+function mutationJobId(queue: QueueName, operationId: string | undefined): string {
+  if (!operationId) return jobId(queue, 'legacy-missing-operation');
+  return jobId(queue, 'outbound', operationId);
 }
 
 export function buildQueueJobOptions<Q extends QueueName>(

@@ -62,6 +62,7 @@ export const replyToCommentSchema = z.object({
 
 export const createPlatformCommentSchema = z.object({
   message: z.string().trim().min(1).max(2000),
+  clientRequestId: z.string().trim().min(1).max(120).optional(),
 });
 
 export const bulkCreatePlatformCommentSchema = z.object({

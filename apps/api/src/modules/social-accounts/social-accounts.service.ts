@@ -6,7 +6,6 @@ import {
   PINTEREST_OAUTH_SCOPES,
   TIKTOK_OAUTH_SCOPES,
   YOUTUBE_OAUTH_SCOPES,
-  isPlatformError,
   type SocialPlatformAdapter,
   type TikTokCreatorInfo,
   type TokenSet,
@@ -27,6 +26,7 @@ import { AppError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
 import { KEYRING } from '../../infrastructure/infrastructure.module';
 import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
+import { getFreshAccessTokenViaCentralService } from '../../infrastructure/token-refresh';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -336,6 +336,27 @@ export class SocialAccountsService implements OnModuleDestroy {
     });
     if (!account) throw AppError.notFound('social account');
 
+    const disconnecting = await this.prisma.socialAccount.updateMany({
+      where: { id: socialAccountId, workspaceId, deletedAt: null, status: { not: 'DISCONNECTED' } },
+      data: {
+        status: 'DISCONNECTING',
+        disconnectGeneration: { increment: 1 },
+        lastErrorAt: null,
+        lastErrorMessage: null,
+      },
+    });
+    if (disconnecting.count !== 1) throw AppError.conflict('Tài khoản đang ngắt kết nối.');
+
+    await this.removePendingJobsForSocialAccount(workspaceId, socialAccountId).catch((error) => {
+      logger.warn(
+        {
+          socialAccountId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Failed to remove pending jobs during disconnection. DISCONNECTING state still blocks dispatch.',
+      );
+    });
+
     await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
       const adapter = adapters.get(account.platform);
       if (account.token && adapter.revokeToken) {
@@ -353,8 +374,6 @@ export class SocialAccountsService implements OnModuleDestroy {
         }
       }
     });
-
-    await this.removePendingJobsForSocialAccount(workspaceId, socialAccountId);
 
     await this.prisma.$transaction([
       this.prisma.socialToken.deleteMany({ where: { socialAccountId } }),
@@ -654,77 +673,19 @@ export class SocialAccountsService implements OnModuleDestroy {
       return decryptToken(account.token.accessToken, this.keyring);
     }
 
-    if (!account.token.refreshToken || !adapter.refreshToken) {
+    if (!account.token.refreshToken) {
       throw AppError.conflict('Token đã hết hạn. Hãy ngắt kết nối rồi kết nối lại tài khoản.');
     }
 
-    const refreshToken = decryptToken(account.token.refreshToken, this.keyring);
-
-    await this.redis.connect();
-    const lockKey = `token-refresh:${account.id}`;
-    const crypto = await import('node:crypto');
-    const lockToken = crypto.randomUUID();
-    const redisClient = this.redis.getClient();
-    const acquired = await redisClient.set(lockKey, lockToken, 'PX', 15000, 'NX');
-
-    if (!acquired) {
-      throw AppError.conflict('Tiến trình khác đang refresh token, vui lòng thử lại sau.');
-    }
-
-    let tokenSet: TokenSet;
-    try {
-      const currentToken = await this.prisma.socialToken.findUnique({
-        where: { id: account.token.id },
-      });
-      if (
-        currentToken?.accessTokenExpiresAt &&
-        currentToken.accessTokenExpiresAt.getTime() > refreshThreshold
-      ) {
-        return decryptToken(currentToken.accessToken, this.keyring);
-      }
-
-      tokenSet = await adapter.refreshToken(refreshToken);
-    } catch (error) {
-      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
-        await this.prisma.socialAccount.update({
-          where: { id: account.id },
-          data: {
-            status: 'DISCONNECTED',
-            lastErrorAt: new Date(),
-            lastErrorMessage: error.message,
-          },
-        });
-      }
-      throw error;
-    } finally {
-      await redisClient.eval(
-        `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`,
-        1,
-        lockKey,
-        lockToken,
-      );
-    }
-
-    const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
-    const encryptedRefreshToken = tokenSet.refreshToken
-      ? encryptToken(tokenSet.refreshToken, this.keyring)
-      : null;
-
-    await this.prisma.socialToken.update({
-      where: { id: account.token.id },
-      data: {
-        accessToken: encryptedAccessToken.ciphertext,
-        refreshToken: encryptedRefreshToken?.ciphertext ?? account.token.refreshToken,
-        encryptionKeyVersion: encryptedAccessToken.keyVersion,
-        accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
-        refreshTokenExpiresAt:
-          tokenSet.refreshTokenExpiresAt ?? account.token.refreshTokenExpiresAt,
-        lastRefreshedAt: new Date(),
-        refreshFailedCount: 0,
+    return await getFreshAccessTokenViaCentralService(
+      {
+        prisma: this.prisma,
+        keyring: this.keyring,
+        adapterFactory: this.adapterFactory,
+        account,
       },
-    });
-
-    return tokenSet.accessToken;
+      adapter,
+    );
   }
 
   private async consumeState(state: string): Promise<OAuthStatePayload> {
@@ -788,11 +749,12 @@ export class SocialAccountsService implements OnModuleDestroy {
       select: { id: true },
     });
 
-    await Promise.all([
-      this.refreshQueue
-        .getJob(buildJobId('refresh-social-token', { socialAccountId, workspaceId }))
-        .then((job) => job?.remove()),
-      ...platformPosts.map((platformPost) => {
+    const removals = [
+      removeQueueJob(
+        this.refreshQueue,
+        buildJobId('refresh-social-token', { socialAccountId, workspaceId }),
+      ),
+      ...platformPosts.flatMap((platformPost) => {
         const publishPayload = {
           platformPostId: platformPost.id,
           workspaceId,
@@ -803,16 +765,16 @@ export class SocialAccountsService implements OnModuleDestroy {
           workspaceId,
           requestedByUserId: 'disconnect',
         };
-        return Promise.all([
-          this.publishQueue
-            .getJob(buildJobId('publish-post', publishPayload))
-            .then((job) => job?.remove()),
-          this.retryQueue
-            .getJob(buildJobId('retry-failed-post', retryPayload))
-            .then((job) => job?.remove()),
-        ]);
+        return [
+          removeQueueJob(this.publishQueue, buildJobId('publish-post', publishPayload)),
+          removeQueueJob(this.retryQueue, buildJobId('retry-failed-post', retryPayload)),
+        ];
       }),
-    ]);
+    ];
+
+    const results = await Promise.allSettled(removals);
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected?.status === 'rejected') throw rejected.reason;
   }
   async triggerSyncExternalPosts(
     workspaceId: string,
@@ -965,6 +927,11 @@ export class SocialAccountsService implements OnModuleDestroy {
   private stateKey(state: string): string {
     return `oauth:state:${state}`;
   }
+}
+
+async function removeQueueJob(queue: Queue, jobId: string): Promise<void> {
+  const job = await queue.getJob(jobId);
+  await job?.remove();
 }
 
 function hasTikTokCreatorInfo(adapter: SocialPlatformAdapter): adapter is SocialPlatformAdapter & {

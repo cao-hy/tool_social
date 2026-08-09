@@ -39,6 +39,7 @@ enum WorkspaceRole {
 
 enum SocialAccountStatus {
   CONNECTED
+  DISCONNECTING
   NEEDS_RECONNECT
   DISCONNECTED
   ERROR
@@ -94,6 +95,14 @@ enum ReplyStatus {
   PENDING
   SENT
   FAILED
+}
+
+enum CommentCommandStatus {
+  QUEUED
+  SENT
+  FAILED
+  REMOTE_UNKNOWN
+  MANUAL_REVIEW
 }
 
 enum MetricSource {
@@ -229,20 +238,21 @@ model User {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  accounts             Account[]
-  sessions             Session[]
-  memberships          WorkspaceMember[]
-  passwordResets       PasswordResetToken[]
-  auditLogs            AuditLog[]
-  notifications        Notification[]
-  createdPosts         ContentPost[]         @relation("PostCreator")
-  uploadedMedia        MediaAsset[]
-  sentReplies          CommentReply[]
-  assignedComments     CommentAssignment[]   @relation("AssignedTo")
-  assignedByComments   CommentAssignment[]   @relation("AssignedBy")
-  commentNotes         CommentNote[]
-  sentInvitations      WorkspaceInvitation[]
-  externalPostSyncJobs ExternalPostSyncJob[]
+  accounts              Account[]
+  sessions              Session[]
+  memberships           WorkspaceMember[]
+  passwordResets        PasswordResetToken[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+  createdPosts          ContentPost[]          @relation("PostCreator")
+  uploadedMedia         MediaAsset[]
+  sentReplies           CommentReply[]
+  commentCreateCommands CommentCreateCommand[]
+  assignedComments      CommentAssignment[]    @relation("AssignedTo")
+  assignedByComments    CommentAssignment[]    @relation("AssignedBy")
+  commentNotes          CommentNote[]
+  sentInvitations       WorkspaceInvitation[]
+  externalPostSyncJobs  ExternalPostSyncJob[]
 
   @@index([email])
   @@index([deletedAt])
@@ -322,22 +332,23 @@ model Workspace {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  members              WorkspaceMember[]
-  invitations          WorkspaceInvitation[]
-  socialAccounts       SocialAccount[]
-  contentPosts         ContentPost[]
-  platformPosts        PlatformPost[]
-  mediaAssets          MediaAsset[]
-  comments             Comment[]
-  notifications        Notification[]
-  auditLogs            AuditLog[]
-  replyTemplates       ReplyTemplate[]
-  commentTags          CommentTag[]
-  backgroundJobs       BackgroundJob[]
-  proxySetting         WorkspaceProxySetting?
-  outboundOperations   OutboundOperation[]
-  outboxEvents         OutboxEvent[]
-  externalPostSyncJobs ExternalPostSyncJob[]
+  members               WorkspaceMember[]
+  invitations           WorkspaceInvitation[]
+  socialAccounts        SocialAccount[]
+  contentPosts          ContentPost[]
+  platformPosts         PlatformPost[]
+  mediaAssets           MediaAsset[]
+  comments              Comment[]
+  commentCreateCommands CommentCreateCommand[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  replyTemplates        ReplyTemplate[]
+  commentTags           CommentTag[]
+  backgroundJobs        BackgroundJob[]
+  proxySetting          WorkspaceProxySetting?
+  outboundOperations    OutboundOperation[]
+  outboxEvents          OutboxEvent[]
+  externalPostSyncJobs  ExternalPostSyncJob[]
 
   @@index([slug])
   @@index([socialEgressPolicy])
@@ -428,6 +439,7 @@ model SocialAccount {
 
   status           SocialAccountStatus @default(CONNECTED)
   tokenVersion     Int                 @default(0)
+  disconnectGeneration Int             @default(0)
   scopes           String[]
   lastSyncedAt     DateTime?
   lastErrorAt      DateTime?
@@ -631,13 +643,14 @@ model PlatformPost {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace       Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  contentPost     ContentPost         @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
-  socialAccount   SocialAccount       @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
-  metric          PostMetric?
-  metricSnapshots MetricSnapshot[]
-  comments        Comment[]
-  media           PlatformPostMedia[]
+  workspace             Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  contentPost           ContentPost            @relation(fields: [contentPostId], references: [id], onDelete: Cascade)
+  socialAccount         SocialAccount          @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+  metric                PostMetric?
+  metricSnapshots       MetricSnapshot[]
+  comments              Comment[]
+  commentCreateCommands CommentCreateCommand[]
+  media                 PlatformPostMedia[]
 
   /// Chống lưu trùng khi sync lại: một externalPostId chỉ tồn tại một lần
   /// trên mỗi platform và account.
@@ -847,6 +860,33 @@ model Comment {
   @@index([platformPostId])
   @@index([workspaceId, postedAt])
   @@index([parentId])
+}
+
+model CommentCreateCommand {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  platformPostId    String
+  requestedByUserId String
+  clientRequestId   String?
+
+  message String               @db.Text
+  status  CommentCommandStatus @default(QUEUED)
+
+  externalCommentId String?
+  errorCode         String?
+  errorMessage      String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace       Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  platformPost    PlatformPost @relation(fields: [platformPostId], references: [id], onDelete: Cascade)
+  requestedByUser User         @relation(fields: [requestedByUserId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, clientRequestId])
+  @@index([workspaceId, status])
+  @@index([platformPostId])
 }
 
 /// Lời trả lời do NGƯỜI DÙNG HỆ THỐNG gửi đi. Có trạng thái vì đây là một lời
@@ -1121,7 +1161,7 @@ model OutboundOperation {
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
-  @@unique([operationType, resourceType, resourceId, operationGeneration])
+  @@unique([operationType, resourceType, resourceId, operationGeneration], map: "OutboundOperation_operationType_resourceType_resourceId_ope_key")
   @@index([workspaceId, state, createdAt])
   @@index([resourceType, resourceId, createdAt])
 }

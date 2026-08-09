@@ -4,14 +4,12 @@ import {
   createDirectFetch,
   ProxyRuntimeService,
   ProxyConfigurationError,
-  ProxyConfigurationChangedError,
 } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
   TIKTOK_OAUTH_SCOPES,
 } from '@socialhub/platform-adapters';
-import { RemoteRequestError } from '@socialhub/shared';
 import {
   decryptToken,
   ProxyPolicyService,
@@ -83,22 +81,7 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
       );
     }
 
-    const fetchImpl: typeof fetch = async (input, init) => {
-      try {
-        await ctx.assertCurrentVersion();
-      } catch (error) {
-        if (!(error instanceof ProxyConfigurationChangedError)) {
-          throw error;
-        }
-        throw new RemoteRequestError(
-          'Proxy configuration changed before outbound request',
-          'BEFORE_CONNECT',
-          false,
-          error,
-        );
-      }
-      return baseFetch(input, init);
-    };
+    const fetchImpl: typeof fetch = (input, init) => baseFetch(input, init);
 
     let released = false;
 

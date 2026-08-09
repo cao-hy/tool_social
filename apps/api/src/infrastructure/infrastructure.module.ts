@@ -1,5 +1,5 @@
 import { Global, Module } from '@nestjs/common';
-import { createDirectFetch, loadApiEnv } from '@socialhub/config';
+import { loadApiEnv } from '@socialhub/config';
 import {
   AdapterRegistry,
   createRuntimeAdapterRegistry,
@@ -40,7 +40,7 @@ export { ADAPTER_REGISTRY, KEYRING } from './tokens';
       useFactory: (env: ApiEnv): AdapterRegistry =>
         createRuntimeAdapterRegistry({
           nodeEnv: env.NODE_ENV,
-          fetch: createDirectFetch(),
+          fetch: createParsingOnlyFetch(),
           facebook: {
             appId: env.FACEBOOK_APP_ID,
             appSecret: env.FACEBOOK_APP_SECRET,
@@ -76,3 +76,11 @@ export { ADAPTER_REGISTRY, KEYRING } from './tokens';
   exports: [ENV, KEYRING, ADAPTER_REGISTRY, AdapterRegistryFactory, PrismaService, RedisService],
 })
 export class InfrastructureModule {}
+
+function createParsingOnlyFetch(): typeof fetch {
+  return (() => {
+    throw new Error(
+      'Global adapter registry is parsing-only; use AdapterRegistryFactory for HTTP.',
+    );
+  }) as typeof fetch;
+}

@@ -9,7 +9,7 @@ import { logger } from '../logger';
 import { getFreshAccessToken } from './token-refresh';
 import {
   beginOutboundAttempt,
-  markLocalCommitted,
+  markLocalCommittedInTransaction,
   markRemoteConfirmed,
   markRemoteUnknown,
   rollbackBeforeConnect,
@@ -160,7 +160,18 @@ async function replyPlatformComment(
     let result: Awaited<ReturnType<typeof replyToComment>>;
     try {
       const start = await beginOutboundAttempt(input.prisma, payload.operationId);
-      if (start.action === 'NOOP') return { replied: false, reason: start.reason };
+      if (start.action === 'LOCAL_COMMIT') {
+        return await commitReplyLocally(input.prisma, {
+          payload,
+          comment,
+          reply,
+          account,
+          ownership: start.ownership,
+        });
+      }
+      if (start.action !== 'DISPATCH_REMOTE') {
+        return { replied: false, reason: start.reason };
+      }
       ownership = start.ownership;
       result = await replyToComment(
         {
@@ -175,6 +186,10 @@ async function replyPlatformComment(
       );
       await markRemoteConfirmed(input.prisma, ownership, {
         remoteId: result.externalReplyId,
+        checkpoint: {
+          externalReplyId: result.externalReplyId,
+          sentAt: result.sentAt.toISOString(),
+        },
       });
     } catch (error) {
       if (error instanceof RemoteRequestError && !error.requestMayHaveReachedRemote && ownership) {
@@ -197,54 +212,19 @@ async function replyPlatformComment(
       throw error;
     }
 
-    await input.prisma.$transaction([
-      input.prisma.commentReply.update({
-        where: { id: reply.id },
-        data: { status: 'SENT', externalReplyId: result.externalReplyId, sentAt: result.sentAt },
-      }),
-      input.prisma.comment.update({
-        where: { id: comment.id },
-        data: { status: 'RESOLVED' },
-      }),
-      input.prisma.comment.upsert({
-        where: {
-          socialAccountId_externalCommentId: {
-            socialAccountId: account.id,
-            externalCommentId: result.externalReplyId,
-          },
-        },
-        create: {
-          workspaceId: payload.workspaceId,
-          platformPostId: comment.platformPostId,
-          socialAccountId: account.id,
-          platform: account.platform,
-          externalCommentId: result.externalReplyId,
-          parentId: comment.id,
-          authorExternalId: account.externalPageId ?? account.externalAccountId,
-          authorName: account.name,
-          authorAvatarUrl: account.avatarUrl,
-          message: payload.message,
-          likeCount: 0,
-          postedAt: result.sentAt,
-          status: 'RESOLVED',
-          isHidden: false,
-          isFromPage: true,
-        },
-        update: {
-          parentId: comment.id,
-          message: payload.message,
-          postedAt: result.sentAt,
-          isFromPage: true,
-          deletedAt: null,
-        },
-      }),
-    ]);
-    if (ownership) await markLocalCommitted(input.prisma, ownership);
+    const committed = await commitReplyLocally(input.prisma, {
+      payload,
+      comment,
+      reply,
+      account,
+      ownership,
+      result,
+    });
 
     logger.info(
       {
         commentId: comment.id,
-        externalReplyId: result.externalReplyId,
+        externalReplyId: committed.externalReplyId,
         platform: account.platform,
       },
       'Đã reply comment trên platform',
@@ -253,12 +233,111 @@ async function replyPlatformComment(
     return {
       replied: true,
       commentId: comment.id,
-      externalReplyId: result.externalReplyId,
+      externalReplyId: committed.externalReplyId,
       platform: PLATFORM_LABELS[account.platform],
     };
   } finally {
     await adapterCtx.release();
   }
+}
+
+async function commitReplyLocally(
+  prisma: PrismaClientInstance,
+  input: {
+    payload: ReplyPlatformCommentPayload;
+    comment: {
+      id: string;
+      platformPostId: string;
+      workspaceId: string;
+    };
+    reply: { id: string };
+    account: {
+      id: string;
+      platform: keyof typeof PLATFORM_LABELS;
+      externalAccountId: string;
+      externalPageId: string | null;
+      name: string;
+      avatarUrl: string | null;
+    };
+    ownership: OutboundAttemptOwnership | null;
+    result?: { externalReplyId: string; sentAt: Date };
+  },
+): Promise<{ replied: true; commentId: string; externalReplyId: string; platform: string }> {
+  const result = input.result ?? (await loadReplyCheckpoint(prisma, input.ownership));
+  await prisma.$transaction(async (tx) => {
+    await tx.commentReply.update({
+      where: { id: input.reply.id },
+      data: { status: 'SENT', externalReplyId: result.externalReplyId, sentAt: result.sentAt },
+    });
+    await tx.comment.update({
+      where: { id: input.comment.id },
+      data: { status: 'RESOLVED' },
+    });
+    await tx.comment.upsert({
+      where: {
+        socialAccountId_externalCommentId: {
+          socialAccountId: input.account.id,
+          externalCommentId: result.externalReplyId,
+        },
+      },
+      create: {
+        workspaceId: input.payload.workspaceId,
+        platformPostId: input.comment.platformPostId,
+        socialAccountId: input.account.id,
+        platform: input.account.platform,
+        externalCommentId: result.externalReplyId,
+        parentId: input.comment.id,
+        authorExternalId: input.account.externalPageId ?? input.account.externalAccountId,
+        authorName: input.account.name,
+        authorAvatarUrl: input.account.avatarUrl,
+        message: input.payload.message,
+        likeCount: 0,
+        postedAt: result.sentAt,
+        status: 'RESOLVED',
+        isHidden: false,
+        isFromPage: true,
+      },
+      update: {
+        parentId: input.comment.id,
+        message: input.payload.message,
+        postedAt: result.sentAt,
+        isFromPage: true,
+        deletedAt: null,
+      },
+    });
+    if (input.ownership) await markLocalCommittedInTransaction(tx, input.ownership);
+  });
+
+  return {
+    replied: true,
+    commentId: input.comment.id,
+    externalReplyId: result.externalReplyId,
+    platform: PLATFORM_LABELS[input.account.platform],
+  };
+}
+
+async function loadReplyCheckpoint(
+  prisma: PrismaClientInstance,
+  ownership: OutboundAttemptOwnership | null,
+): Promise<{ externalReplyId: string; sentAt: Date }> {
+  if (!ownership) throw new Error('Cannot recover reply commit without operation ownership');
+  const operation = await prisma.outboundOperation.findUnique({
+    where: { id: ownership.operationId },
+    select: { remoteCheckpoint: true },
+  });
+  const checkpoint = jsonObject(operation?.remoteCheckpoint);
+  const externalReplyId =
+    typeof checkpoint?.externalReplyId === 'string' ? checkpoint.externalReplyId : null;
+  const sentAt = typeof checkpoint?.sentAt === 'string' ? new Date(checkpoint.sentAt) : null;
+  if (!externalReplyId || !sentAt || Number.isNaN(sentAt.getTime())) {
+    throw new Error('REMOTE_CONFIRMED reply operation is missing durable checkpoint');
+  }
+  return { externalReplyId, sentAt };
+}
+
+function jsonObject(value: Prisma.JsonValue | null | undefined): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 async function markReplyFailed(

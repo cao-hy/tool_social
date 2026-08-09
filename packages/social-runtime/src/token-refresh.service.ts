@@ -9,6 +9,37 @@ export interface TokenRefreshLock {
   release(key: string, token: string): Promise<boolean>;
 }
 
+export class InMemoryTokenRefreshLock implements TokenRefreshLock {
+  private readonly locks = new Map<string, { token: string; expiresAt: number }>();
+
+  async acquire(key: string, token: string, ttlMs: number): Promise<boolean> {
+    this.evictExpired(key);
+    if (this.locks.has(key)) return false;
+    this.locks.set(key, { token, expiresAt: Date.now() + ttlMs });
+    return true;
+  }
+
+  async extend(key: string, token: string, ttlMs: number): Promise<boolean> {
+    this.evictExpired(key);
+    const current = this.locks.get(key);
+    if (!current || current.token !== token) return false;
+    current.expiresAt = Date.now() + ttlMs;
+    return true;
+  }
+
+  async release(key: string, token: string): Promise<boolean> {
+    const current = this.locks.get(key);
+    if (!current || current.token !== token) return false;
+    this.locks.delete(key);
+    return true;
+  }
+
+  private evictExpired(key: string): void {
+    const current = this.locks.get(key);
+    if (current && current.expiresAt <= Date.now()) this.locks.delete(key);
+  }
+}
+
 export class TokenRefreshBusyError extends Error {
   constructor(accountId: string) {
     super(`Timeout waiting for token refresh lock on account ${accountId}`);

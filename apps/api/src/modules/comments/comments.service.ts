@@ -2,17 +2,14 @@ import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
 import { createQueueOutboxEvent, findOrCreateOutboundOperation, type Prisma } from '@socialhub/db';
 import { buildJobId, buildQueueJobOptions, type QueuePayload } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
-import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
-import {
-  isPlatformError,
-  type SocialPlatformAdapter,
-  type TokenSet,
-} from '@socialhub/platform-adapters';
+import { decryptToken, type Keyring } from '@socialhub/security';
+import { isPlatformError, type SocialPlatformAdapter } from '@socialhub/platform-adapters';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
 import { KEYRING } from '../../infrastructure/infrastructure.module';
 import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
+import { getFreshAccessTokenViaCentralService } from '../../infrastructure/token-refresh';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService, type AuditContext } from '../audit/audit.service';
@@ -469,141 +466,13 @@ export class CommentsService implements OnModuleDestroy {
     input: ReplyToCommentInput,
     auditContext: AuditContext,
   ) {
-    const comment = await this.findComment(workspaceId, commentId);
-    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.requireCapability(comment.platform, 'replyToComment');
-      if (!adapter.replyToComment) {
-        throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
-      }
-    });
-
-    if (!comment.socialAccount.token || comment.socialAccount.status !== 'CONNECTED') {
-      throw AppError.conflict('Social account chưa kết nối.');
-    }
-    if (
-      comment.platform === 'FACEBOOK' &&
-      !comment.socialAccount.scopes.includes('pages_manage_engagement')
-    ) {
-      throw AppError.conflict(
-        'Facebook token hiện tại thiếu quyền pages_manage_engagement. Hãy ngắt kết nối rồi kết nối lại Facebook Page để cấp quyền reply comment.',
-      );
-    }
-    if (
-      comment.platform === 'YOUTUBE' &&
-      !comment.socialAccount.scopes.includes('https://www.googleapis.com/auth/youtube.force-ssl')
-    ) {
-      throw AppError.conflict(
-        'YouTube token hiện tại thiếu scope youtube.force-ssl. Hãy ngắt kết nối rồi kết nối lại YouTube để cấp quyền quản lý comment.',
-      );
-    }
-    if (comment.platform === 'INSTAGRAM') {
-      const missingScopes = ['instagram_manage_comments', 'pages_read_engagement'].filter(
-        (scope) => !comment.socialAccount.scopes.includes(scope),
-      );
-      if (missingScopes.length > 0) {
-        throw AppError.conflict(
-          `Instagram token hiện tại thiếu quyền ${missingScopes.join(
-            ', ',
-          )}. Hãy ngắt kết nối rồi kết nối lại Instagram sau khi quyền đã được bật trong Meta App Dashboard.`,
-        );
-      }
-    }
-
-    const reply = await this.prisma.commentReply.create({
-      data: { workspaceId, commentId: comment.id, message: input.message, sentById: actorUserId },
-    });
-
-    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.requireCapability(comment.platform, 'replyToComment');
-      if (!adapter.replyToComment) {
-        throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
-      }
-
-      try {
-        const targetExternalCommentId =
-          comment.platform === 'YOUTUBE' && comment.parent?.externalCommentId
-            ? comment.parent.externalCommentId
-            : comment.externalCommentId;
-        const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
-        const result = await adapter.replyToComment(
-          {
-            accessToken,
-            externalAccountId: comment.socialAccount.externalAccountId,
-            externalPageId: comment.socialAccount.externalPageId ?? undefined,
-            correlationId: auditContext.requestId ?? `comment-reply:${reply.id}`,
-          },
-          targetExternalCommentId,
-          input.message,
-        );
-        await this.prisma.$transaction([
-          this.prisma.commentReply.update({
-            where: { id: reply.id },
-            data: {
-              status: 'SENT',
-              externalReplyId: result.externalReplyId,
-              sentAt: result.sentAt,
-            },
-          }),
-          this.prisma.comment.update({
-            where: { id: comment.id },
-            data: { status: 'RESOLVED' },
-          }),
-          this.prisma.comment.upsert({
-            where: {
-              socialAccountId_externalCommentId: {
-                socialAccountId: comment.socialAccountId,
-                externalCommentId: result.externalReplyId,
-              },
-            },
-            create: {
-              workspaceId,
-              platformPostId: comment.platformPostId,
-              socialAccountId: comment.socialAccountId,
-              platform: comment.platform,
-              externalCommentId: result.externalReplyId,
-              parentId: comment.id,
-              authorExternalId:
-                comment.socialAccount.externalPageId ?? comment.socialAccount.externalAccountId,
-              authorName: comment.socialAccount.name,
-              authorAvatarUrl: comment.socialAccount.avatarUrl,
-              message: input.message,
-              likeCount: 0,
-              postedAt: result.sentAt,
-              status: 'RESOLVED',
-              isHidden: false,
-              isFromPage: true,
-            },
-            update: {
-              parentId: comment.id,
-              message: input.message,
-              postedAt: result.sentAt,
-              isFromPage: true,
-              deletedAt: null,
-            },
-          }),
-        ]);
-        await this.audit.record({
-          ...auditContext,
-          actorUserId,
-          workspaceId,
-          action: 'COMMENT_REPLIED',
-          resourceType: 'Comment',
-          resourceId: comment.id,
-        });
-      } catch (error) {
-        await this.prisma.commentReply.update({
-          where: { id: reply.id },
-          data: {
-            status: 'FAILED',
-            errorCode: error instanceof Error ? error.name : 'UNKNOWN',
-            errorMessage: error instanceof Error ? error.message : 'Lỗi không xác định khi reply.',
-          },
-        });
-        throw error;
-      }
-    });
-
-    return this.get(workspaceId, comment.id);
+    return this.queueReplyToComment(
+      workspaceId,
+      commentId,
+      actorUserId,
+      input.message,
+      auditContext,
+    );
   }
 
   async createPlatformComment(
@@ -636,23 +505,49 @@ export class CommentsService implements OnModuleDestroy {
     const correlationId =
       auditContext.requestId ?? `comment-create:${platformPost.id}:${Date.now()}`;
     const queued = await this.prisma.$transaction(async (tx) => {
-      const latest = await tx.outboundOperation.findFirst({
-        where: {
-          operationType: 'CREATE_COMMENT',
-          resourceType: 'PlatformPost',
-          resourceId: platformPost.id,
-        },
-        orderBy: { operationGeneration: 'desc' },
-        select: { operationGeneration: true },
-      });
+      const command = input.clientRequestId
+        ? await tx.commentCreateCommand.upsert({
+            where: {
+              workspaceId_clientRequestId: {
+                workspaceId,
+                clientRequestId: input.clientRequestId,
+              },
+            },
+            create: {
+              workspaceId,
+              platformPostId: platformPost.id,
+              requestedByUserId: actorUserId,
+              clientRequestId: input.clientRequestId,
+              message: input.message,
+            },
+            update: {},
+          })
+        : await tx.commentCreateCommand.create({
+            data: {
+              workspaceId,
+              platformPostId: platformPost.id,
+              requestedByUserId: actorUserId,
+              message: input.message,
+            },
+          });
+
+      if (
+        command.platformPostId !== platformPost.id ||
+        command.requestedByUserId !== actorUserId ||
+        command.message !== input.message
+      ) {
+        throw AppError.conflict('Idempotency key đã được dùng cho comment khác.');
+      }
+
       const operation = await findOrCreateOutboundOperation(tx, {
         workspaceId,
         operationType: 'CREATE_COMMENT',
-        resourceType: 'PlatformPost',
-        resourceId: platformPost.id,
-        operationGeneration: (latest?.operationGeneration ?? 0) + 1,
+        resourceType: 'CommentCreateCommand',
+        resourceId: command.id,
+        operationGeneration: 1,
       });
       const payload: QueuePayload<'create-platform-comment'> = {
+        commandId: command.id,
         platformPostId: platformPost.id,
         socialAccountId: platformPost.socialAccountId,
         workspaceId,
@@ -699,7 +594,7 @@ export class CommentsService implements OnModuleDestroy {
         aggregateType: 'OutboundOperation',
         aggregateId: operation.id,
       });
-      return { payload, jobId, opts, backgroundJob, outboxEventId: outboxEvent.id };
+      return { jobId, backgroundJob, outboxEventId: outboxEvent.id };
     });
 
     await this.dispatchCommentOutboxEvent(queued.outboxEventId);
@@ -1092,48 +987,19 @@ export class CommentsService implements OnModuleDestroy {
       return decryptToken(account.token.accessToken, this.keyring);
     }
 
-    if (!account.token.refreshToken || !adapter.refreshToken) {
+    if (!account.token.refreshToken) {
       throw AppError.conflict('Token đã hết hạn. Hãy ngắt kết nối rồi kết nối lại tài khoản.');
     }
 
-    const refreshToken = decryptToken(account.token.refreshToken, this.keyring);
-    let tokenSet: TokenSet;
-    try {
-      tokenSet = await adapter.refreshToken(refreshToken);
-    } catch (error) {
-      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
-        await this.prisma.socialAccount.update({
-          where: { id: account.id },
-          data: {
-            status: 'DISCONNECTED',
-            lastErrorAt: new Date(),
-            lastErrorMessage: error.message,
-          },
-        });
-      }
-      throw error;
-    }
-
-    const encryptedAccessToken = encryptToken(tokenSet.accessToken, this.keyring);
-    const encryptedRefreshToken = tokenSet.refreshToken
-      ? encryptToken(tokenSet.refreshToken, this.keyring)
-      : null;
-
-    await this.prisma.socialToken.update({
-      where: { id: account.token.id },
-      data: {
-        accessToken: encryptedAccessToken.ciphertext,
-        refreshToken: encryptedRefreshToken?.ciphertext ?? account.token.refreshToken,
-        encryptionKeyVersion: encryptedAccessToken.keyVersion,
-        accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
-        refreshTokenExpiresAt:
-          tokenSet.refreshTokenExpiresAt ?? account.token.refreshTokenExpiresAt,
-        lastRefreshedAt: new Date(),
-        refreshFailedCount: 0,
+    return await getFreshAccessTokenViaCentralService(
+      {
+        prisma: this.prisma,
+        keyring: this.keyring,
+        adapterFactory: this.adapterFactory,
+        account,
       },
-    });
-
-    return tokenSet.accessToken;
+      adapter,
+    );
   }
 
   async sync(workspaceId: string, input: SyncCommentsInput, requestId: string) {

@@ -12,7 +12,12 @@ import {
 } from '@socialhub/platform-adapters';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
-import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
+import {
+  operationRequestKey,
+  createPrismaClient,
+  type Prisma,
+  type PrismaClientInstance,
+} from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { randomUUID } from 'node:crypto';
@@ -21,9 +26,11 @@ import {
   buildJobId,
   PLATFORM_LABELS,
   RemoteRequestError,
+  buildPublishNetworkProof,
   type MediaType,
   type Platform,
   type PlatformPostStatus,
+  type PublishNetworkProof,
 } from '@socialhub/shared';
 import sharp from 'sharp';
 import type { Queue } from 'bullmq';
@@ -36,7 +43,7 @@ import { JobLockService } from '../queue/job-lock';
 import { getFreshAccessToken } from './token-refresh';
 import {
   beginOutboundAttempt,
-  markLocalCommitted,
+  markLocalCommittedInTransaction,
   markRemoteConfirmed,
   markRemoteUnknown,
   rollbackBeforeConnect,
@@ -57,8 +64,6 @@ const publishPostPayloadSchema = z
       payload.correlationId ??
       `retry:${payload.requestedByUserId ?? 'unknown'}:${payload.platformPostId}`,
   }));
-
-import type { ProxyAttestation } from '@socialhub/security';
 
 const adapterLogger: AdapterLogger = {
   debug: (message, context) => logger.debug(context ?? {}, message),
@@ -257,9 +262,24 @@ async function publishPlatformPost(
       return { published: false, reason: 'fixture_account_with_real_adapter' };
     }
 
-    let publishNetworkProof = adaptersContext.proxy?.attestation || null;
+    let publishNetworkProof = buildPublishNetworkProof({
+      egressPolicy: adaptersContext.proxy?.egressPolicy ?? null,
+      proxyEnabled: adaptersContext.proxy?.config.enabled ?? null,
+      proxyActive: adaptersContext.proxy ? Boolean(adaptersContext.proxy.attestation) : null,
+      configVersion: adaptersContext.proxy?.configVersion ?? null,
+      proxyFingerprint: adaptersContext.proxy?.routeFingerprint ?? null,
+      countryLock: adaptersContext.proxy?.config.countryLock ?? null,
+      countryLockSatisfied: adaptersContext.proxy?.config.countryLock
+        ? adaptersContext.proxy.attestation?.countryCode ===
+          adaptersContext.proxy.config.countryLock
+        : null,
+      attestation: adaptersContext.proxy?.attestation ?? null,
+      checkOk: adaptersContext.proxy?.attestation ? true : null,
+    });
     let publishAttemptId: string | null = null;
     let operationOwnership: OutboundAttemptOwnership | null = null;
+    let remoteReturnedSuccess = false;
+    let remoteConfirmationPersisted = false;
 
     try {
       const accessToken = await getFreshAccessToken({
@@ -361,8 +381,21 @@ async function publishPlatformPost(
         },
       } satisfies AdapterContext;
 
-      const startOperation = await beginOutboundAttempt(input.prisma, payload.operationId);
-      if (startOperation.action === 'NOOP') {
+      const operationId = await resolvePublishOperationId(
+        input.prisma,
+        platformPost,
+        payload.operationId,
+      );
+      const startOperation = await beginOutboundAttempt(input.prisma, operationId);
+      if (startOperation.action === 'LOCAL_COMMIT') {
+        return await commitPublishLocally(input.prisma, {
+          platformPost,
+          payload,
+          jobId: job.id,
+          ownership: startOperation.ownership,
+        });
+      }
+      if (startOperation.action !== 'DISPATCH_REMOTE') {
         return { published: false, reason: startOperation.reason };
       }
       operationOwnership = startOperation.ownership;
@@ -376,25 +409,33 @@ async function publishPlatformPost(
         },
       });
 
-      await assertProxyConfigVersion(
-        input.prisma,
-        payload.workspaceId,
-        adaptersContext.proxy.configVersion,
-      );
-      publishNetworkProof =
-        (await adaptersContext.proxy.reAttest?.()) ??
-        adaptersContext.proxy.attestation ??
-        publishNetworkProof;
-      await assertProxyConfigVersion(
-        input.prisma,
-        payload.workspaceId,
-        adaptersContext.proxy.configVersion,
-      );
+      publishNetworkProof = buildPublishNetworkProof({
+        egressPolicy: adaptersContext.proxy.egressPolicy,
+        proxyEnabled: adaptersContext.proxy.config.enabled,
+        proxyActive: Boolean(adaptersContext.proxy.attestation),
+        configVersion: adaptersContext.proxy.configVersion,
+        proxyFingerprint: adaptersContext.proxy.routeFingerprint,
+        countryLock: adaptersContext.proxy.config.countryLock ?? null,
+        countryLockSatisfied: adaptersContext.proxy.config.countryLock
+          ? adaptersContext.proxy.attestation?.countryCode ===
+            adaptersContext.proxy.config.countryLock
+          : null,
+        attestation: adaptersContext.proxy.attestation,
+        checkOk: adaptersContext.proxy.attestation ? true : null,
+      });
 
       const result = await adapter.publishPost(adapterContext, publishInput);
+      remoteReturnedSuccess = true;
       await markRemoteConfirmed(input.prisma, operationOwnership, {
         remoteId: result.externalPostId,
+        checkpoint: {
+          externalPostId: result.externalPostId,
+          externalUrl: result.externalUrl,
+          publishedAt: result.publishedAt.toISOString(),
+          publishNetwork: publishNetworkProof,
+        },
       });
+      remoteConfirmationPersisted = true;
       const platformState = await platformStateAfterPublish(
         adapter,
         adapterContext,
@@ -405,57 +446,19 @@ async function publishPlatformPost(
         publishNetworkProof,
       );
 
-      await input.prisma.$transaction([
-        input.prisma.platformPost.update({
-          where: { id: platformPost.id },
-          data: {
-            status: 'PUBLISHED',
-            externalPostId: result.externalPostId,
-            externalUrl: result.externalUrl,
-            publishedAt: result.publishedAt,
-            errorCode: null,
-            errorMessage: null,
-            platformState: platformStateWithNetwork as Prisma.InputJsonValue,
-          },
-        }),
-        input.prisma.auditLog.create({
-          data: {
-            workspaceId: payload.workspaceId,
-            actorUserId: platformPost.contentPost.createdById,
-            action: 'POST_PUBLISHED',
-            resourceType: 'PlatformPost',
-            resourceId: platformPost.id,
-            metadata: {
-              platform: platformPost.platform,
-              externalPostId: result.externalPostId,
-              jobId: job.id,
-              publishNetwork: publishNetworkProof,
-            } as unknown as Prisma.InputJsonValue,
-          },
-        }),
-        input.prisma.notification.create({
-          data: {
-            workspaceId: payload.workspaceId,
-            userId: platformPost.contentPost.createdById,
-            type: 'POST_PUBLISHED',
-            title: 'Bài đăng đã publish',
-            body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name} đã publish thành công.`,
-            linkUrl: `/posts/${platformPost.contentPostId}`,
-            data: {
-              platformPostId: platformPost.id,
-              platform: platformPost.platform,
-              accountName: platformPost.socialAccount.name,
-              socialAccountId: platformPost.socialAccountId,
-              externalPostId: result.externalPostId,
-              postTitle: platformPost.contentPost.title,
-            },
-          },
-        }),
-      ]);
-      await markLocalCommitted(input.prisma, operationOwnership);
-
-      await updateParentStatus(input.prisma, platformPost.contentPostId);
-      return { published: true, externalPostId: result.externalPostId };
+      return await commitPublishLocally(input.prisma, {
+        platformPost,
+        payload,
+        jobId: job.id,
+        ownership: operationOwnership,
+        result: {
+          externalPostId: result.externalPostId,
+          externalUrl: result.externalUrl,
+          publishedAt: result.publishedAt,
+          platformState: platformStateWithNetwork,
+          publishNetworkProof,
+        },
+      });
     } catch (error) {
       const attempt = (job.attemptsMade ?? 0) + 1;
       const maxAttempts = job.opts?.attempts ?? 1;
@@ -488,8 +491,21 @@ async function publishPlatformPost(
         throw error;
       }
 
+      if (remoteConfirmationPersisted) {
+        logger.error(
+          {
+            err: error,
+            platformPostId: platformPost.id,
+            operationId: operationOwnership?.operationId,
+          },
+          'Publish remote confirmation is durable; retrying local commit only',
+        );
+        throw error;
+      }
+
       const decision = decideOnError(error, attempt, maxAttempts);
       const isRemoteUnknown =
+        (remoteReturnedSuccess && !remoteConfirmationPersisted) ||
         (error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
         (isPlatformError(error) && error.kind === 'NETWORK');
 
@@ -538,6 +554,7 @@ async function publishPlatformPost(
             platformPostId: platformPost.id,
             workspaceId: payload.workspaceId,
             publishAttemptId,
+            operationId: operationOwnership?.operationId,
           };
           const reconcileJobId = buildJobId('reconcile-platform-post', reconcilePayload);
           try {
@@ -629,32 +646,196 @@ function jsonObject(
   return value as Record<string, unknown>;
 }
 
-async function assertProxyConfigVersion(
-  prisma: PrismaClientInstance,
-  workspaceId: string,
-  expectedVersion: number,
-): Promise<void> {
-  const currentSetting = await prisma.workspaceProxySetting.findUnique({
-    where: { workspaceId },
-    select: { configVersion: true },
-  });
-  if ((currentSetting?.configVersion ?? 0) !== expectedVersion) {
-    throw new RemoteRequestError(
-      'Proxy configuration changed before publish; retry with the latest config.',
-      'BEFORE_CONNECT',
-      false,
-    );
-  }
-}
-
 function mergePlatformStateWithNetworkProof(
   platformState:
     TikTokPublishPlatformState | YouTubeVideoPlatformState | Record<string, unknown> | undefined,
-  publishNetwork: ProxyAttestation | null,
+  publishNetwork: PublishNetworkProof | null,
 ): Record<string, unknown> {
   return {
     ...(platformState ?? {}),
     publishNetwork,
+  };
+}
+
+async function resolvePublishOperationId(
+  prisma: PrismaClientInstance,
+  platformPost: {
+    id: string;
+    workspaceId: string;
+    status: PlatformPostStatus;
+    publishAttemptId: string | null;
+    publishAttemptStartedAt: Date | null;
+    publishFence: number;
+  },
+  payloadOperationId: string | undefined,
+): Promise<string> {
+  if (payloadOperationId) return payloadOperationId;
+
+  const latest = await prisma.outboundOperation.findFirst({
+    where: {
+      operationType: 'PUBLISH_POST',
+      resourceType: 'PlatformPost',
+      resourceId: platformPost.id,
+    },
+    orderBy: { operationGeneration: 'desc' },
+  });
+  if (latest) return latest.id;
+
+  const operationGeneration = 1;
+  const requestKey = operationRequestKey({
+    operationType: 'PUBLISH_POST',
+    resourceType: 'PlatformPost',
+    resourceId: platformPost.id,
+    operationGeneration,
+  });
+  const mayHaveDispatched =
+    platformPost.status === 'PROCESSING' ||
+    Boolean(platformPost.publishAttemptId || platformPost.publishAttemptStartedAt);
+
+  const operation = await prisma.outboundOperation.upsert({
+    where: {
+      operationType_resourceType_resourceId_operationGeneration: {
+        operationType: 'PUBLISH_POST',
+        resourceType: 'PlatformPost',
+        resourceId: platformPost.id,
+        operationGeneration,
+      },
+    },
+    create: {
+      workspaceId: platformPost.workspaceId,
+      operationType: 'PUBLISH_POST',
+      resourceType: 'PlatformPost',
+      resourceId: platformPost.id,
+      operationGeneration,
+      requestKey,
+      state: mayHaveDispatched ? 'REMOTE_UNKNOWN' : 'PREPARED',
+      attemptId: platformPost.publishAttemptId,
+      fence: mayHaveDispatched ? Math.max(platformPost.publishFence, 1) : 0,
+      requiresManualReview: mayHaveDispatched,
+      lastErrorCode: mayHaveDispatched ? 'LEGACY_MAY_HAVE_DISPATCHED' : null,
+      lastErrorMessage: mayHaveDispatched
+        ? 'Legacy publish job had no operationId and may already have dispatched.'
+        : null,
+      remoteStartedAt: platformPost.publishAttemptStartedAt,
+    },
+    update: {},
+  });
+  return operation.id;
+}
+
+async function commitPublishLocally(
+  prisma: PrismaClientInstance,
+  input: {
+    platformPost: {
+      id: string;
+      workspaceId: string;
+      contentPostId: string;
+      platform: Platform;
+      socialAccountId: string;
+      socialAccount: { name: string };
+      contentPost: { createdById: string; title: string | null };
+    };
+    payload: z.infer<typeof publishPostPayloadSchema>;
+    jobId?: string;
+    ownership: OutboundAttemptOwnership;
+    result?: {
+      externalPostId: string;
+      externalUrl?: string;
+      publishedAt: Date;
+      platformState?: Record<string, unknown>;
+      publishNetworkProof: PublishNetworkProof | null;
+    };
+  },
+): Promise<{ published: true; externalPostId: string }> {
+  const result = input.result ?? (await loadPublishCheckpoint(prisma, input.ownership));
+
+  await prisma.$transaction(async (tx) => {
+    await tx.platformPost.update({
+      where: { id: input.platformPost.id },
+      data: {
+        status: 'PUBLISHED',
+        externalPostId: result.externalPostId,
+        externalUrl: result.externalUrl,
+        publishedAt: result.publishedAt,
+        errorCode: null,
+        errorMessage: null,
+        platformState: (result.platformState ??
+          mergePlatformStateWithNetworkProof(
+            undefined,
+            result.publishNetworkProof,
+          )) as Prisma.InputJsonValue,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        workspaceId: input.payload.workspaceId,
+        actorUserId: input.platformPost.contentPost.createdById,
+        action: 'POST_PUBLISHED',
+        resourceType: 'PlatformPost',
+        resourceId: input.platformPost.id,
+        metadata: {
+          platform: input.platformPost.platform,
+          externalPostId: result.externalPostId,
+          jobId: input.jobId,
+          publishNetwork: result.publishNetworkProof,
+        } as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await tx.notification.create({
+      data: {
+        workspaceId: input.payload.workspaceId,
+        userId: input.platformPost.contentPost.createdById,
+        type: 'POST_PUBLISHED',
+        title: 'Bài đăng đã publish',
+        body: `${PLATFORM_LABELS[input.platformPost.platform]} · ${input.platformPost.socialAccount.name} đã publish thành công.`,
+        linkUrl: `/posts/${input.platformPost.contentPostId}`,
+        data: {
+          platformPostId: input.platformPost.id,
+          platform: input.platformPost.platform,
+          accountName: input.platformPost.socialAccount.name,
+          socialAccountId: input.platformPost.socialAccountId,
+          externalPostId: result.externalPostId,
+          postTitle: input.platformPost.contentPost.title,
+        },
+      },
+    });
+    await markLocalCommittedInTransaction(tx, input.ownership);
+  });
+
+  await updateParentStatus(prisma, input.platformPost.contentPostId);
+  return { published: true, externalPostId: result.externalPostId };
+}
+
+async function loadPublishCheckpoint(
+  prisma: PrismaClientInstance,
+  ownership: OutboundAttemptOwnership,
+): Promise<{
+  externalPostId: string;
+  externalUrl?: string;
+  publishedAt: Date;
+  platformState?: Record<string, unknown>;
+  publishNetworkProof: PublishNetworkProof | null;
+}> {
+  const operation = await prisma.outboundOperation.findUnique({
+    where: { id: ownership.operationId },
+    select: { remoteCheckpoint: true },
+  });
+  const checkpoint = jsonObject(operation?.remoteCheckpoint);
+  const externalPostId =
+    typeof checkpoint?.externalPostId === 'string' ? checkpoint.externalPostId : null;
+  const publishedAt =
+    typeof checkpoint?.publishedAt === 'string' ? new Date(checkpoint.publishedAt) : null;
+  if (!externalPostId || !publishedAt || Number.isNaN(publishedAt.getTime())) {
+    throw new Error('REMOTE_CONFIRMED publish operation is missing durable checkpoint');
+  }
+  return {
+    externalPostId,
+    externalUrl: typeof checkpoint?.externalUrl === 'string' ? checkpoint.externalUrl : undefined,
+    publishedAt,
+    publishNetworkProof:
+      (jsonObject(
+        checkpoint?.publishNetwork as Prisma.JsonValue | null,
+      ) as unknown as PublishNetworkProof | null) ?? null,
   };
 }
 

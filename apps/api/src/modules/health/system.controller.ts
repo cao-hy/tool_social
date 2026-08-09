@@ -221,35 +221,56 @@ export class SystemController implements OnModuleDestroy {
       }
 
       try {
-        savedSetting = await this.prisma.workspaceProxySetting.create({
-          data: {
-            workspaceId,
-            enabled: config.enabled ?? false,
-            countryLock: config.countryLock ?? null,
-            proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
-            proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
-            configVersion: 1,
-          },
+        savedSetting = await this.prisma.$transaction(async (tx) => {
+          const created = await tx.workspaceProxySetting.create({
+            data: {
+              workspaceId,
+              enabled: config.enabled ?? false,
+              countryLock: config.countryLock ?? null,
+              proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+              proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
+              configVersion: 1,
+            },
+          });
+          await tx.workspace.update({
+            where: { id: workspaceId },
+            data: {
+              socialEgressPolicy: created.enabled ? 'PROXY_REQUIRED' : 'DIRECT_ALLOWED',
+            },
+          });
+          return created;
         });
       } catch (_error) {
         throw new HttpException('Config version conflict during creation', 409);
       }
     } else {
-      const updateResult = await this.prisma.workspaceProxySetting.updateMany({
-        where: {
-          workspaceId,
-          ...(allowLegacyUpdate && versionInput === undefined
-            ? {}
-            : { configVersion: expectedVersion }),
-        },
-        data: {
-          enabled: config.enabled ?? currentSetting.enabled,
-          countryLock:
-            config.countryLock === undefined ? currentSetting.countryLock : config.countryLock,
-          proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
-          proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
-          configVersion: { increment: 1 },
-        },
+      const nextEnabled = config.enabled ?? currentSetting.enabled;
+      const updateResult = await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.workspaceProxySetting.updateMany({
+          where: {
+            workspaceId,
+            ...(allowLegacyUpdate && versionInput === undefined
+              ? {}
+              : { configVersion: expectedVersion }),
+          },
+          data: {
+            enabled: nextEnabled,
+            countryLock:
+              config.countryLock === undefined ? currentSetting.countryLock : config.countryLock,
+            proxyUrl: encryptedProxyUrl?.ciphertext ?? null,
+            proxyUrlMasked: maskProxyUrl(nextStoredProxyUrl),
+            configVersion: { increment: 1 },
+          },
+        });
+        if (updated.count === 1) {
+          await tx.workspace.update({
+            where: { id: workspaceId },
+            data: {
+              socialEgressPolicy: nextEnabled ? 'PROXY_REQUIRED' : 'DIRECT_ALLOWED',
+            },
+          });
+        }
+        return updated;
       });
 
       if (updateResult.count === 0) {

@@ -693,25 +693,45 @@ function getPublishNetworkProof(
   const network = (state as Record<string, unknown>).publishNetwork;
   if (!network || typeof network !== 'object' || Array.isArray(network)) return null;
   const record = network as Record<string, unknown>;
-  if (typeof record.checkedAt !== 'string') return null;
+  const attestationCheckedAt =
+    typeof record.attestationCheckedAt === 'string'
+      ? record.attestationCheckedAt
+      : typeof record.checkedAt === 'string'
+        ? record.checkedAt
+        : null;
+  if (!attestationCheckedAt) return null;
   return {
-    checkedAt: record.checkedAt,
-    ip: typeof record.ip === 'string' ? record.ip : null,
-    countryCode: typeof record.countryCode === 'string' ? record.countryCode : null,
+    egressPolicy:
+      record.egressPolicy === 'DIRECT_ALLOWED' ||
+      record.egressPolicy === 'PROXY_REQUIRED' ||
+      record.egressPolicy === 'BLOCKED'
+        ? record.egressPolicy
+        : null,
+    proxyEnabled: typeof record.proxyEnabled === 'boolean' ? record.proxyEnabled : null,
+    proxyActive: typeof record.proxyActive === 'boolean' ? record.proxyActive : null,
+    configVersion: typeof record.configVersion === 'number' ? record.configVersion : null,
+    proxyFingerprint: typeof record.proxyFingerprint === 'string' ? record.proxyFingerprint : null,
+    countryLock: typeof record.countryLock === 'string' ? record.countryLock : null,
+    countryLockSatisfied:
+      typeof record.countryLockSatisfied === 'boolean' ? record.countryLockSatisfied : null,
+    attestationCheckedAt,
+    attestedExitIp:
+      typeof record.attestedExitIp === 'string'
+        ? record.attestedExitIp
+        : typeof record.ip === 'string'
+          ? record.ip
+          : null,
+    attestedCountryCode:
+      typeof record.attestedCountryCode === 'string'
+        ? record.attestedCountryCode
+        : typeof record.countryCode === 'string'
+          ? record.countryCode
+          : null,
     country: typeof record.country === 'string' ? record.country : null,
     city: typeof record.city === 'string' ? record.city : null,
-    isp: typeof record.isp === 'string' ? record.isp : null,
     provider: typeof record.provider === 'string' ? record.provider : null,
-    checkOk: record.checkOk === true,
-    checkError: typeof record.checkError === 'string' ? record.checkError : null,
-    checkErrors: Array.isArray(record.checkErrors)
-      ? record.checkErrors.filter((item): item is string => typeof item === 'string')
-      : [],
-    proxyEnabled: record.proxyEnabled === true,
-    proxyAvailable: record.proxyAvailable === true,
-    proxyActive: record.proxyActive === true,
-    countryLock: typeof record.countryLock === 'string' ? record.countryLock : null,
-    countryLockSatisfied: record.countryLockSatisfied === true,
+    isp: typeof record.isp === 'string' ? record.isp : null,
+    checkOk: typeof record.checkOk === 'boolean' ? record.checkOk : null,
   };
 }
 
@@ -1430,7 +1450,7 @@ function PublishNetworkPanel({ state }: { state: PlatformPostView['platformState
   if (!network) return null;
   const location = [network.city, network.country].filter(Boolean).join(', ') || '-';
   const tone =
-    network.proxyActive && network.countryLockSatisfied && network.checkOk !== false
+    network.proxyActive && network.countryLockSatisfied !== false && network.checkOk !== false
       ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
       : network.proxyEnabled
         ? 'border-amber-200 bg-amber-50 text-amber-800'
@@ -1443,28 +1463,29 @@ function PublishNetworkPanel({ state }: { state: PlatformPostView['platformState
         Snapshot lúc bài này được publish, không phải trạng thái proxy hiện tại.
       </p>
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
-        <StateRow label="IP publish" value={network.ip ?? '-'} />
-        <StateRow label="Quốc gia" value={network.countryCode ?? '-'} />
+        <StateRow label="IP publish" value={network.attestedExitIp ?? '-'} />
+        <StateRow label="Quốc gia" value={network.attestedCountryCode ?? '-'} />
         <StateRow label="Vị trí" value={location} />
         <StateRow label="ISP" value={network.isp ?? '-'} />
         <StateRow label="Provider" value={network.provider ?? '-'} />
-        <StateRow label="Check OK" value={network.checkOk === false ? 'NO' : 'YES'} />
+        <StateRow label="Check OK" value={network.checkOk === false ? 'NO' : 'UNKNOWN'} />
         <StateRow label="Proxy" value={network.proxyActive ? 'ACTIVE' : 'NOT ACTIVE'} />
         <StateRow label="Country lock" value={network.countryLock ?? '-'} />
-        <StateRow label="Lock OK" value={network.countryLockSatisfied ? 'YES' : 'NO'} />
-        <StateRow label="Checked" value={formatDateTime(network.checkedAt)} />
+        <StateRow
+          label="Lock OK"
+          value={
+            network.countryLockSatisfied === null
+              ? 'UNKNOWN'
+              : network.countryLockSatisfied
+                ? 'YES'
+                : 'NO'
+          }
+        />
+        <StateRow
+          label="Checked"
+          value={network.attestationCheckedAt ? formatDateTime(network.attestationCheckedAt) : '-'}
+        />
       </div>
-      {network.checkErrors?.length ? (
-        <div className="mt-2 space-y-1">
-          {network.checkErrors.map((error) => (
-            <p key={error} className="break-words">
-              {error}
-            </p>
-          ))}
-        </div>
-      ) : network.checkError ? (
-        <p className="mt-2 break-words">{network.checkError}</p>
-      ) : null}
     </div>
   );
 }

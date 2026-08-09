@@ -121,6 +121,30 @@ export class WebhooksService implements OnModuleDestroy {
       };
     } catch (error) {
       if (isUniqueConstraintError(error)) {
+        const existing = await this.prisma.webhookEvent.findUnique({
+          where: { platform_externalEventId: { platform, externalEventId } },
+          select: { id: true },
+        });
+        if (existing) {
+          const payload = { webhookEventId: existing.id };
+          const jobId = buildJobId('process-webhook', payload);
+          const outboxPayload = {
+            queueName: 'process-webhook',
+            jobName: 'process-webhook',
+            jobId,
+            payload,
+            options: buildQueueJobOptions('process-webhook', jobId),
+          } as unknown as Prisma.InputJsonValue;
+
+          await this.prisma.outboxEvent.create({
+            data: {
+              topic: 'process-webhook',
+              aggregateType: 'WebhookEvent',
+              aggregateId: existing.id,
+              payload: outboxPayload,
+            },
+          });
+        }
         return { accepted: true, duplicate: true };
       }
       throw error;

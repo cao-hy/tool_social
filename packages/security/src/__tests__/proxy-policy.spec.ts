@@ -76,4 +76,55 @@ describe('ProxyPolicyService', () => {
     expect(checkNetworkFn).toHaveBeenCalledTimes(1);
     expect(cache.get).not.toHaveBeenCalled();
   });
+
+  it('five simultaneous callers for the same route share one fresh attestation', async () => {
+    let cached: CachedProxyPolicyResult | null = null;
+    let locked = false;
+    const lock: ProxyAttestationLock = {
+      acquire: vi.fn(async () => {
+        if (locked) return false;
+        locked = true;
+        return true;
+      }),
+      extend: vi.fn(async () => locked),
+      release: vi.fn(async () => {
+        locked = false;
+        return true;
+      }),
+    };
+    const cache: ProxyPolicyCache = {
+      get: vi.fn(async () => cached),
+      set: vi.fn(async (_key, value) => {
+        cached = value;
+      }),
+      getLock: () => lock,
+    };
+    const service = new ProxyPolicyService(cache, 'c29tZS0zMi1ieXRlLWtleS1mb3ItdGVzdGluZy1vbmx5');
+    const checkNetworkFn = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return {
+        checkOk: true,
+        ip: '2.2.2.2',
+        countryCode: 'US',
+        provider: 'fresh',
+        checkError: null,
+        checkedAt: new Date().toISOString(),
+      };
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        service.getAttestation('workspace_1', proxyConfig, 1, gateways, checkNetworkFn),
+      ),
+    );
+
+    expect(checkNetworkFn).toHaveBeenCalledTimes(1);
+    expect(results.map((result) => result.ip)).toEqual([
+      '2.2.2.2',
+      '2.2.2.2',
+      '2.2.2.2',
+      '2.2.2.2',
+      '2.2.2.2',
+    ]);
+  });
 });

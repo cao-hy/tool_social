@@ -15,14 +15,17 @@ export type OutboundAttemptOwnership = {
 };
 
 export type OperationStartResult =
-  { action: 'DISPATCH'; ownership: OutboundAttemptOwnership } | { action: 'NOOP'; reason: string };
+  | { action: 'DISPATCH_REMOTE'; ownership: OutboundAttemptOwnership }
+  | { action: 'LOCAL_COMMIT'; ownership: OutboundAttemptOwnership }
+  | { action: 'RECONCILE'; reason: string }
+  | { action: 'NOOP'; reason: string };
 
 export async function beginOutboundAttempt(
   prisma: PrismaClientInstance,
   operationId: string | undefined,
 ): Promise<OperationStartResult> {
   if (!operationId) {
-    return { action: 'DISPATCH', ownership: { operationId: '', attemptId: '', fence: 0 } };
+    return { action: 'NOOP', reason: 'operation_id_required' };
   }
 
   const operation = await prisma.outboundOperation.findUnique({ where: { id: operationId } });
@@ -30,10 +33,21 @@ export async function beginOutboundAttempt(
 
   switch (operation.state) {
     case 'LOCAL_COMMITTED':
-    case 'REMOTE_CONFIRMED':
       return { action: 'NOOP', reason: operation.state };
+    case 'REMOTE_CONFIRMED':
+      if (!operation.attemptId)
+        return { action: 'NOOP', reason: 'REMOTE_CONFIRMED_WITHOUT_ATTEMPT' };
+      return {
+        action: 'LOCAL_COMMIT',
+        ownership: {
+          operationId: operation.id,
+          attemptId: operation.attemptId,
+          fence: operation.fence,
+        },
+      };
     case 'REMOTE_UNKNOWN':
     case 'MANUAL_REVIEW':
+      return { action: 'RECONCILE', reason: operation.state };
     case 'CONFIRMED_ABSENT':
     case 'FAILED':
       return { action: 'NOOP', reason: operation.state };
@@ -73,7 +87,10 @@ export async function beginOutboundAttempt(
         },
       });
       if (updated.count !== 1) throw new StaleOperationError();
-      return { action: 'DISPATCH', ownership: { operationId: operation.id, attemptId, fence } };
+      return {
+        action: 'DISPATCH_REMOTE',
+        ownership: { operationId: operation.id, attemptId, fence },
+      };
     }
     default: {
       const exhaustive: never = operation.state;
@@ -166,7 +183,14 @@ export async function markLocalCommitted(
   ownership: OutboundAttemptOwnership,
 ): Promise<void> {
   if (!ownership.operationId) return;
-  const updated = await prisma.outboundOperation.updateMany({
+  await markLocalCommittedInTransaction(prisma, ownership);
+}
+
+export async function markLocalCommittedInTransaction(
+  tx: Pick<PrismaClientInstance, 'outboundOperation'>,
+  ownership: OutboundAttemptOwnership,
+): Promise<void> {
+  const updated = await tx.outboundOperation.updateMany({
     where: {
       id: ownership.operationId,
       state: 'REMOTE_CONFIRMED',

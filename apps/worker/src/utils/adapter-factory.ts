@@ -3,12 +3,10 @@ import {
   createDirectFetch,
   ProxyRuntimeService,
   ProxyConfigurationError,
-  ProxyConfigurationChangedError,
 } from '@socialhub/config';
 import { decryptToken, ProxyPolicyService, RedisProxyPolicyCache } from '@socialhub/security';
 import type { PrismaClient } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import { RemoteRequestError } from '@socialhub/shared';
 import {
   createRuntimeAdapterRegistry,
   TIKTOK_OAUTH_SCOPES,
@@ -86,22 +84,7 @@ export class WorkerAdapterFactory {
       );
     }
 
-    const fetchImpl: typeof fetch = async (input, init) => {
-      try {
-        await ctx.assertCurrentVersion();
-      } catch (error) {
-        if (!(error instanceof ProxyConfigurationChangedError)) {
-          throw error;
-        }
-        throw new RemoteRequestError(
-          'Proxy configuration changed before outbound request',
-          'BEFORE_CONNECT',
-          false,
-          error,
-        );
-      }
-      return baseFetch(input, init);
-    };
+    const fetchImpl: typeof fetch = (input, init) => baseFetch(input, init);
 
     const adapters = createRuntimeAdapterRegistry({
       nodeEnv: this.env.NODE_ENV,

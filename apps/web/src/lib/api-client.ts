@@ -674,12 +674,17 @@ export const commentsApi = {
       method: 'POST',
       body: JSON.stringify({ commentIds, message }),
     }),
-  createPlatformComment: (workspaceId: string, platformPostId: string, message: string) =>
+  createPlatformComment: (
+    workspaceId: string,
+    platformPostId: string,
+    message: string,
+    clientRequestId?: string,
+  ) =>
     apiFetch<{ queued: true; jobId: string; backgroundJobId: string; message: string }>(
       `/workspaces/${workspaceId}/comments/platform-posts/${platformPostId}`,
       {
         method: 'POST',
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, clientRequestId }),
       },
     ),
   bulkCreatePlatformComments: (workspaceId: string, platformPostIds: string[], message: string) =>

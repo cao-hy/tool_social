@@ -2,21 +2,32 @@ import { isPlatformError } from '@socialhub/platform-adapters';
 import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import { PLATFORM_LABELS, RemoteRequestError, type QueuePayload } from '@socialhub/shared';
+import {
+  PLATFORM_LABELS,
+  RemoteRequestError,
+  type Platform,
+  type QueuePayload,
+} from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
 
 import { getFreshAccessToken } from './token-refresh';
 import {
   beginOutboundAttempt,
-  markLocalCommitted,
+  markLocalCommittedInTransaction,
   markRemoteConfirmed,
   markRemoteUnknown,
   rollbackBeforeConnect,
   type OutboundAttemptOwnership,
 } from './outbound-operation';
 
+type CreateCommentRemoteResult = {
+  externalCommentId: string;
+  postedAt: Date;
+};
+
 const createPlatformCommentPayloadSchema = z.object({
+  commandId: z.string().min(1),
   platformPostId: z.string().min(1),
   socialAccountId: z.string().min(1),
   workspaceId: z.string().min(1),
@@ -121,6 +132,11 @@ async function createPlatformComment(
     return { created: false, reason: 'platform_post_not_found' };
   }
 
+  const command = await input.prisma.commentCreateCommand.findFirst({
+    where: { id: payload.commandId, workspaceId: payload.workspaceId },
+  });
+  if (!command) return { created: false, reason: 'comment_command_not_found' };
+
   const account = platformPost.socialAccount;
   if (!account.token || account.status !== 'CONNECTED') {
     return { created: false, reason: 'account_disconnected' };
@@ -149,7 +165,17 @@ async function createPlatformComment(
     let result: Awaited<ReturnType<typeof createComment>>;
     try {
       const start = await beginOutboundAttempt(input.prisma, payload.operationId);
-      if (start.action === 'NOOP') return { created: false, reason: start.reason };
+      if (start.action === 'LOCAL_COMMIT') {
+        return await commitCreateCommentLocally(input.prisma, {
+          payload,
+          account,
+          platformPostId: platformPost.id,
+          ownership: start.ownership,
+        });
+      }
+      if (start.action !== 'DISPATCH_REMOTE') {
+        return { created: false, reason: start.reason };
+      }
       ownership = start.ownership;
       result = await createComment(
         {
@@ -164,6 +190,10 @@ async function createPlatformComment(
       );
       await markRemoteConfirmed(input.prisma, ownership, {
         remoteId: result.externalCommentId,
+        checkpoint: {
+          externalCommentId: result.externalCommentId,
+          postedAt: result.postedAt.toISOString(),
+        },
       });
     } catch (error) {
       if (error instanceof RemoteRequestError && !error.requestMayHaveReachedRemote && ownership) {
@@ -186,44 +216,19 @@ async function createPlatformComment(
       throw error;
     }
 
-    const comment = await input.prisma.comment.upsert({
-      where: {
-        socialAccountId_externalCommentId: {
-          socialAccountId: account.id,
-          externalCommentId: result.externalCommentId,
-        },
-      },
-      create: {
-        workspaceId: payload.workspaceId,
-        platformPostId: platformPost.id,
-        socialAccountId: account.id,
-        platform: account.platform,
-        externalCommentId: result.externalCommentId,
-        parentId: null,
-        authorExternalId: account.externalPageId ?? account.externalAccountId,
-        authorName: account.name,
-        authorAvatarUrl: account.avatarUrl,
-        message: payload.message,
-        likeCount: 0,
-        postedAt: result.postedAt,
-        status: 'RESOLVED',
-        isHidden: false,
-        isFromPage: true,
-      },
-      update: {
-        message: payload.message,
-        postedAt: result.postedAt,
-        isFromPage: true,
-        deletedAt: null,
-      },
+    const comment = await commitCreateCommentLocally(input.prisma, {
+      payload,
+      account,
+      platformPostId: platformPost.id,
+      ownership,
+      result,
     });
-    if (ownership) await markLocalCommitted(input.prisma, ownership);
 
     logger.info(
       {
         platformPostId: platformPost.id,
-        commentId: comment.id,
-        externalCommentId: result.externalCommentId,
+        commentId: comment.commentId,
+        externalCommentId: comment.externalCommentId,
         platform: account.platform,
       },
       'Đã tạo top-level comment trên platform',
@@ -231,13 +236,108 @@ async function createPlatformComment(
 
     return {
       created: true,
-      commentId: comment.id,
-      externalCommentId: result.externalCommentId,
+      commentId: comment.commentId,
+      externalCommentId: comment.externalCommentId,
       platform: PLATFORM_LABELS[account.platform],
     };
   } finally {
     await adapterCtx.release();
   }
+}
+
+async function commitCreateCommentLocally(
+  prisma: PrismaClientInstance,
+  input: {
+    payload: CreatePlatformCommentPayload;
+    account: {
+      id: string;
+      platform: Platform;
+      externalAccountId: string;
+      externalPageId: string | null;
+      name: string;
+      avatarUrl: string | null;
+    };
+    platformPostId: string;
+    ownership: OutboundAttemptOwnership | null;
+    result?: CreateCommentRemoteResult;
+  },
+): Promise<{ created: true; commentId: string; externalCommentId: string; platform: string }> {
+  const result = input.result ?? (await loadCreateCommentCheckpoint(prisma, input.ownership));
+  const comment = await prisma.$transaction(async (tx) => {
+    const comment = await tx.comment.upsert({
+      where: {
+        socialAccountId_externalCommentId: {
+          socialAccountId: input.account.id,
+          externalCommentId: result.externalCommentId,
+        },
+      },
+      create: {
+        workspaceId: input.payload.workspaceId,
+        platformPostId: input.platformPostId,
+        socialAccountId: input.account.id,
+        platform: input.account.platform,
+        externalCommentId: result.externalCommentId,
+        parentId: null,
+        authorExternalId: input.account.externalPageId ?? input.account.externalAccountId,
+        authorName: input.account.name,
+        authorAvatarUrl: input.account.avatarUrl,
+        message: input.payload.message,
+        likeCount: 0,
+        postedAt: result.postedAt,
+        status: 'RESOLVED',
+        isHidden: false,
+        isFromPage: true,
+      },
+      update: {
+        message: input.payload.message,
+        postedAt: result.postedAt,
+        isFromPage: true,
+        deletedAt: null,
+      },
+    });
+    await tx.commentCreateCommand.update({
+      where: { id: input.payload.commandId },
+      data: {
+        status: 'SENT',
+        externalCommentId: result.externalCommentId,
+        errorCode: null,
+        errorMessage: null,
+      },
+    });
+    if (input.ownership) await markLocalCommittedInTransaction(tx, input.ownership);
+    return comment;
+  });
+
+  return {
+    created: true,
+    commentId: comment.id,
+    externalCommentId: result.externalCommentId,
+    platform: PLATFORM_LABELS[input.account.platform],
+  };
+}
+
+async function loadCreateCommentCheckpoint(
+  prisma: PrismaClientInstance,
+  ownership: OutboundAttemptOwnership | null,
+): Promise<CreateCommentRemoteResult> {
+  if (!ownership) throw new Error('Cannot recover comment commit without operation ownership');
+  const operation = await prisma.outboundOperation.findUnique({
+    where: { id: ownership.operationId },
+    select: { remoteCheckpoint: true },
+  });
+  const checkpoint = jsonObject(operation?.remoteCheckpoint);
+  const externalCommentId =
+    typeof checkpoint?.externalCommentId === 'string' ? checkpoint.externalCommentId : null;
+  const postedAt = typeof checkpoint?.postedAt === 'string' ? new Date(checkpoint.postedAt) : null;
+  if (!externalCommentId || !postedAt || Number.isNaN(postedAt.getTime())) {
+    throw new Error('REMOTE_CONFIRMED create-comment operation is missing durable checkpoint');
+  }
+  return { externalCommentId, postedAt };
+}
+
+function jsonObject(value: Prisma.JsonValue | null | undefined): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 async function markJob(

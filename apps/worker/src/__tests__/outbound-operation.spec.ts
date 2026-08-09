@@ -26,6 +26,39 @@ function prismaWithOperation(operation: {
 }
 
 describe('outbound operation fencing', () => {
+  it('does not authorize dispatch without a durable operation id', async () => {
+    const prisma = prismaWithOperation({
+      id: 'op_missing',
+      state: 'PREPARED',
+      attemptId: null,
+      fence: 0,
+    });
+
+    await expect(beginOutboundAttempt(prisma, undefined)).resolves.toEqual({
+      action: 'NOOP',
+      reason: 'operation_id_required',
+    });
+    expect(prisma.outboundOperation.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('returns LOCAL_COMMIT for REMOTE_CONFIRMED redelivery', async () => {
+    const prisma = prismaWithOperation({
+      id: 'op_confirmed',
+      state: 'REMOTE_CONFIRMED',
+      attemptId: 'attempt_confirmed',
+      fence: 4,
+    });
+
+    await expect(beginOutboundAttempt(prisma, 'op_confirmed')).resolves.toEqual({
+      action: 'LOCAL_COMMIT',
+      ownership: {
+        operationId: 'op_confirmed',
+        attemptId: 'attempt_confirmed',
+        fence: 4,
+      },
+    });
+  });
+
   it('marks abandoned DISPATCHING operations as REMOTE_UNKNOWN without dispatching again', async () => {
     const prisma = prismaWithOperation({
       id: 'op_1',
