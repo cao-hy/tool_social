@@ -39,7 +39,7 @@ export interface PinterestClientConfig {
   appSecret: string;
   defaultBoardName?: string;
   environment?: PinterestApiEnvironment;
-  fetch?: AdapterFetch;
+  fetch: AdapterFetch;
 }
 
 export type PinterestApiEnvironment = 'production' | 'sandbox';

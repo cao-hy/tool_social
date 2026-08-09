@@ -10,7 +10,6 @@ import { getCapabilityTable } from '../capabilities/matrix';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
-  AdapterFetch,
   AuthUrlInput,
   ExternalPostPage,
   PostMetrics,
@@ -55,7 +54,7 @@ export class TikTokAdapter implements SocialPlatformAdapter {
   constructor(config: TikTokAdapterConfig) {
     this.client = new TikTokClient({
       ...config,
-      fetch: config.fetch ?? (globalThis.fetch.bind(globalThis) as AdapterFetch),
+      fetch: config.fetch,
     });
     this.scopes = config.scopes ?? [...TIKTOK_OAUTH_SCOPES];
   }

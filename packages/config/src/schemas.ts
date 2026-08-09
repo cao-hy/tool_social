@@ -57,6 +57,7 @@ const syncSchema = z.object({
 
 const proxySchema = z.object({
   PROXY_ENABLED: booleanFromString(false),
+  ALLOW_ENV_PROXY_FALLBACK: booleanFromString(false),
   PROXY_COUNTRY_LOCK: z.string().optional(),
   PROXY_FINGERPRINT_SECRET: z
     .string()

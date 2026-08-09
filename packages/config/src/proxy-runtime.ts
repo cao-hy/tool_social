@@ -25,6 +25,7 @@ export interface PreparedProxyContext {
   routeFingerprint: string | null;
   attestation: ProxyAttestation | null;
   dispatcherHandle?: ProxyDispatcherHandle;
+  reAttest?: () => Promise<ProxyAttestation | null>;
 }
 
 export class ProxyRuntimeService {
@@ -50,6 +51,7 @@ export class ProxyRuntimeService {
 
     let attestation: ProxyAttestation | null = null;
     let dispatcherHandle: ProxyDispatcherHandle | undefined = undefined;
+    let reAttest: (() => Promise<ProxyAttestation | null>) | undefined = undefined;
     const snapshotVersion = setting?.configVersion ?? 0;
 
     if (proxyConfig.enabled) {
@@ -66,28 +68,40 @@ export class ProxyRuntimeService {
       dispatcherHandle = acquiredHandle;
 
       try {
-        attestation = await this.policyService.getAttestation(
-          workspaceId,
-          proxyConfig,
-          snapshotVersion,
-          validatedEndpoint.gatewayAddresses,
-          async () => {
-            const fetchImpl = createProxiedFetch(
-              { ...proxyConfig, enabled: true, proxyUrl: proxyConfig.proxyUrl as string },
-              acquiredHandle,
+        const assertCurrentVersion = async () => {
+          const currentSetting = await getWorkspaceSetting(workspaceId);
+          if ((currentSetting?.configVersion ?? 0) !== snapshotVersion) {
+            throw new ProxyConfigurationError(
+              'Proxy configuration changed during request processing',
             );
-            return await checkProxyAwareNetwork(proxyConfig, fetchImpl);
-          },
-          options?.forceAttestation,
-        );
+          }
+        };
+        const runAttestation = async (forceAttestation?: boolean) =>
+          await this.policyService.getAttestation(
+            workspaceId,
+            proxyConfig,
+            snapshotVersion,
+            validatedEndpoint.gatewayAddresses,
+            async () => {
+              const fetchImpl = createProxiedFetch(
+                { ...proxyConfig, enabled: true, proxyUrl: proxyConfig.proxyUrl as string },
+                acquiredHandle,
+              );
+              return await checkProxyAwareNetwork(proxyConfig, fetchImpl);
+            },
+            forceAttestation,
+          );
+
+        attestation = await runAttestation(options?.forceAttestation);
 
         // Before returning context, verify that the setting hasn't changed.
-        const currentSetting = await getWorkspaceSetting(workspaceId);
-        if ((currentSetting?.configVersion ?? 0) !== snapshotVersion) {
-          throw new ProxyConfigurationError(
-            'Proxy configuration changed during request processing',
-          );
-        }
+        await assertCurrentVersion();
+        reAttest = async () => {
+          await assertCurrentVersion();
+          attestation = await runAttestation(true);
+          await assertCurrentVersion();
+          return attestation;
+        };
       } catch (err) {
         dispatcherHandle.release();
         throw err;
@@ -101,6 +115,7 @@ export class ProxyRuntimeService {
       routeFingerprint: attestation?.proxyFingerprint ?? null,
       attestation,
       dispatcherHandle,
+      reAttest,
     };
   }
 

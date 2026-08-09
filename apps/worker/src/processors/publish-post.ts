@@ -229,7 +229,7 @@ async function publishPlatformPost(
       return { published: false, reason: 'fixture_account_with_real_adapter' };
     }
 
-    const publishNetworkProof = adaptersContext.proxy?.attestation || null;
+    let publishNetworkProof = adaptersContext.proxy?.attestation || null;
 
     try {
       const accessToken = await getFreshAccessToken({
@@ -327,8 +327,6 @@ async function publishPlatformPost(
         logger: adapterLogger,
       } satisfies AdapterContext;
 
-      // (Proxy validity is already attested by ProxyRuntimeService)
-
       const publishAttemptId = randomUUID();
       await input.prisma.platformPost.update({
         where: { id: platformPost.id },
@@ -338,6 +336,21 @@ async function publishPlatformPost(
           publishFence: { increment: 1 },
         },
       });
+
+      await assertProxyConfigVersion(
+        input.prisma,
+        payload.workspaceId,
+        adaptersContext.proxy.configVersion,
+      );
+      publishNetworkProof =
+        (await adaptersContext.proxy.reAttest?.()) ??
+        adaptersContext.proxy.attestation ??
+        publishNetworkProof;
+      await assertProxyConfigVersion(
+        input.prisma,
+        payload.workspaceId,
+        adaptersContext.proxy.configVersion,
+      );
 
       const result = await adapter.publishPost(adapterContext, publishInput);
       const platformState = await platformStateAfterPublish(
@@ -497,7 +510,19 @@ function jsonObject(
   return value as Record<string, unknown>;
 }
 
-// capturePublishNetworkProof removed to avoid double checking
+async function assertProxyConfigVersion(
+  prisma: PrismaClientInstance,
+  workspaceId: string,
+  expectedVersion: number,
+): Promise<void> {
+  const currentSetting = await prisma.workspaceProxySetting.findUnique({
+    where: { workspaceId },
+    select: { configVersion: true },
+  });
+  if ((currentSetting?.configVersion ?? 0) !== expectedVersion) {
+    throw new Error('Proxy configuration changed before publish; retry with the latest config.');
+  }
+}
 
 function mergePlatformStateWithNetworkProof(
   platformState:

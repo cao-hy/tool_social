@@ -249,24 +249,24 @@ export class CommentsService implements OnModuleDestroy {
         );
       }
 
-      const adapter = (
-        await this.adapterFactory.forWorkspace(workspaceId)
-      ).adapters.requireCapability(comment.platform, 'editComment');
-      if (!adapter.editComment) {
-        throw AppError.capabilityUnsupported(comment.platform, 'editComment');
-      }
-      this.ensureCommentActionScopes(comment, 'editComment');
-      const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
-      await adapter.editComment(
-        {
-          accessToken,
-          externalAccountId: comment.socialAccount.externalAccountId,
-          externalPageId: comment.socialAccount.externalPageId ?? undefined,
-          correlationId: auditContext.requestId ?? `comment-edit:${comment.id}`,
-        },
-        comment.externalCommentId,
-        input.message,
-      );
+      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+        const adapter = adapters.requireCapability(comment.platform, 'editComment');
+        if (!adapter.editComment) {
+          throw AppError.capabilityUnsupported(comment.platform, 'editComment');
+        }
+        this.ensureCommentActionScopes(comment, 'editComment');
+        const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
+        await adapter.editComment(
+          {
+            accessToken,
+            externalAccountId: comment.socialAccount.externalAccountId,
+            externalPageId: comment.socialAccount.externalPageId ?? undefined,
+            correlationId: auditContext.requestId ?? `comment-edit:${comment.id}`,
+          },
+          comment.externalCommentId,
+          input.message,
+        );
+      });
     }
 
     const updated = await this.prisma.comment.update({
@@ -297,24 +297,24 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = (
-      await this.adapterFactory.forWorkspace(workspaceId)
-    ).adapters.requireCapability(comment.platform, 'hideComment');
-    if (!adapter.hideComment) {
-      throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
-    }
-    this.ensureCommentActionScopes(comment, 'hideComment');
-    const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
-    await adapter.hideComment(
-      {
-        accessToken,
-        externalAccountId: comment.socialAccount.externalAccountId,
-        externalPageId: comment.socialAccount.externalPageId ?? undefined,
-        correlationId: auditContext.requestId ?? `comment-hide:${comment.id}`,
-      },
-      comment.externalCommentId,
-      input.hidden,
-    );
+    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.requireCapability(comment.platform, 'hideComment');
+      if (!adapter.hideComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+      }
+      this.ensureCommentActionScopes(comment, 'hideComment');
+      const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
+      await adapter.hideComment(
+        {
+          accessToken,
+          externalAccountId: comment.socialAccount.externalAccountId,
+          externalPageId: comment.socialAccount.externalPageId ?? undefined,
+          correlationId: auditContext.requestId ?? `comment-hide:${comment.id}`,
+        },
+        comment.externalCommentId,
+        input.hidden,
+      );
+    });
 
     const updated = await this.prisma.comment.update({
       where: { id: comment.id },
@@ -348,59 +348,60 @@ export class CommentsService implements OnModuleDestroy {
     if (input.deleteFromPlatform) {
       const usesModerationDelete = comment.platform === 'YOUTUBE' && !comment.isFromPage;
       const action = usesModerationDelete ? 'hideComment' : 'deleteComment';
-      const adapter = (
-        await this.adapterFactory.forWorkspace(workspaceId)
-      ).adapters.requireCapability(comment.platform, action);
-      this.ensureCommentActionScopes(comment, action);
-      const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
 
-      try {
-        if (usesModerationDelete) {
-          if (!adapter.hideComment) {
-            throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
-          }
-          await adapter.hideComment(
-            {
-              accessToken,
-              externalAccountId: comment.socialAccount.externalAccountId,
-              externalPageId: comment.socialAccount.externalPageId ?? undefined,
-              correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
-            },
-            comment.externalCommentId,
-            true,
-          );
-        } else {
-          if (!adapter.deleteComment) {
-            throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
-          }
-          await adapter.deleteComment(
-            {
-              accessToken,
-              externalAccountId: comment.socialAccount.externalAccountId,
-              externalPageId: comment.socialAccount.externalPageId ?? undefined,
-              correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
-            },
-            comment.externalCommentId,
-          );
-        }
-      } catch (error) {
-        let shouldIgnore = false;
-        if (isPlatformError(error) && error.kind === 'NOT_FOUND') {
-          shouldIgnore = true;
-        } else if (
-          error instanceof Error &&
-          (error.message.includes('does not exist') ||
-            error.message.includes('not found') ||
-            error.message.includes('Unsupported delete request') ||
-            error.message.includes('cannot be loaded'))
-        ) {
-          shouldIgnore = true;
-        }
+      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+        const adapter = adapters.requireCapability(comment.platform, action);
+        this.ensureCommentActionScopes(comment, action);
+        const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
 
-        if (!shouldIgnore) {
-          throw error;
+        try {
+          if (usesModerationDelete) {
+            if (!adapter.hideComment) {
+              throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+            }
+            await adapter.hideComment(
+              {
+                accessToken,
+                externalAccountId: comment.socialAccount.externalAccountId,
+                externalPageId: comment.socialAccount.externalPageId ?? undefined,
+                correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
+              },
+              comment.externalCommentId,
+              true,
+            );
+          } else {
+            if (!adapter.deleteComment) {
+              throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
+            }
+            await adapter.deleteComment(
+              {
+                accessToken,
+                externalAccountId: comment.socialAccount.externalAccountId,
+                externalPageId: comment.socialAccount.externalPageId ?? undefined,
+                correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
+              },
+              comment.externalCommentId,
+            );
+          }
+        } catch (error) {
+          let shouldIgnore = false;
+          if (isPlatformError(error) && error.kind === 'NOT_FOUND') {
+            shouldIgnore = true;
+          } else if (
+            error instanceof Error &&
+            (error.message.includes('does not exist') ||
+              error.message.includes('not found') ||
+              error.message.includes('Unsupported delete request') ||
+              error.message.includes('cannot be loaded'))
+          ) {
+            shouldIgnore = true;
+          }
+
+          if (!shouldIgnore) {
+            throw error;
+          }
         }
-      }
+      });
 
       await this.prisma.comment.deleteMany({
         where: {
@@ -468,12 +469,13 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = (
-      await this.adapterFactory.forWorkspace(workspaceId)
-    ).adapters.requireCapability(comment.platform, 'replyToComment');
-    if (!adapter.replyToComment) {
-      throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
-    }
+    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.requireCapability(comment.platform, 'replyToComment');
+      if (!adapter.replyToComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
+      }
+    });
+
     if (!comment.socialAccount.token || comment.socialAccount.status !== 'CONNECTED') {
       throw AppError.conflict('Social account chưa kết nối.');
     }
@@ -510,84 +512,95 @@ export class CommentsService implements OnModuleDestroy {
       data: { workspaceId, commentId: comment.id, message: input.message, sentById: actorUserId },
     });
 
-    try {
-      const targetExternalCommentId =
-        comment.platform === 'YOUTUBE' && comment.parent?.externalCommentId
-          ? comment.parent.externalCommentId
-          : comment.externalCommentId;
-      const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
-      const result = await adapter.replyToComment(
-        {
-          accessToken,
-          externalAccountId: comment.socialAccount.externalAccountId,
-          externalPageId: comment.socialAccount.externalPageId ?? undefined,
-          correlationId: auditContext.requestId ?? `comment-reply:${reply.id}`,
-        },
-        targetExternalCommentId,
-        input.message,
-      );
-      await this.prisma.$transaction([
-        this.prisma.commentReply.update({
-          where: { id: reply.id },
-          data: { status: 'SENT', externalReplyId: result.externalReplyId, sentAt: result.sentAt },
-        }),
-        this.prisma.comment.update({
-          where: { id: comment.id },
-          data: { status: 'RESOLVED' },
-        }),
-        this.prisma.comment.upsert({
-          where: {
-            socialAccountId_externalCommentId: {
-              socialAccountId: comment.socialAccountId,
-              externalCommentId: result.externalReplyId,
+    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.requireCapability(comment.platform, 'replyToComment');
+      if (!adapter.replyToComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
+      }
+
+      try {
+        const targetExternalCommentId =
+          comment.platform === 'YOUTUBE' && comment.parent?.externalCommentId
+            ? comment.parent.externalCommentId
+            : comment.externalCommentId;
+        const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
+        const result = await adapter.replyToComment(
+          {
+            accessToken,
+            externalAccountId: comment.socialAccount.externalAccountId,
+            externalPageId: comment.socialAccount.externalPageId ?? undefined,
+            correlationId: auditContext.requestId ?? `comment-reply:${reply.id}`,
+          },
+          targetExternalCommentId,
+          input.message,
+        );
+        await this.prisma.$transaction([
+          this.prisma.commentReply.update({
+            where: { id: reply.id },
+            data: {
+              status: 'SENT',
+              externalReplyId: result.externalReplyId,
+              sentAt: result.sentAt,
             },
+          }),
+          this.prisma.comment.update({
+            where: { id: comment.id },
+            data: { status: 'RESOLVED' },
+          }),
+          this.prisma.comment.upsert({
+            where: {
+              socialAccountId_externalCommentId: {
+                socialAccountId: comment.socialAccountId,
+                externalCommentId: result.externalReplyId,
+              },
+            },
+            create: {
+              workspaceId,
+              platformPostId: comment.platformPostId,
+              socialAccountId: comment.socialAccountId,
+              platform: comment.platform,
+              externalCommentId: result.externalReplyId,
+              parentId: comment.id,
+              authorExternalId:
+                comment.socialAccount.externalPageId ?? comment.socialAccount.externalAccountId,
+              authorName: comment.socialAccount.name,
+              authorAvatarUrl: comment.socialAccount.avatarUrl,
+              message: input.message,
+              likeCount: 0,
+              postedAt: result.sentAt,
+              status: 'RESOLVED',
+              isHidden: false,
+              isFromPage: true,
+            },
+            update: {
+              parentId: comment.id,
+              message: input.message,
+              postedAt: result.sentAt,
+              isFromPage: true,
+              deletedAt: null,
+            },
+          }),
+        ]);
+        await this.audit.record({
+          ...auditContext,
+          actorUserId,
+          workspaceId,
+          action: 'COMMENT_REPLIED',
+          resourceType: 'Comment',
+          resourceId: comment.id,
+        });
+      } catch (error) {
+        await this.prisma.commentReply.update({
+          where: { id: reply.id },
+          data: {
+            status: 'FAILED',
+            errorCode: error instanceof Error ? error.name : 'UNKNOWN',
+            errorMessage: error instanceof Error ? error.message : 'Lỗi không xác định khi reply.',
           },
-          create: {
-            workspaceId,
-            platformPostId: comment.platformPostId,
-            socialAccountId: comment.socialAccountId,
-            platform: comment.platform,
-            externalCommentId: result.externalReplyId,
-            parentId: comment.id,
-            authorExternalId:
-              comment.socialAccount.externalPageId ?? comment.socialAccount.externalAccountId,
-            authorName: comment.socialAccount.name,
-            authorAvatarUrl: comment.socialAccount.avatarUrl,
-            message: input.message,
-            likeCount: 0,
-            postedAt: result.sentAt,
-            status: 'RESOLVED',
-            isHidden: false,
-            isFromPage: true,
-          },
-          update: {
-            parentId: comment.id,
-            message: input.message,
-            postedAt: result.sentAt,
-            isFromPage: true,
-            deletedAt: null,
-          },
-        }),
-      ]);
-      await this.audit.record({
-        ...auditContext,
-        actorUserId,
-        workspaceId,
-        action: 'COMMENT_REPLIED',
-        resourceType: 'Comment',
-        resourceId: comment.id,
-      });
-    } catch (error) {
-      await this.prisma.commentReply.update({
-        where: { id: reply.id },
-        data: {
-          status: 'FAILED',
-          errorCode: error instanceof Error ? error.name : 'UNKNOWN',
-          errorMessage: error instanceof Error ? error.message : 'Lỗi không xác định khi reply.',
-        },
-      });
-      throw error;
-    }
+        });
+        throw error;
+      }
+    });
 
     return this.get(workspaceId, comment.id);
   }
@@ -611,13 +624,13 @@ export class CommentsService implements OnModuleDestroy {
       throw AppError.conflict('Social account chưa kết nối.');
     }
 
-    const adapter = (
-      await this.adapterFactory.forWorkspace(workspaceId)
-    ).adapters.requireCapability(platformPost.platform, 'createComment');
-    if (!adapter.createComment) {
-      throw AppError.capabilityUnsupported(platformPost.platform, 'createComment');
-    }
-    this.ensureCreateCommentScopes(platformPost);
+    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.requireCapability(platformPost.platform, 'createComment');
+      if (!adapter.createComment) {
+        throw AppError.capabilityUnsupported(platformPost.platform, 'createComment');
+      }
+      this.ensureCreateCommentScopes(platformPost);
+    });
 
     const payload: QueuePayload<'create-platform-comment'> = {
       platformPostId: platformPost.id,
@@ -780,13 +793,13 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    const adapter = (
-      await this.adapterFactory.forWorkspace(workspaceId)
-    ).adapters.requireCapability(comment.platform, 'replyToComment');
-    if (!adapter.replyToComment) {
-      throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
-    }
-    this.ensureReplyCommentScopes(comment);
+    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.requireCapability(comment.platform, 'replyToComment');
+      if (!adapter.replyToComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
+      }
+      this.ensureReplyCommentScopes(comment);
+    });
 
     const reply = await this.prisma.commentReply.create({
       data: { workspaceId, commentId: comment.id, message, sentById: actorUserId },

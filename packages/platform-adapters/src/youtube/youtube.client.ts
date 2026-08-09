@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
+import { discardResponseBody } from '../core/utils';
 import {
   normalizeYouTubeError,
   youtubeNetworkError,
@@ -27,7 +28,7 @@ import {
 export interface YouTubeClientConfig {
   clientId: string;
   clientSecret: string;
-  fetch?: AdapterFetch;
+  fetch: AdapterFetch;
 }
 
 export interface YouTubeUploadVideoInput {
@@ -125,6 +126,7 @@ export class YouTubeClient {
         retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
       });
     }
+    await discardResponseBody(response);
   }
 
   async getMyChannel(accessToken: string): Promise<YouTubeChannel> {
@@ -228,6 +230,7 @@ export class YouTubeClient {
         retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
       });
     }
+    await discardResponseBody(response);
   }
 
   async getVideoStatus(accessToken: string, videoId: string): Promise<YouTubeVideoResponse> {
@@ -362,6 +365,7 @@ export class YouTubeClient {
         retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
       });
     }
+    await discardResponseBody(response);
   }
 
   getVideoComments(input: {
@@ -470,6 +474,7 @@ export class YouTubeClient {
         retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
       });
     }
+    await discardResponseBody(response);
   }
 
   async setCommentModerationStatus(input: {
@@ -499,6 +504,7 @@ export class YouTubeClient {
         retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
       });
     }
+    await discardResponseBody(response);
   }
 
   private async startResumableUpload(input: {
@@ -538,6 +544,7 @@ export class YouTubeClient {
     }
 
     const location = response.headers.get('location');
+    await discardResponseBody(response);
     if (!location) {
       throw youtubeUnexpectedPayloadError(
         new Error('Thiếu Location header khi tạo resumable upload session.'),

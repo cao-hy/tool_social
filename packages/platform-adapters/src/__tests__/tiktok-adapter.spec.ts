@@ -10,6 +10,9 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+const testFetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+  fetch(input, init)) as typeof fetch;
+
 describe('TikTokAdapter', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -17,6 +20,7 @@ describe('TikTokAdapter', () => {
 
   it('tạo authorization URL bằng TikTok OAuth v2', () => {
     const adapter = new TikTokAdapter({
+      fetch: testFetch,
       clientKey: 'tt-key',
       clientSecret: 'tt-secret',
     });
@@ -77,6 +81,7 @@ describe('TikTokAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new TikTokAdapter({
+      fetch: testFetch,
       clientKey: 'tt-key',
       clientSecret: 'tt-secret',
     });
@@ -140,6 +145,7 @@ describe('TikTokAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new TikTokAdapter({
+      fetch: testFetch,
       clientKey: 'tt-key',
       clientSecret: 'tt-secret',
     });
@@ -198,6 +204,7 @@ describe('TikTokAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new TikTokAdapter({
+      fetch: testFetch,
       clientKey: 'tt-key',
       clientSecret: 'tt-secret',
     });
@@ -256,6 +263,7 @@ describe('TikTokAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new TikTokAdapter({
+      fetch: testFetch,
       clientKey: 'tt-key',
       clientSecret: 'tt-secret',
     });
@@ -292,6 +300,7 @@ describe('TikTokAdapter', () => {
 
   it('chặn bài TikTok không đúng 1 video', () => {
     const adapter = new TikTokAdapter({
+      fetch: testFetch,
       clientKey: 'tt-key',
       clientSecret: 'tt-secret',
     });
@@ -311,6 +320,7 @@ describe('createRuntimeAdapterRegistry TikTok', () => {
   it('ưu tiên TikTok adapter thật khi cấu hình đủ credential', () => {
     const registry = createRuntimeAdapterRegistry({
       nodeEnv: 'development',
+      fetch: vi.fn() as never,
       tiktok: {
         clientKey: 'tt-key',
         clientSecret: 'tt-secret',

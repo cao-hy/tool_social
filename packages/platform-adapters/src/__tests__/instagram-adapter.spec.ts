@@ -10,6 +10,9 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+const testFetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+  fetch(input, init)) as typeof fetch;
+
 describe('InstagramAdapter', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -17,6 +20,7 @@ describe('InstagramAdapter', () => {
 
   function createAdapter() {
     return new InstagramAdapter({
+      fetch: testFetch,
       appId: 'ig-app',
       appSecret: 'ig-secret',
       apiVersion: 'v24.0',

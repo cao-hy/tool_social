@@ -124,11 +124,25 @@ export class SocialAccountsService implements OnModuleDestroy {
     workspaceId: string,
     platform: Platform,
   ): Promise<{ authorizationUrl: string; expiresInSeconds: number; developmentFixture: boolean }> {
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(platform);
     const state = generateOAuthState();
     const pkce = generatePkcePair();
     const scopes = this.scopesFor(platform);
     const redirectUri = this.redirectUri(platform);
+    const adapterState = await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(platform);
+        return {
+          authorizationUrl: adapter.buildAuthorizationUrl({
+            redirectUri,
+            state,
+            scopes,
+            codeChallenge: pkce.challenge,
+          }),
+          developmentFixture: adapter instanceof DevelopmentFixtureAdapter,
+        };
+      },
+    );
 
     await this.redis.connect();
     await this.redis.getClient().set(
@@ -146,14 +160,9 @@ export class SocialAccountsService implements OnModuleDestroy {
     );
 
     return {
-      authorizationUrl: adapter.buildAuthorizationUrl({
-        redirectUri,
-        state,
-        scopes,
-        codeChallenge: pkce.challenge,
-      }),
+      authorizationUrl: adapterState.authorizationUrl,
       expiresInSeconds: OAUTH_STATE_TTL_SECONDS,
-      developmentFixture: adapter instanceof DevelopmentFixtureAdapter,
+      developmentFixture: adapterState.developmentFixture,
     };
   }
 
@@ -327,23 +336,23 @@ export class SocialAccountsService implements OnModuleDestroy {
     });
     if (!account) throw AppError.notFound('social account');
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
-      account.platform,
-    );
-    if (account.token && adapter.revokeToken) {
-      try {
-        const accessToken = decryptToken(account.token.accessToken, this.keyring);
-        await adapter.revokeToken(accessToken);
-      } catch (error) {
-        logger.warn(
-          {
-            socialAccountId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-          'Failed to revoke token during disconnection. Proceeding to delete account anyway.',
-        );
+    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get(account.platform);
+      if (account.token && adapter.revokeToken) {
+        try {
+          const accessToken = decryptToken(account.token.accessToken, this.keyring);
+          await adapter.revokeToken(accessToken);
+        } catch (error) {
+          logger.warn(
+            {
+              socialAccountId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            'Failed to revoke token during disconnection. Proceeding to delete account anyway.',
+          );
+        }
       }
-    }
+    });
 
     await this.removePendingJobsForSocialAccount(workspaceId, socialAccountId);
 
@@ -376,15 +385,15 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (!account) throw AppError.notFound('social account');
     if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
-      account.platform,
-    );
-    const accessToken = await this.getFreshAccessToken(account, adapter);
-    const profile = await adapter.getAccountProfile({
-      accessToken,
-      externalAccountId: account.externalAccountId,
-      externalPageId: account.externalPageId ?? undefined,
-      correlationId: auditContext.requestId ?? 'test-connection',
+    const profile = await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get(account.platform);
+      const accessToken = await this.getFreshAccessToken(account, adapter);
+      return await adapter.getAccountProfile({
+        accessToken,
+        externalAccountId: account.externalAccountId,
+        externalPageId: account.externalPageId ?? undefined,
+        correlationId: auditContext.requestId ?? 'test-connection',
+      });
     });
 
     const updated = await this.prisma.socialAccount.update({
@@ -433,20 +442,23 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
-      account.platform,
-    );
-    if (!hasTikTokCreatorInfo(adapter)) {
-      throw AppError.capabilityUnsupported('TIKTOK', 'queryCreatorInfo');
-    }
+    const creatorInfo = await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(account.platform);
+        if (!hasTikTokCreatorInfo(adapter)) {
+          throw AppError.capabilityUnsupported('TIKTOK', 'queryCreatorInfo');
+        }
 
-    const accessToken = await this.getFreshAccessToken(account, adapter);
-    const creatorInfo = await adapter.queryCreatorInfo({
-      accessToken,
-      externalAccountId: account.externalAccountId,
-      externalPageId: account.externalPageId ?? undefined,
-      correlationId: auditContext.requestId ?? 'tiktok-creator-info',
-    });
+        const accessToken = await this.getFreshAccessToken(account, adapter);
+        return await adapter.queryCreatorInfo({
+          accessToken,
+          externalAccountId: account.externalAccountId,
+          externalPageId: account.externalPageId ?? undefined,
+          correlationId: auditContext.requestId ?? 'tiktok-creator-info',
+        });
+      },
+    );
 
     return { ...creatorInfo, fetchedAt: new Date().toISOString() };
   }
@@ -471,23 +483,24 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
-      account.platform,
-    );
-    if (!hasPinterestBoardBrowser(adapter)) {
-      throw AppError.conflict(
-        'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
-      );
-    }
+    const items = await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get(account.platform);
+      if (!hasPinterestBoardBrowser(adapter)) {
+        throw AppError.conflict(
+          'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
+        );
+      }
 
-    const accessToken = await this.getFreshAccessToken(account, adapter);
-    return {
-      items: await adapter.listBoards({
+      const accessToken = await this.getFreshAccessToken(account, adapter);
+      return await adapter.listBoards({
         accessToken,
         externalAccountId: account.externalAccountId,
         externalPageId: account.externalPageId ?? undefined,
         correlationId: auditContext.requestId ?? 'pinterest-list-boards',
-      }),
+      });
+    });
+    return {
+      items,
       fetchedAt: new Date().toISOString(),
     };
   }
@@ -513,18 +526,16 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
-      account.platform,
-    );
-    if (!hasPinterestBoardBrowser(adapter)) {
-      throw AppError.conflict(
-        'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
-      );
-    }
+    const items = await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get(account.platform);
+      if (!hasPinterestBoardBrowser(adapter)) {
+        throw AppError.conflict(
+          'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
+        );
+      }
 
-    const accessToken = await this.getFreshAccessToken(account, adapter);
-    return {
-      items: await adapter.listBoardSections(
+      const accessToken = await this.getFreshAccessToken(account, adapter);
+      return await adapter.listBoardSections(
         {
           accessToken,
           externalAccountId: account.externalAccountId,
@@ -532,7 +543,10 @@ export class SocialAccountsService implements OnModuleDestroy {
           correlationId: auditContext.requestId ?? 'pinterest-list-board-sections',
         },
         boardId,
-      ),
+      );
+    });
+    return {
+      items,
       fetchedAt: new Date().toISOString(),
     };
   }
@@ -555,30 +569,32 @@ export class SocialAccountsService implements OnModuleDestroy {
     }
     if (!account.token) throw AppError.conflict('Instagram account chưa có token để kiểm tra.');
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
-      account.platform,
-    );
+    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get(account.platform);
 
-    // Kiểm tra xem adapter có phương thức searchLocations không
-    if (
-      !('searchLocations' in adapter) ||
-      typeof (adapter as unknown as { searchLocations: unknown }).searchLocations !== 'function'
-    ) {
-      throw AppError.conflict('Instagram adapter chưa hỗ trợ tính năng tìm kiếm vị trí.');
-    }
+      // Kiểm tra xem adapter có phương thức searchLocations không
+      if (
+        !('searchLocations' in adapter) ||
+        typeof (adapter as unknown as { searchLocations: unknown }).searchLocations !== 'function'
+      ) {
+        throw AppError.conflict('Instagram adapter chưa hỗ trợ tính năng tìm kiếm vị trí.');
+      }
 
-    const accessToken = await this.getFreshAccessToken(account, adapter);
-    return (
-      adapter as unknown as { searchLocations: (ctx: unknown, query: string) => Promise<unknown[]> }
-    ).searchLocations(
-      {
-        accessToken,
-        externalAccountId: account.externalAccountId,
-        externalPageId: account.externalPageId ?? undefined,
-        correlationId: auditContext.requestId ?? 'instagram-search-locations',
-      },
-      query,
-    );
+      const accessToken = await this.getFreshAccessToken(account, adapter);
+      return await (
+        adapter as unknown as {
+          searchLocations: (ctx: unknown, query: string) => Promise<unknown[]>;
+        }
+      ).searchLocations(
+        {
+          accessToken,
+          externalAccountId: account.externalAccountId,
+          externalPageId: account.externalPageId ?? undefined,
+          correlationId: auditContext.requestId ?? 'instagram-search-locations',
+        },
+        query,
+      );
+    });
   }
 
   private tokenCreateData(
@@ -809,8 +825,9 @@ export class SocialAccountsService implements OnModuleDestroy {
     });
     if (!account) throw AppError.notFound('Không tìm thấy tài khoản');
 
-    const { adapters: registry } = await this.adapterFactory.forWorkspace(workspaceId);
-    registry.requireCapability(account.platform, 'getPosts');
+    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      adapters.requireCapability(account.platform, 'getPosts');
+    });
 
     const activeJob = await this.prisma.externalPostSyncJob.findFirst({
       where: {

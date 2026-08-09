@@ -10,6 +10,9 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+const testFetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+  fetch(input, init)) as typeof fetch;
+
 describe('PinterestAdapter', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -17,6 +20,7 @@ describe('PinterestAdapter', () => {
 
   it('tạo authorization URL bằng Pinterest OAuth', () => {
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -38,6 +42,7 @@ describe('PinterestAdapter', () => {
 
   it('OAuth scope mặc định có quyền đọc user account', () => {
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -93,6 +98,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -149,6 +155,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -179,6 +186,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
       environment: 'production',
@@ -246,6 +254,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -294,6 +303,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -329,6 +339,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -383,6 +394,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
     });
@@ -438,6 +450,7 @@ describe('PinterestAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
       environment: 'production',
@@ -481,6 +494,7 @@ describe('PinterestAdapter', () => {
 
   it('chặn video Pin trong Pinterest sandbox', () => {
     const adapter = new PinterestAdapter({
+      fetch: testFetch,
       appId: 'pin-app',
       appSecret: 'pin-secret',
       environment: 'sandbox',
@@ -516,6 +530,7 @@ describe('createRuntimeAdapterRegistry Pinterest', () => {
   it('ưu tiên Pinterest adapter thật khi cấu hình đủ credential', () => {
     const registry = createRuntimeAdapterRegistry({
       nodeEnv: 'development',
+      fetch: vi.fn() as never,
       pinterest: {
         appId: 'pin-app',
         appSecret: 'pin-secret',
@@ -545,6 +560,7 @@ describe('createRuntimeAdapterRegistry Pinterest', () => {
 
     const registry = createRuntimeAdapterRegistry({
       nodeEnv: 'development',
+      fetch: fetchMock as never,
       pinterest: {
         appId: 'pin-app',
         appSecret: 'pin-secret',

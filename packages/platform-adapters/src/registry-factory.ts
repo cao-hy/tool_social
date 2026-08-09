@@ -10,7 +10,7 @@ import type { AdapterFetch } from './core/types';
 
 export interface AdapterRegistryRuntimeConfig {
   nodeEnv: string;
-  fetch?: AdapterFetch;
+  fetch: AdapterFetch;
   facebook?: Partial<FacebookPagesAdapterConfig>;
   instagram?: Partial<InstagramAdapterConfig>;
   pinterest?: Partial<PinterestAdapterConfig>;
@@ -21,7 +21,7 @@ export interface AdapterRegistryRuntimeConfig {
 export function createRuntimeAdapterRegistry(
   config: AdapterRegistryRuntimeConfig,
 ): AdapterRegistry {
-  const fetchImpl = config.fetch ?? (globalThis.fetch.bind(globalThis) as AdapterFetch);
+  const fetchImpl = config.fetch;
   const registry = new AdapterRegistry();
   const facebookConfig = completeFacebookConfig(config.facebook, fetchImpl);
   const instagramConfig = completeInstagramConfig(config.instagram, fetchImpl);

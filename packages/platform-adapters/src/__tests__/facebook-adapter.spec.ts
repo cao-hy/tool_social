@@ -11,6 +11,9 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+const testFetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+  fetch(input, init)) as typeof fetch;
+
 describe('FacebookPagesAdapter', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -18,6 +21,7 @@ describe('FacebookPagesAdapter', () => {
 
   it('tạo authorization URL bằng Facebook OAuth dialog', () => {
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -44,6 +48,7 @@ describe('FacebookPagesAdapter', () => {
 
   it('dùng Facebook Login for Business config_id khi được cấu hình', () => {
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -101,6 +106,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -139,6 +145,7 @@ describe('FacebookPagesAdapter', () => {
     );
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -172,6 +179,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -216,6 +224,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -291,6 +300,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -362,6 +372,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -442,6 +453,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -508,6 +520,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -546,6 +559,7 @@ describe('FacebookPagesAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
       appId: 'app-id',
       appSecret: 'app-secret',
       apiVersion: 'v24.0',
@@ -568,6 +582,7 @@ describe('createRuntimeAdapterRegistry', () => {
   it('ưu tiên Facebook adapter thật khi cấu hình đủ credential', () => {
     const registry = createRuntimeAdapterRegistry({
       nodeEnv: 'development',
+      fetch: vi.fn() as never,
       facebook: {
         appId: 'app-id',
         appSecret: 'app-secret',
@@ -583,6 +598,7 @@ describe('createRuntimeAdapterRegistry', () => {
     expect(() =>
       createRuntimeAdapterRegistry({
         nodeEnv: 'development',
+        fetch: vi.fn() as never,
         facebook: {
           appId: 'app-id',
           appSecret: 'app-secret',

@@ -10,6 +10,9 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+const testFetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+  fetch(input, init)) as typeof fetch;
+
 describe('YouTubeAdapter', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -17,6 +20,7 @@ describe('YouTubeAdapter', () => {
 
   it('tạo authorization URL bằng Google OAuth server-side flow', () => {
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -81,6 +85,7 @@ describe('YouTubeAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -140,6 +145,7 @@ describe('YouTubeAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -206,6 +212,7 @@ describe('YouTubeAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -244,6 +251,7 @@ describe('YouTubeAdapter', () => {
 
   it('chặn bài YouTube thiếu title hoặc không đúng 1 video', () => {
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -303,6 +311,7 @@ describe('YouTubeAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -377,6 +386,7 @@ describe('YouTubeAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -462,6 +472,7 @@ describe('YouTubeAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new YouTubeAdapter({
+      fetch: testFetch,
       clientId: 'youtube-client',
       clientSecret: 'youtube-secret',
     });
@@ -502,6 +513,7 @@ describe('createRuntimeAdapterRegistry YouTube', () => {
   it('ưu tiên YouTube adapter thật khi cấu hình đủ credential', () => {
     const registry = createRuntimeAdapterRegistry({
       nodeEnv: 'development',
+      fetch: vi.fn() as never,
       youtube: {
         clientId: 'youtube-client',
         clientSecret: 'youtube-secret',

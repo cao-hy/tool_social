@@ -35,7 +35,7 @@ export interface FacebookGraphClientConfig {
   appSecret: string;
   apiVersion: string;
   loginConfigId?: string;
-  fetch?: AdapterFetch;
+  fetch: AdapterFetch;
 }
 
 export class FacebookGraphClient {

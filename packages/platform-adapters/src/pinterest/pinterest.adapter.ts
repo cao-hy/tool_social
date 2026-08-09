@@ -9,7 +9,6 @@ import { getCapabilityTable } from '../capabilities/matrix';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
-  AdapterFetch,
   AuthUrlInput,
   EditPostInput,
   ExternalPost,
@@ -77,7 +76,7 @@ export class PinterestAdapter implements SocialPlatformAdapter {
   constructor(config: PinterestAdapterConfig) {
     this.client = new PinterestClient({
       ...config,
-      fetch: config.fetch ?? (globalThis.fetch.bind(globalThis) as AdapterFetch),
+      fetch: config.fetch,
     });
     this.scopes = config.scopes ?? [...PINTEREST_OAUTH_SCOPES];
     this.defaultBoardName = config.defaultBoardName ?? DEFAULT_BOARD_NAME;

@@ -35,6 +35,10 @@ describe('CommentsService', () => {
   } as unknown as AdapterRegistry;
   const adapterFactory = {
     forWorkspace: vi.fn().mockResolvedValue({ adapters }),
+    withWorkspace: vi.fn(
+      async (_workspaceId: string, fn: (ctx: { adapters: AdapterRegistry }) => Promise<unknown>) =>
+        fn({ adapters }),
+    ),
   } as unknown as AdapterRegistryFactory;
   const keyring = {} as Keyring;
 

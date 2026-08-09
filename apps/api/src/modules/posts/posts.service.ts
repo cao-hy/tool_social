@@ -747,50 +747,51 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     actorUserId: string,
     auditContext: AuditContext,
   ) {
-    const { platformPost, adapter, ctx } = await this.tiktokPlatformPostContext(
+    return await this.withTikTokPlatformPostContext(
       workspaceId,
       postId,
       platformPostId,
-    );
+      async ({ platformPost, adapter, ctx }) => {
+        if (!adapter.cancelPublish) {
+          throw AppError.capabilityUnsupported('TIKTOK', 'cancel_publish');
+        }
 
-    if (!adapter.cancelPublish) {
-      throw AppError.capabilityUnsupported('TIKTOK', 'cancel_publish');
-    }
+        await adapter.cancelPublish(ctx, platformPost.externalPostId);
 
-    await adapter.cancelPublish(ctx, platformPost.externalPostId);
+        const state = {
+          ...(jsonObject(platformPost.platformState) ?? {}),
+          publishId: platformPost.externalPostId,
+          status: 'CANCELLED',
+          refreshedAt: new Date().toISOString(),
+        } satisfies TikTokPublishPlatformState;
 
-    const state = {
-      ...(jsonObject(platformPost.platformState) ?? {}),
-      publishId: platformPost.externalPostId,
-      status: 'CANCELLED',
-      refreshedAt: new Date().toISOString(),
-    } satisfies TikTokPublishPlatformState;
+        await this.prisma.platformPost.update({
+          where: { id: platformPost.id },
+          data: {
+            status: 'CANCELLED',
+            platformState: state as unknown as Prisma.InputJsonValue,
+            errorCode: null,
+            errorMessage: null,
+          },
+        });
+        await this.updateParentStatus(platformPost.contentPostId);
 
-    await this.prisma.platformPost.update({
-      where: { id: platformPost.id },
-      data: {
-        status: 'CANCELLED',
-        platformState: state as unknown as Prisma.InputJsonValue,
-        errorCode: null,
-        errorMessage: null,
+        await this.audit.record({
+          ...auditContext,
+          actorUserId,
+          workspaceId,
+          action: 'POST_UPDATED',
+          resourceType: 'PlatformPost',
+          resourceId: platformPostId,
+          metadata: { action: 'tiktok_cancel_publish', platformState: state },
+        });
+
+        return {
+          post: await this.get(workspaceId, postId),
+          platformState: state,
+        };
       },
-    });
-    await this.updateParentStatus(platformPost.contentPostId);
-
-    await this.audit.record({
-      ...auditContext,
-      actorUserId,
-      workspaceId,
-      action: 'POST_UPDATED',
-      resourceType: 'PlatformPost',
-      resourceId: platformPostId,
-      metadata: { action: 'tiktok_cancel_publish', platformState: state },
-    });
-
-    return {
-      post: await this.get(workspaceId, postId),
-      platformState: state,
-    };
+    );
   }
 
   async makeYouTubePublic(
@@ -800,39 +801,40 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     actorUserId: string,
     auditContext: AuditContext,
   ) {
-    const { platformPost, adapter, ctx } = await this.youtubePlatformPostContext(
+    return await this.withYouTubePlatformPostContext(
       workspaceId,
       postId,
       platformPostId,
-    );
+      async ({ platformPost, adapter, ctx }) => {
+        const current = await adapter.getVideoPlatformState(ctx, platformPost.externalPostId);
+        assertYouTubeReadyForPublic(current);
 
-    const current = await adapter.getVideoPlatformState(ctx, platformPost.externalPostId);
-    assertYouTubeReadyForPublic(current);
+        const state = await adapter.makeVideoPublic(ctx, platformPost.externalPostId);
+        await this.prisma.platformPost.update({
+          where: { id: platformPost.id },
+          data: {
+            platformState: state as unknown as Prisma.InputJsonValue,
+            errorCode: null,
+            errorMessage: null,
+          },
+        });
 
-    const state = await adapter.makeVideoPublic(ctx, platformPost.externalPostId);
-    await this.prisma.platformPost.update({
-      where: { id: platformPost.id },
-      data: {
-        platformState: state as unknown as Prisma.InputJsonValue,
-        errorCode: null,
-        errorMessage: null,
+        await this.audit.record({
+          ...auditContext,
+          actorUserId,
+          workspaceId,
+          action: 'POST_UPDATED',
+          resourceType: 'PlatformPost',
+          resourceId: platformPostId,
+          metadata: { action: 'youtube_make_public', platformState: state },
+        });
+
+        return {
+          post: await this.get(workspaceId, postId),
+          platformState: state,
+        };
       },
-    });
-
-    await this.audit.record({
-      ...auditContext,
-      actorUserId,
-      workspaceId,
-      action: 'POST_UPDATED',
-      resourceType: 'PlatformPost',
-      resourceId: platformPostId,
-      metadata: { action: 'youtube_make_public', platformState: state },
-    });
-
-    return {
-      post: await this.get(workspaceId, postId),
-      platformState: state,
-    };
+    );
   }
 
   private async prepareForPublishing(
@@ -1411,40 +1413,49 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     platform: Platform;
     state: Record<string, unknown>;
   }> {
-    const base = await this.platformPostStateContext(workspaceId, postId, platformPostId);
-    const currentState = jsonObject(base.platformPost.platformState) ?? {};
-    const platformState =
-      base.platformPost.platform === 'YOUTUBE' && hasYouTubeStatusMethods(base.adapter)
-        ? await base.adapter.getVideoPlatformState(base.ctx, base.platformPost.externalPostId)
-        : hasTikTokStatusMethods(base.adapter)
-          ? await base.adapter.getPublishPlatformState(base.ctx, base.platformPost.externalPostId)
-          : null;
-    const metricsResult = await this.readPlatformPostMetrics(
-      base.adapter,
-      base.ctx,
-      base.platformPost.externalPostId,
-    );
-    const state: Record<string, unknown> = {
-      ...currentState,
-      ...(jsonObject(platformState) ?? {}),
-      metricsRefreshedAt: metricsResult.refreshedAt,
-    };
-    if (metricsResult.metrics) state.metrics = metricsResult.metrics;
-    if (metricsResult.error) {
-      state.metricsError = metricsResult.error;
-    } else {
-      delete state.metricsError;
-    }
+    return await this.withPlatformPostStateContext(
+      workspaceId,
+      postId,
+      platformPostId,
+      async (base) => {
+        const currentState = jsonObject(base.platformPost.platformState) ?? {};
+        const platformState =
+          base.platformPost.platform === 'YOUTUBE' && hasYouTubeStatusMethods(base.adapter)
+            ? await base.adapter.getVideoPlatformState(base.ctx, base.platformPost.externalPostId)
+            : hasTikTokStatusMethods(base.adapter)
+              ? await base.adapter.getPublishPlatformState(
+                  base.ctx,
+                  base.platformPost.externalPostId,
+                )
+              : null;
+        const metricsResult = await this.readPlatformPostMetrics(
+          base.adapter,
+          base.ctx,
+          base.platformPost.externalPostId,
+        );
+        const state: Record<string, unknown> = {
+          ...currentState,
+          ...(jsonObject(platformState) ?? {}),
+          metricsRefreshedAt: metricsResult.refreshedAt,
+        };
+        if (metricsResult.metrics) state.metrics = metricsResult.metrics;
+        if (metricsResult.error) {
+          state.metricsError = metricsResult.error;
+        } else {
+          delete state.metricsError;
+        }
 
-    await this.prisma.platformPost.update({
-      where: { id: base.platformPost.id },
-      data: {
-        platformState: state as unknown as Prisma.InputJsonValue,
-        errorCode: null,
-        errorMessage: null,
+        await this.prisma.platformPost.update({
+          where: { id: base.platformPost.id },
+          data: {
+            platformState: state as unknown as Prisma.InputJsonValue,
+            errorCode: null,
+            errorMessage: null,
+          },
+        });
+        return { platform: base.platformPost.platform, state };
       },
-    });
-    return { platform: base.platformPost.platform, state };
+    );
   }
 
   private async readPlatformPostMetrics(
@@ -1473,35 +1484,36 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async platformPostStateContext(
+  private async withPlatformPostStateContext<T>(
     workspaceId: string,
     postId: string,
     platformPostId: string,
-  ): Promise<{
-    platformPost: {
-      id: string;
-      platform: Platform;
-      externalPostId: string;
-      platformState: Prisma.JsonValue | null;
-      socialAccount: {
+    fn: (base: {
+      platformPost: {
         id: string;
-        workspaceId: string;
         platform: Platform;
-        externalAccountId: string;
-        externalPageId: string | null;
-        status: string;
-        token: {
+        externalPostId: string;
+        platformState: Prisma.JsonValue | null;
+        socialAccount: {
           id: string;
-          accessToken: string;
-          refreshToken: string | null;
-          accessTokenExpiresAt: Date | null;
-          refreshTokenExpiresAt: Date | null;
-        } | null;
+          workspaceId: string;
+          platform: Platform;
+          externalAccountId: string;
+          externalPageId: string | null;
+          status: string;
+          token: {
+            id: string;
+            accessToken: string;
+            refreshToken: string | null;
+            accessTokenExpiresAt: Date | null;
+            refreshTokenExpiresAt: Date | null;
+          } | null;
+        };
       };
-    };
-    adapter: SocialPlatformAdapter;
-    ctx: AdapterContext;
-  }> {
+      adapter: SocialPlatformAdapter;
+      ctx: AdapterContext;
+    }) => Promise<T>,
+  ): Promise<T> {
     const platformPost = await this.prisma.platformPost.findFirst({
       where: {
         id: platformPostId,
@@ -1518,67 +1530,68 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('Social account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get(
-      platformPost.platform,
-    );
-    const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-    const ctx = {
-      accessToken,
-      externalAccountId: platformPost.socialAccount.externalAccountId,
-      externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-      correlationId: `platform-state:${platformPostId}`,
-    } satisfies AdapterContext;
+    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get(platformPost.platform);
+      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+      const ctx = {
+        accessToken,
+        externalAccountId: platformPost.socialAccount.externalAccountId,
+        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+        correlationId: `platform-state:${platformPostId}`,
+      } satisfies AdapterContext;
 
-    return {
-      platformPost: {
-        id: platformPost.id,
-        platform: platformPost.platform as Platform,
-        externalPostId: platformPost.externalPostId,
-        platformState: platformPost.platformState,
-        socialAccount: {
-          id: platformPost.socialAccount.id,
-          workspaceId: platformPost.socialAccount.workspaceId,
-          platform: platformPost.socialAccount.platform as Platform,
-          externalAccountId: platformPost.socialAccount.externalAccountId,
-          externalPageId: platformPost.socialAccount.externalPageId,
-          status: platformPost.socialAccount.status,
-          token: platformPost.socialAccount.token,
+      return await fn({
+        platformPost: {
+          id: platformPost.id,
+          platform: platformPost.platform as Platform,
+          externalPostId: platformPost.externalPostId as string,
+          platformState: platformPost.platformState,
+          socialAccount: {
+            id: platformPost.socialAccount.id,
+            workspaceId: platformPost.socialAccount.workspaceId,
+            platform: platformPost.socialAccount.platform as Platform,
+            externalAccountId: platformPost.socialAccount.externalAccountId,
+            externalPageId: platformPost.socialAccount.externalPageId,
+            status: platformPost.socialAccount.status,
+            token: platformPost.socialAccount.token,
+          },
         },
-      },
-      adapter,
-      ctx,
-    };
+        adapter,
+        ctx,
+      });
+    });
   }
 
-  private async tiktokPlatformPostContext(
+  private async withTikTokPlatformPostContext<T>(
     workspaceId: string,
     postId: string,
     platformPostId: string,
-  ): Promise<{
-    platformPost: {
-      id: string;
-      contentPostId: string;
-      externalPostId: string;
-      platformState: Prisma.JsonValue | null;
-      socialAccount: {
+    fn: (base: {
+      platformPost: {
         id: string;
-        workspaceId: string;
-        platform: Platform;
-        externalAccountId: string;
-        externalPageId: string | null;
-        status: string;
-        token: {
+        contentPostId: string;
+        externalPostId: string;
+        platformState: Prisma.JsonValue | null;
+        socialAccount: {
           id: string;
-          accessToken: string;
-          refreshToken: string | null;
-          accessTokenExpiresAt: Date | null;
-          refreshTokenExpiresAt: Date | null;
-        } | null;
+          workspaceId: string;
+          platform: Platform;
+          externalAccountId: string;
+          externalPageId: string | null;
+          status: string;
+          token: {
+            id: string;
+            accessToken: string;
+            refreshToken: string | null;
+            accessTokenExpiresAt: Date | null;
+            refreshTokenExpiresAt: Date | null;
+          } | null;
+        };
       };
-    };
-    adapter: SocialPlatformAdapter & TikTokStatusAdapter;
-    ctx: AdapterContext;
-  }> {
+      adapter: SocialPlatformAdapter & TikTokStatusAdapter;
+      ctx: AdapterContext;
+    }) => Promise<T>,
+  ): Promise<T> {
     const platformPost = await this.prisma.platformPost.findFirst({
       where: {
         id: platformPostId,
@@ -1598,38 +1611,40 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('TikTok account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get('TIKTOK');
-    if (!hasTikTokStatusMethods(adapter)) {
-      throw AppError.capabilityUnsupported('TIKTOK', 'tiktok_publish_state');
-    }
+    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get('TIKTOK');
+      if (!hasTikTokStatusMethods(adapter)) {
+        throw AppError.capabilityUnsupported('TIKTOK', 'tiktok_publish_state');
+      }
 
-    const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-    const ctx = {
-      accessToken,
-      externalAccountId: platformPost.socialAccount.externalAccountId,
-      externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-      correlationId: `tiktok-state:${platformPostId}`,
-    } satisfies AdapterContext;
+      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+      const ctx = {
+        accessToken,
+        externalAccountId: platformPost.socialAccount.externalAccountId,
+        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+        correlationId: `tiktok-state:${platformPostId}`,
+      } satisfies AdapterContext;
 
-    return {
-      platformPost: {
-        id: platformPost.id,
-        contentPostId: platformPost.contentPostId,
-        externalPostId: platformPost.externalPostId,
-        platformState: platformPost.platformState,
-        socialAccount: {
-          id: platformPost.socialAccount.id,
-          workspaceId: platformPost.socialAccount.workspaceId,
-          platform: platformPost.socialAccount.platform as Platform,
-          externalAccountId: platformPost.socialAccount.externalAccountId,
-          externalPageId: platformPost.socialAccount.externalPageId,
-          status: platformPost.socialAccount.status,
-          token: platformPost.socialAccount.token,
+      return await fn({
+        platformPost: {
+          id: platformPost.id,
+          contentPostId: platformPost.contentPostId,
+          externalPostId: platformPost.externalPostId as string,
+          platformState: platformPost.platformState,
+          socialAccount: {
+            id: platformPost.socialAccount.id,
+            workspaceId: platformPost.socialAccount.workspaceId,
+            platform: platformPost.socialAccount.platform as Platform,
+            externalAccountId: platformPost.socialAccount.externalAccountId,
+            externalPageId: platformPost.socialAccount.externalPageId,
+            status: platformPost.socialAccount.status,
+            token: platformPost.socialAccount.token,
+          },
         },
-      },
-      adapter,
-      ctx,
-    };
+        adapter,
+        ctx,
+      });
+    });
   }
 
   private async editPublishedPlatformPosts(
@@ -1642,62 +1657,70 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     );
     if (targets.length === 0) return;
 
-    const { adapters } = await this.adapterFactory.forWorkspace(post.workspaceId);
-    const operations = targets.map((platformPost) => {
-      const adapter = adapters.requireCapability(
-        platformPost.platform as Platform,
-        'editPublishedPost',
-      );
-      if (!adapter.editPost) {
-        throw AppError.capabilityUnsupported(
+    await this.adapterFactory.withWorkspace(post.workspaceId, async ({ adapters }) => {
+      const operations = targets.map((platformPost) => {
+        const adapter = adapters.requireCapability(
           platformPost.platform as Platform,
           'editPublishedPost',
         );
-      }
-      if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
-        throw AppError.conflict(
-          `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
+        if (!adapter.editPost) {
+          throw AppError.capabilityUnsupported(
+            platformPost.platform as Platform,
+            'editPublishedPost',
+          );
+        }
+        if (
+          !platformPost.socialAccount.token ||
+          platformPost.socialAccount.status !== 'CONNECTED'
+        ) {
+          throw AppError.conflict(
+            `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
+          );
+        }
+        return { platformPost, adapter };
+      });
+
+      for (const { platformPost, adapter } of operations) {
+        const override = input.platformOverrides?.find(
+          (item) => item.socialAccountId === platformPost.socialAccountId,
+        );
+        const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+        const mediaTypes =
+          platformPost.media.length > 0
+            ? platformPost.media.map((item) => item.mediaAsset.type as MediaType)
+            : post.media.map((item) => item.mediaAsset.type as MediaType);
+        await adapter.editPost?.(
+          {
+            accessToken,
+            externalAccountId: platformPost.socialAccount.externalAccountId,
+            externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+            correlationId,
+            logger,
+          },
+          platformPost.externalPostId as string,
+          {
+            caption:
+              override?.caption ?? input.body ?? platformPost.caption ?? post.body ?? undefined,
+            title: override?.title ?? input.title ?? platformPost.title ?? post.title ?? undefined,
+            description:
+              override?.description ??
+              input.body ??
+              platformPost.description ??
+              post.body ??
+              undefined,
+            linkUrl:
+              override?.linkUrl ??
+              input.linkUrl ??
+              platformPost.linkUrl ??
+              post.linkUrl ??
+              undefined,
+            hashtags: input.hashtags ?? post.hashtags,
+            mediaTypes,
+            options: override?.options ?? jsonObject(platformPost.options) ?? undefined,
+          },
         );
       }
-      return { platformPost, adapter };
     });
-
-    for (const { platformPost, adapter } of operations) {
-      const override = input.platformOverrides?.find(
-        (item) => item.socialAccountId === platformPost.socialAccountId,
-      );
-      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-      const mediaTypes =
-        platformPost.media.length > 0
-          ? platformPost.media.map((item) => item.mediaAsset.type as MediaType)
-          : post.media.map((item) => item.mediaAsset.type as MediaType);
-      await adapter.editPost?.(
-        {
-          accessToken,
-          externalAccountId: platformPost.socialAccount.externalAccountId,
-          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-          correlationId,
-          logger,
-        },
-        platformPost.externalPostId as string,
-        {
-          caption:
-            override?.caption ?? input.body ?? platformPost.caption ?? post.body ?? undefined,
-          title: override?.title ?? input.title ?? platformPost.title ?? post.title ?? undefined,
-          description:
-            override?.description ??
-            input.body ??
-            platformPost.description ??
-            post.body ??
-            undefined,
-          linkUrl:
-            override?.linkUrl ?? input.linkUrl ?? platformPost.linkUrl ?? post.linkUrl ?? undefined,
-          hashtags: input.hashtags ?? post.hashtags,
-          mediaTypes,
-          options: override?.options ?? jsonObject(platformPost.options) ?? undefined,
-        },
-      );
-    }
   }
 
   private async deletePublishedPlatformPosts(
@@ -1714,72 +1737,73 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     );
     if (targets.length === 0) return [];
 
-    const { adapters } = await this.adapterFactory.forWorkspace(post.workspaceId);
-    const results: PlatformDeleteResult[] = [];
+    return await this.adapterFactory.withWorkspace(post.workspaceId, async ({ adapters }) => {
+      const results: PlatformDeleteResult[] = [];
 
-    for (const platformPost of targets) {
-      const baseResult = {
-        platformPostId: platformPost.id,
-        platform: platformPost.platform as Platform,
-        socialAccountId: platformPost.socialAccountId,
-        socialAccountName: platformPost.socialAccount.name,
-        externalPostId: platformPost.externalPostId as string,
-      };
+      for (const platformPost of targets) {
+        const baseResult = {
+          platformPostId: platformPost.id,
+          platform: platformPost.platform as Platform,
+          socialAccountId: platformPost.socialAccountId,
+          socialAccountName: platformPost.socialAccount.name,
+          externalPostId: platformPost.externalPostId as string,
+        };
 
-      try {
-        const adapter = adapters.requireCapability(
-          platformPost.platform as Platform,
-          'deletePublishedPost',
-        );
-        if (!adapter.deletePost) {
-          throw AppError.capabilityUnsupported(
+        try {
+          const adapter = adapters.requireCapability(
             platformPost.platform as Platform,
             'deletePublishedPost',
           );
-        }
-        if (
-          !platformPost.socialAccount.token ||
-          platformPost.socialAccount.status !== 'CONNECTED'
-        ) {
-          throw AppError.conflict(
-            `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
-          );
-        }
+          if (!adapter.deletePost) {
+            throw AppError.capabilityUnsupported(
+              platformPost.platform as Platform,
+              'deletePublishedPost',
+            );
+          }
+          if (
+            !platformPost.socialAccount.token ||
+            platformPost.socialAccount.status !== 'CONNECTED'
+          ) {
+            throw AppError.conflict(
+              `${platformPost.platform} account chưa kết nối hoặc token không khả dụng.`,
+            );
+          }
 
-        const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-        await adapter.deletePost(
-          {
-            accessToken,
-            externalAccountId: platformPost.socialAccount.externalAccountId,
-            externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-            correlationId,
-            logger,
-          },
-          platformPost.externalPostId as string,
-        );
-        results.push({ ...baseResult, deleted: true });
-      } catch (error) {
-        if (isPlatformError(error) && error.kind === 'NOT_FOUND') {
+          const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+          await adapter.deletePost(
+            {
+              accessToken,
+              externalAccountId: platformPost.socialAccount.externalAccountId,
+              externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+              correlationId,
+              logger,
+            },
+            platformPost.externalPostId as string,
+          );
+          results.push({ ...baseResult, deleted: true });
+        } catch (error) {
+          if (isPlatformError(error) && error.kind === 'NOT_FOUND') {
+            results.push({
+              ...baseResult,
+              deleted: true,
+              errorCode: 'REMOTE_ALREADY_DELETED',
+              errorMessage: error.message,
+            });
+            continue;
+          }
+
           results.push({
             ...baseResult,
-            deleted: true,
-            errorCode: 'REMOTE_ALREADY_DELETED',
-            errorMessage: error.message,
+            deleted: false,
+            errorCode: deleteErrorCode(error),
+            errorMessage:
+              error instanceof Error ? error.message : 'Không xóa được bài trên nền tảng.',
           });
-          continue;
         }
-
-        results.push({
-          ...baseResult,
-          deleted: false,
-          errorCode: deleteErrorCode(error),
-          errorMessage:
-            error instanceof Error ? error.message : 'Không xóa được bài trên nền tảng.',
-        });
       }
-    }
 
-    return results;
+      return results;
+    });
   }
 
   private async updatePublishedOverrides(
@@ -1807,34 +1831,35 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async youtubePlatformPostContext(
+  private async withYouTubePlatformPostContext<T>(
     workspaceId: string,
     postId: string,
     platformPostId: string,
-  ): Promise<{
-    platformPost: {
-      id: string;
-      platform: Platform;
-      externalPostId: string;
-      socialAccount: {
+    fn: (base: {
+      platformPost: {
         id: string;
-        workspaceId: string;
         platform: Platform;
-        externalAccountId: string;
-        externalPageId: string | null;
-        status: string;
-        token: {
+        externalPostId: string;
+        socialAccount: {
           id: string;
-          accessToken: string;
-          refreshToken: string | null;
-          accessTokenExpiresAt: Date | null;
-          refreshTokenExpiresAt: Date | null;
-        } | null;
+          workspaceId: string;
+          platform: Platform;
+          externalAccountId: string;
+          externalPageId: string | null;
+          status: string;
+          token: {
+            id: string;
+            accessToken: string;
+            refreshToken: string | null;
+            accessTokenExpiresAt: Date | null;
+            refreshTokenExpiresAt: Date | null;
+          } | null;
+        };
       };
-    };
-    adapter: SocialPlatformAdapter & YouTubeStatusAdapter;
-    ctx: AdapterContext;
-  }> {
+      adapter: SocialPlatformAdapter & YouTubeStatusAdapter;
+      ctx: AdapterContext;
+    }) => Promise<T>,
+  ): Promise<T> {
     const platformPost = await this.prisma.platformPost.findFirst({
       where: {
         id: platformPostId,
@@ -1854,37 +1879,39 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('YouTube account chưa kết nối hoặc token không khả dụng.');
     }
 
-    const adapter = (await this.adapterFactory.forWorkspace(workspaceId)).adapters.get('YOUTUBE');
-    if (!hasYouTubeStatusMethods(adapter)) {
-      throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
-    }
+    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+      const adapter = adapters.get('YOUTUBE');
+      if (!hasYouTubeStatusMethods(adapter)) {
+        throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
+      }
 
-    const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-    const ctx = {
-      accessToken,
-      externalAccountId: platformPost.socialAccount.externalAccountId,
-      externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-      correlationId: `youtube-state:${platformPostId}`,
-    } satisfies AdapterContext;
+      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+      const ctx = {
+        accessToken,
+        externalAccountId: platformPost.socialAccount.externalAccountId,
+        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+        correlationId: `youtube-state:${platformPostId}`,
+      } satisfies AdapterContext;
 
-    return {
-      platformPost: {
-        id: platformPost.id,
-        platform: platformPost.platform as Platform,
-        externalPostId: platformPost.externalPostId,
-        socialAccount: {
-          id: platformPost.socialAccount.id,
-          workspaceId: platformPost.socialAccount.workspaceId,
-          platform: platformPost.socialAccount.platform as Platform,
-          externalAccountId: platformPost.socialAccount.externalAccountId,
-          externalPageId: platformPost.socialAccount.externalPageId,
-          status: platformPost.socialAccount.status,
-          token: platformPost.socialAccount.token,
+      return await fn({
+        platformPost: {
+          id: platformPost.id,
+          platform: platformPost.platform as Platform,
+          externalPostId: platformPost.externalPostId as string,
+          socialAccount: {
+            id: platformPost.socialAccount.id,
+            workspaceId: platformPost.socialAccount.workspaceId,
+            platform: platformPost.socialAccount.platform as Platform,
+            externalAccountId: platformPost.socialAccount.externalAccountId,
+            externalPageId: platformPost.socialAccount.externalPageId,
+            status: platformPost.socialAccount.status,
+            token: platformPost.socialAccount.token,
+          },
         },
-      },
-      adapter,
-      ctx,
-    };
+        adapter,
+        ctx,
+      });
+    });
   }
 
   private async updateParentStatus(contentPostId: string): Promise<void> {

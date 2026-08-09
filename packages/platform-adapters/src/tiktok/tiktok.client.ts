@@ -28,7 +28,7 @@ import {
 export interface TikTokClientConfig {
   clientKey: string;
   clientSecret: string;
-  fetch?: AdapterFetch;
+  fetch: AdapterFetch;
 }
 
 export interface TikTokDirectVideoPostInput {

@@ -55,3 +55,5 @@ tmp/
 .proxy-config.json
 
 .agents/
+
+docs/PROBLEM.md

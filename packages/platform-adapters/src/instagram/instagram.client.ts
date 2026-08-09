@@ -33,7 +33,7 @@ export interface InstagramGraphClientConfig {
   appId: string;
   appSecret: string;
   apiVersion: string;
-  fetch?: AdapterFetch;
+  fetch: AdapterFetch;
 }
 
 export class InstagramGraphClient {

@@ -32,100 +32,104 @@ export function createRefreshSocialTokenProcessor(input: {
       return { refreshed: false, reason: 'not_found' };
     }
 
-    const { adapters } = await input.adapterFactory.forWorkspace(payload.workspaceId);
-    const adapter = adapters.get(token.socialAccount.platform);
-    if (!token.refreshToken || !adapter.refreshToken) {
-      await input.prisma.socialAccount.update({
-        where: { id: token.socialAccountId },
-        data: {
-          status: 'NEEDS_RECONNECT',
-          lastErrorAt: new Date(),
-          lastErrorMessage: 'Refresh token chưa được nền tảng này xác minh hoặc chưa có.',
-        },
-      });
-      return { refreshed: false, reason: 'refresh_not_available' };
-    }
-
-    await input.prisma.auditLog.create({
-      data: {
-        workspaceId: payload.workspaceId,
-        action: 'SOCIAL_TOKEN_ACCESSED',
-        resourceType: 'SocialToken',
-        resourceId: token.id,
-        metadata: { purpose: 'refresh-social-token', jobId: job.id },
-      },
-    });
-
+    const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
     try {
-      const refreshToken = decryptToken(token.refreshToken, input.keyring);
-      const refreshTokenFn = adapter.refreshToken.bind(adapter);
-      const doRefresh = async () => refreshTokenFn(refreshToken);
-
-      const lockKey = `token-refresh:${token.socialAccountId}`;
-      let tokenSet;
-      if (input.locks) {
-        const result = await input.locks.withLock(lockKey, 15000, doRefresh);
-        if (!result) {
-          logger.warn({ jobId: job.id, payload }, 'Tiến trình khác đang refresh token');
-          return { refreshed: false, reason: 'locked' };
-        }
-        tokenSet = result;
-      } else {
-        tokenSet = await doRefresh();
-      }
-
-      const encryptedAccessToken = encryptToken(tokenSet.accessToken, input.keyring);
-      const encryptedRefreshToken = tokenSet.refreshToken
-        ? encryptToken(tokenSet.refreshToken, input.keyring)
-        : null;
-
-      await input.prisma.$transaction([
-        input.prisma.socialToken.update({
-          where: { id: token.id, updatedAt: token.updatedAt },
-          data: {
-            accessToken: encryptedAccessToken.ciphertext,
-            refreshToken: encryptedRefreshToken?.ciphertext ?? token.refreshToken,
-            encryptionKeyVersion: encryptedAccessToken.keyVersion,
-            accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
-            refreshTokenExpiresAt: tokenSet.refreshTokenExpiresAt ?? token.refreshTokenExpiresAt,
-            lastRefreshedAt: new Date(),
-            refreshFailedCount: 0,
-          },
-        }),
-        input.prisma.socialAccount.update({
-          where: { id: token.socialAccountId },
-          data: { status: 'CONNECTED', lastErrorAt: null, lastErrorMessage: null },
-        }),
-        input.prisma.auditLog.create({
-          data: {
-            workspaceId: payload.workspaceId,
-            action: 'SOCIAL_TOKEN_REFRESHED',
-            resourceType: 'SocialAccount',
-            resourceId: token.socialAccountId,
-            metadata: { platform: token.socialAccount.platform, jobId: job.id },
-          },
-        }),
-      ]);
-
-      return { refreshed: true };
-    } catch (error) {
-      if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
+      const adapter = adapterCtx.adapters.get(token.socialAccount.platform);
+      if (!token.refreshToken || !adapter.refreshToken) {
         await input.prisma.socialAccount.update({
           where: { id: token.socialAccountId },
           data: {
-            status: 'DISCONNECTED',
+            status: 'NEEDS_RECONNECT',
             lastErrorAt: new Date(),
-            lastErrorMessage: error.message,
+            lastErrorMessage: 'Refresh token chưa được nền tảng này xác minh hoặc chưa có.',
           },
         });
-        return { refreshed: false, reason: 'auth_invalid' };
+        return { refreshed: false, reason: 'refresh_not_available' };
       }
 
-      await input.prisma.socialToken.update({
-        where: { id: token.id },
-        data: { refreshFailedCount: { increment: 1 } },
+      await input.prisma.auditLog.create({
+        data: {
+          workspaceId: payload.workspaceId,
+          action: 'SOCIAL_TOKEN_ACCESSED',
+          resourceType: 'SocialToken',
+          resourceId: token.id,
+          metadata: { purpose: 'refresh-social-token', jobId: job.id },
+        },
       });
-      throw error;
+
+      try {
+        const refreshToken = decryptToken(token.refreshToken, input.keyring);
+        const refreshTokenFn = adapter.refreshToken.bind(adapter);
+        const doRefresh = async () => refreshTokenFn(refreshToken);
+
+        const lockKey = `token-refresh:${token.socialAccountId}`;
+        let tokenSet;
+        if (input.locks) {
+          const result = await input.locks.withLock(lockKey, 15000, doRefresh);
+          if (!result) {
+            logger.warn({ jobId: job.id, payload }, 'Tiến trình khác đang refresh token');
+            return { refreshed: false, reason: 'locked' };
+          }
+          tokenSet = result;
+        } else {
+          tokenSet = await doRefresh();
+        }
+
+        const encryptedAccessToken = encryptToken(tokenSet.accessToken, input.keyring);
+        const encryptedRefreshToken = tokenSet.refreshToken
+          ? encryptToken(tokenSet.refreshToken, input.keyring)
+          : null;
+
+        await input.prisma.$transaction([
+          input.prisma.socialToken.update({
+            where: { id: token.id, updatedAt: token.updatedAt },
+            data: {
+              accessToken: encryptedAccessToken.ciphertext,
+              refreshToken: encryptedRefreshToken?.ciphertext ?? token.refreshToken,
+              encryptionKeyVersion: encryptedAccessToken.keyVersion,
+              accessTokenExpiresAt: tokenSet.accessTokenExpiresAt,
+              refreshTokenExpiresAt: tokenSet.refreshTokenExpiresAt ?? token.refreshTokenExpiresAt,
+              lastRefreshedAt: new Date(),
+              refreshFailedCount: 0,
+            },
+          }),
+          input.prisma.socialAccount.update({
+            where: { id: token.socialAccountId },
+            data: { status: 'CONNECTED', lastErrorAt: null, lastErrorMessage: null },
+          }),
+          input.prisma.auditLog.create({
+            data: {
+              workspaceId: payload.workspaceId,
+              action: 'SOCIAL_TOKEN_REFRESHED',
+              resourceType: 'SocialAccount',
+              resourceId: token.socialAccountId,
+              metadata: { platform: token.socialAccount.platform, jobId: job.id },
+            },
+          }),
+        ]);
+
+        return { refreshed: true };
+      } catch (error) {
+        if (isPlatformError(error) && error.kind === 'AUTH_INVALID') {
+          await input.prisma.socialAccount.update({
+            where: { id: token.socialAccountId },
+            data: {
+              status: 'DISCONNECTED',
+              lastErrorAt: new Date(),
+              lastErrorMessage: error.message,
+            },
+          });
+          return { refreshed: false, reason: 'auth_invalid' };
+        }
+
+        await input.prisma.socialToken.update({
+          where: { id: token.id },
+          data: { refreshFailedCount: { increment: 1 } },
+        });
+        throw error;
+      }
+    } finally {
+      await adapterCtx.release();
     }
   };
 }
