@@ -32,7 +32,7 @@ import {
   type PinterestBoardSection,
 } from './pinterest.schemas';
 
-import { discardResponseBody } from '../core/utils';
+import { discardResponseBody, requireHttpsUrl } from '../core/utils';
 
 export interface PinterestClientConfig {
   appId: string;
@@ -431,9 +431,15 @@ export class PinterestClient {
       offset += part.byteLength;
     }
 
+    let uploadUrl: string;
+    try {
+      uploadUrl = requireHttpsUrl(input.uploadUrl, 'Pinterest upload_url');
+    } catch (error) {
+      throw pinterestUnexpectedPayloadError(error, { uploadUrl: input.uploadUrl });
+    }
     let response: Response;
     try {
-      response = await this.fetch(input.uploadUrl, {
+      response = await this.fetch(uploadUrl, {
         method: 'POST',
         headers: {
           'Content-Type': `multipart/form-data; boundary=${boundary}`,

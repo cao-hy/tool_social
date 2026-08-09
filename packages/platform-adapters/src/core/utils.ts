@@ -10,3 +10,18 @@ export async function discardResponseBody(response: Response): Promise<void> {
     // Body có thể đã được consume hoặc đã đóng trước đó
   }
 }
+
+export function requireHttpsUrl(rawUrl: string, label: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error(`${label} phải là URL hợp lệ.`);
+  }
+
+  if (url.protocol !== 'https:') {
+    throw new Error(`${label} phải dùng HTTPS.`);
+  }
+
+  return url.toString();
+}

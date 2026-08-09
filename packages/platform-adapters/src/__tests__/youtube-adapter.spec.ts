@@ -178,6 +178,49 @@ describe('YouTubeAdapter', () => {
     });
   });
 
+  it('chặn YouTube resumable upload session không dùng HTTPS', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/upload/youtube/v3/videos' && init?.method === 'POST') {
+        return new Response(null, {
+          status: 200,
+          headers: { location: 'http://upload.youtube.test/session-1' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new YouTubeAdapter({
+      fetch: testFetch,
+      clientId: 'youtube-client',
+      clientSecret: 'youtube-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'youtube-access',
+          externalAccountId: 'channel-1',
+          correlationId: 'test',
+        },
+        {
+          title: 'Demo video',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+        },
+      ),
+    ).rejects.toThrow(/HTTPS/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('gửi custom thumbnail lên YouTube khi publish input có thumbnail', async () => {
     const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
       const url = new URL(String(input));

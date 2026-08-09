@@ -151,6 +151,7 @@ export class ProxyDispatcherPool {
   private createPinnedHttpProxyDispatcher(endpoint: ValidatedProxyEndpoint): Dispatcher {
     return new ProxyAgent({
       uri: endpoint.normalizedUrl,
+      proxyTunnel: true,
       clientFactory: (origin, opts) => {
         return new Pool(origin, {
           ...opts,

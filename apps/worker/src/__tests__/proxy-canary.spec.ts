@@ -34,6 +34,13 @@ describe('Proxy Canary & Security Integration Test Suite', () => {
       res.writeHead(200);
       res.end('proxy_response');
     });
+    proxyServer.on('connect', (_req, socket) => {
+      proxyCalled = true;
+      socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      socket.once('data', () => {
+        socket.end('HTTP/1.1 200 OK\r\nContent-Length: 14\r\n\r\nproxy_response');
+      });
+    });
 
     await new Promise<void>((resolve) => proxyServer.listen(0, '127.0.0.1', resolve));
     const proxyPort = (proxyServer.address() as any).port;

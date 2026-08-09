@@ -52,18 +52,23 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
       (ciphertext) => decryptToken(ciphertext, this.keyring),
     );
 
-    let fetchImpl: typeof fetch;
+    let baseFetch: typeof fetch;
     if (!ctx.config.enabled) {
-      fetchImpl = createDirectFetch();
+      baseFetch = createDirectFetch();
     } else {
       if (!ctx.dispatcherHandle) {
         throw new ProxyConfigurationError('Validated proxy dispatcher is missing.');
       }
-      fetchImpl = createProxiedFetch(
+      baseFetch = createProxiedFetch(
         { ...ctx.config, enabled: true, proxyUrl: ctx.config.proxyUrl as string },
         ctx.dispatcherHandle,
       );
     }
+
+    const fetchImpl: typeof fetch = async (input, init) => {
+      await ctx.assertCurrentVersion();
+      return baseFetch(input, init);
+    };
 
     let released = false;
 

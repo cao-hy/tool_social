@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
-import { discardResponseBody } from '../core/utils';
+import { discardResponseBody, requireHttpsUrl } from '../core/utils';
 import {
   normalizeTikTokError,
   tiktokApiEnvelopeError,
@@ -183,8 +183,14 @@ export class TikTokClient {
       throw tiktokUnexpectedPayloadError(new Error('TikTok không trả upload_url.'), init);
     }
 
+    let uploadUrl: string;
+    try {
+      uploadUrl = requireHttpsUrl(init.data.upload_url, 'TikTok upload_url');
+    } catch (error) {
+      throw tiktokUnexpectedPayloadError(error, init);
+    }
     await this.uploadChunks({
-      uploadUrl: init.data.upload_url,
+      uploadUrl,
       bytes: input.bytes,
       mimeType: input.mimeType,
       uploadPlan,
@@ -213,8 +219,14 @@ export class TikTokClient {
       throw tiktokUnexpectedPayloadError(new Error('TikTok không trả upload_url.'), init);
     }
 
+    let uploadUrl: string;
+    try {
+      uploadUrl = requireHttpsUrl(init.data.upload_url, 'TikTok upload_url');
+    } catch (error) {
+      throw tiktokUnexpectedPayloadError(error, init);
+    }
     await this.uploadChunks({
-      uploadUrl: init.data.upload_url,
+      uploadUrl,
       bytes: input.bytes,
       mimeType: input.mimeType,
       uploadPlan,

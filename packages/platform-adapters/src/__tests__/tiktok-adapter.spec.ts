@@ -182,6 +182,69 @@ describe('TikTokAdapter', () => {
     });
   });
 
+  it('chặn TikTok upload_url không dùng HTTPS', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/post/publish/creator_info/query/') {
+        return jsonResponse({
+          data: {
+            creator_username: 'creator',
+            creator_nickname: 'Creator',
+            privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'],
+            max_video_post_duration_sec: 300,
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      if (url.pathname === '/v2/post/publish/video/init/') {
+        return jsonResponse({
+          data: {
+            publish_id: 'v_pub_file~123',
+            upload_url: 'http://open-upload.tiktokapis.com/upload/?upload_id=1',
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new TikTokAdapter({
+      fetch: testFetch,
+      clientKey: 'tt-key',
+      clientSecret: 'tt-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'tt-access',
+          externalAccountId: 'open-1',
+          correlationId: 'test',
+        },
+        {
+          caption: 'Demo TikTok',
+          hashtags: ['demo'],
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+          options: {
+            postMode: 'DIRECT_POST',
+            privacyLevel: 'PUBLIC_TO_EVERYONE',
+            consentConfirmed: true,
+          },
+        },
+      ),
+    ).rejects.toThrow(/HTTPS/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('upload video TikTok vào Inbox bằng FILE_UPLOAD', async () => {
     const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
       const url = new URL(String(input));

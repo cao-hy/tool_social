@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
-import { discardResponseBody } from '../core/utils';
+import { discardResponseBody, requireHttpsUrl } from '../core/utils';
 import {
   normalizeYouTubeError,
   youtubeNetworkError,
@@ -551,7 +551,12 @@ export class YouTubeClient {
         { status: response.status },
       );
     }
-    return location;
+
+    try {
+      return requireHttpsUrl(location, 'YouTube resumable upload URL');
+    } catch (error) {
+      throw youtubeUnexpectedPayloadError(error, { status: response.status });
+    }
   }
 
   private async putUploadBytes(input: {

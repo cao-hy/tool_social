@@ -492,6 +492,59 @@ describe('PinterestAdapter', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it('chặn Pinterest upload_url không dùng HTTPS', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v5/media') {
+        expect(init?.method).toBe('POST');
+        return jsonResponse({
+          media_id: 'media-1',
+          upload_url: 'http://upload.pinterest.test/video',
+          upload_parameters: { key: 'uploads/video.mp4', policy: 'policy-1' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new PinterestAdapter({
+      fetch: testFetch,
+      appId: 'pin-app',
+      appSecret: 'pin-secret',
+      environment: 'production',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'pin-access',
+          externalAccountId: 'user-1',
+          externalPageId: 'board-1',
+          correlationId: 'test',
+        },
+        {
+          title: 'Video Pin',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+            {
+              type: 'IMAGE',
+              url: 'https://cdn.test/cover.jpg',
+              mimeType: 'image/jpeg',
+              sizeBytes: 3,
+            },
+          ],
+        },
+      ),
+    ).rejects.toThrow(/HTTPS/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('chặn video Pin trong Pinterest sandbox', () => {
     const adapter = new PinterestAdapter({
       fetch: testFetch,

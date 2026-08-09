@@ -25,6 +25,7 @@ export interface PreparedProxyContext {
   routeFingerprint: string | null;
   attestation: ProxyAttestation | null;
   dispatcherHandle?: ProxyDispatcherHandle;
+  assertCurrentVersion: () => Promise<void>;
   reAttest?: () => Promise<ProxyAttestation | null>;
 }
 
@@ -53,6 +54,12 @@ export class ProxyRuntimeService {
     let dispatcherHandle: ProxyDispatcherHandle | undefined = undefined;
     let reAttest: (() => Promise<ProxyAttestation | null>) | undefined = undefined;
     const snapshotVersion = setting?.configVersion ?? 0;
+    const assertCurrentVersion = async () => {
+      const currentSetting = await getWorkspaceSetting(workspaceId);
+      if ((currentSetting?.configVersion ?? 0) !== snapshotVersion) {
+        throw new ProxyConfigurationError('Proxy configuration changed during request processing');
+      }
+    };
 
     if (proxyConfig.enabled) {
       if (!proxyConfig.proxyUrl) {
@@ -68,14 +75,6 @@ export class ProxyRuntimeService {
       dispatcherHandle = acquiredHandle;
 
       try {
-        const assertCurrentVersion = async () => {
-          const currentSetting = await getWorkspaceSetting(workspaceId);
-          if ((currentSetting?.configVersion ?? 0) !== snapshotVersion) {
-            throw new ProxyConfigurationError(
-              'Proxy configuration changed during request processing',
-            );
-          }
-        };
         const runAttestation = async (forceAttestation?: boolean) =>
           await this.policyService.getAttestation(
             workspaceId,
@@ -115,6 +114,7 @@ export class ProxyRuntimeService {
       routeFingerprint: attestation?.proxyFingerprint ?? null,
       attestation,
       dispatcherHandle,
+      assertCurrentVersion,
       reAttest,
     };
   }
