@@ -33,20 +33,20 @@ export interface QueueSettings {
 }
 
 export const QUEUE_SETTINGS: Record<QueueName, QueueSettings> = {
-  'publish-post': { concurrency: 5, attempts: 5, backoffDelayMs: 5_000 },
+  'publish-post': { concurrency: 2, attempts: 5, backoffDelayMs: 5_000 },
   'sync-posts': { concurrency: 3, attempts: 3, backoffDelayMs: 10_000 },
-  'sync-comments': { concurrency: 5, attempts: 3, backoffDelayMs: 10_000 },
-  'create-platform-comment': { concurrency: 3, attempts: 3, backoffDelayMs: 5_000 },
-  'reply-platform-comment': { concurrency: 3, attempts: 3, backoffDelayMs: 5_000 },
-  'sync-post-metrics': { concurrency: 5, attempts: 3, backoffDelayMs: 15_000 },
-  'sync-account-metrics': { concurrency: 3, attempts: 3, backoffDelayMs: 15_000 },
+  'sync-comments': { concurrency: 1, attempts: 3, backoffDelayMs: 10_000 },
+  'create-platform-comment': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
+  'reply-platform-comment': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
+  'sync-post-metrics': { concurrency: 1, attempts: 3, backoffDelayMs: 15_000 },
+  'sync-account-metrics': { concurrency: 1, attempts: 3, backoffDelayMs: 15_000 },
   'refresh-social-token': { concurrency: 3, attempts: 3, backoffDelayMs: 30_000 },
   'process-webhook': { concurrency: 10, attempts: 5, backoffDelayMs: 5_000 },
   'retry-failed-post': { concurrency: 3, attempts: 1, backoffDelayMs: 0 },
   'generate-thumbnail': { concurrency: 1, attempts: 3, backoffDelayMs: 5_000 },
   'cleanup-unused-media': { concurrency: 1, attempts: 1, backoffDelayMs: 0 },
   'sync-external-posts': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
-  'reconcile-platform-post': { concurrency: 2, attempts: 5, backoffDelayMs: 60_000 },
+  'reconcile-platform-post': { concurrency: 1, attempts: 5, backoffDelayMs: 60_000 },
 };
 
 /**
@@ -58,7 +58,12 @@ export const QUEUE_SETTINGS: Record<QueueName, QueueSettings> = {
  * ở dạng có thể đọc (SECURITY.md §2.3).
  */
 export interface QueuePayloads {
-  'publish-post': { platformPostId: string; workspaceId: string; correlationId: string };
+  'publish-post': {
+    platformPostId: string;
+    workspaceId: string;
+    correlationId: string;
+    operationId?: string;
+  };
   'sync-posts': { socialAccountId: string; workspaceId: string; cursor?: string };
   'sync-comments': {
     platformPostId?: string;
@@ -73,6 +78,7 @@ export interface QueuePayloads {
     message: string;
     requestedByUserId: string;
     correlationId: string;
+    operationId?: string;
   };
   'reply-platform-comment': {
     commentId: string;
@@ -81,12 +87,18 @@ export interface QueuePayloads {
     requestedByUserId: string;
     correlationId: string;
     replyRecordId?: string;
+    operationId?: string;
   };
   'sync-post-metrics': { platformPostId: string; workspaceId: string; syncRunId?: string };
   'sync-account-metrics': { socialAccountId: string; workspaceId: string; syncRunId?: string };
   'refresh-social-token': { socialAccountId: string; workspaceId: string };
   'process-webhook': { webhookEventId: string };
-  'retry-failed-post': { platformPostId: string; workspaceId: string; requestedByUserId: string };
+  'retry-failed-post': {
+    platformPostId: string;
+    workspaceId: string;
+    requestedByUserId: string;
+    operationId?: string;
+  };
   'generate-thumbnail': { mediaAssetId: string; workspaceId: string };
   'cleanup-unused-media': { olderThanDays: number };
   'sync-external-posts': {

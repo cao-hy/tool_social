@@ -6,3 +6,5 @@ export interface ProxyConfig {
   source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
   version?: number;
 }
+
+export type SocialEgressPolicy = 'DIRECT_ALLOWED' | 'PROXY_REQUIRED';

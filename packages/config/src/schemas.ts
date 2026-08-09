@@ -267,6 +267,9 @@ export const workerEnvSchema = z
     /** Cổng cho health check của worker — worker không phục vụ traffic. */
     WORKER_HEALTH_PORT: port(4001),
     SCHEDULER_ENABLED: booleanFromString(true),
+    OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+    OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().min(500).default(3000),
+    OUTBOX_CLAIM_LEASE_MS: z.coerce.number().int().min(5000).default(60000),
   })
   .merge(databaseSchema)
   .merge(redisSchema)

@@ -2,11 +2,19 @@ import { isPlatformError } from '@socialhub/platform-adapters';
 import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import { PLATFORM_LABELS, type QueuePayload } from '@socialhub/shared';
+import { PLATFORM_LABELS, RemoteRequestError, type QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
 
 import { getFreshAccessToken } from './token-refresh';
+import {
+  beginOutboundAttempt,
+  markLocalCommitted,
+  markRemoteConfirmed,
+  markRemoteUnknown,
+  rollbackBeforeConnect,
+  type OutboundAttemptOwnership,
+} from './outbound-operation';
 
 const replyPlatformCommentPayloadSchema = z.object({
   commentId: z.string().min(1),
@@ -15,6 +23,7 @@ const replyPlatformCommentPayloadSchema = z.object({
   requestedByUserId: z.string().min(1),
   correlationId: z.string().min(1),
   replyRecordId: z.string().min(1).optional(),
+  operationId: z.string().min(1).optional(),
 });
 
 type ReplyPlatformCommentPayload = QueuePayload<'reply-platform-comment'>;
@@ -147,17 +156,46 @@ async function replyPlatformComment(
         token: account.token,
       },
     });
-    const result = await replyToComment(
-      {
-        accessToken,
-        externalAccountId: account.externalAccountId,
-        externalPageId: account.externalPageId ?? undefined,
-        correlationId: payload.correlationId,
-        logger,
-      },
-      targetExternalCommentId,
-      payload.message,
-    );
+    let ownership: OutboundAttemptOwnership | null = null;
+    let result: Awaited<ReturnType<typeof replyToComment>>;
+    try {
+      const start = await beginOutboundAttempt(input.prisma, payload.operationId);
+      if (start.action === 'NOOP') return { replied: false, reason: start.reason };
+      ownership = start.ownership;
+      result = await replyToComment(
+        {
+          accessToken,
+          externalAccountId: account.externalAccountId,
+          externalPageId: account.externalPageId ?? undefined,
+          correlationId: payload.correlationId,
+          logger,
+        },
+        targetExternalCommentId,
+        payload.message,
+      );
+      await markRemoteConfirmed(input.prisma, ownership, {
+        remoteId: result.externalReplyId,
+      });
+    } catch (error) {
+      if (error instanceof RemoteRequestError && !error.requestMayHaveReachedRemote && ownership) {
+        await rollbackBeforeConnect(input.prisma, ownership, {
+          code: error.phase,
+          message: error.message,
+        });
+      } else if (
+        ownership &&
+        ((error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
+          (isPlatformError(error) && error.kind === 'NETWORK'))
+      ) {
+        await markRemoteUnknown(input.prisma, ownership, {
+          code: 'REMOTE_RESULT_UNKNOWN',
+          message: error instanceof Error ? error.message : 'Unknown remote outcome',
+          providerRequestId:
+            error instanceof RemoteRequestError ? error.providerRequestId : undefined,
+        });
+      }
+      throw error;
+    }
 
     await input.prisma.$transaction([
       input.prisma.commentReply.update({
@@ -201,6 +239,7 @@ async function replyPlatformComment(
         },
       }),
     ]);
+    if (ownership) await markLocalCommitted(input.prisma, ownership);
 
     logger.info(
       {

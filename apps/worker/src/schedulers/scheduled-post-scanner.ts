@@ -1,8 +1,11 @@
-import type { PrismaClientInstance } from '@socialhub/db';
-import { buildJobId, type QueuePayload } from '@socialhub/shared';
+import {
+  createQueueOutboxEvent,
+  findOrCreateOutboundOperation,
+  type PrismaClientInstance,
+} from '@socialhub/db';
+import { buildJobId, buildQueueJobOptions, type QueuePayload } from '@socialhub/shared';
 import type { Queue } from 'bullmq';
 import { logger } from '../logger';
-import { buildJobOptions } from '../queue/queue-options';
 
 const DEFAULT_SCAN_INTERVAL_MS = 60_000;
 const DEFAULT_LOOKAHEAD_MS = 60_000;
@@ -66,17 +69,54 @@ export async function scanScheduledPostsOnce(input: {
     const delay = Math.max(0, schedule.scheduledAt.getTime() - now.getTime());
 
     for (const platformPost of schedule.contentPost.platformPosts) {
-      const payload: PublishPostPayload = {
-        platformPostId: platformPost.id,
-        workspaceId: schedule.contentPost.workspaceId,
-        correlationId: `scheduled-scan:${schedule.id}`,
-      };
-      const jobId = buildJobId('publish-post', payload);
-
-      await input.publishQueue.add('publish-post', payload, {
-        ...buildJobOptions('publish-post', jobId),
-        delay,
+      const queued = await input.prisma.$transaction(async (tx) => {
+        const operation = await findOrCreateOutboundOperation(tx, {
+          workspaceId: schedule.contentPost.workspaceId,
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: platformPost.id,
+          operationGeneration: 1,
+        });
+        const payload: PublishPostPayload = {
+          platformPostId: platformPost.id,
+          workspaceId: schedule.contentPost.workspaceId,
+          correlationId: `scheduled-scan:${schedule.id}`,
+          operationId: operation.id,
+        };
+        const jobId = buildJobId('publish-post', payload);
+        const options = buildQueueJobOptions('publish-post', jobId, { delay });
+        const outboxEvent = await createQueueOutboxEvent(tx, {
+          workspaceId: schedule.contentPost.workspaceId,
+          queueName: 'publish-post',
+          jobId,
+          payload,
+          options,
+          aggregateType: 'OutboundOperation',
+          aggregateId: operation.id,
+        });
+        return { payload, options, outboxEventId: outboxEvent.id };
       });
+
+      try {
+        await input.publishQueue.add('publish-post', queued.payload, queued.options);
+        await input.prisma.outboxEvent.update({
+          where: { id: queued.outboxEventId },
+          data: { dispatchedAt: new Date(), lastError: null },
+        });
+      } catch (error) {
+        await input.prisma.outboxEvent.update({
+          where: { id: queued.outboxEventId },
+          data: {
+            dispatchAttempts: { increment: 1 },
+            lastError:
+              error instanceof Error ? error.message.slice(0, 1000) : 'Redis enqueue failed',
+          },
+        });
+        logger.warn(
+          { err: error, outboxEventId: queued.outboxEventId },
+          'Scheduled enqueue failed; outbox will retry',
+        );
+      }
       jobsQueued += 1;
       touchedContentPostIds.add(schedule.contentPost.id);
     }

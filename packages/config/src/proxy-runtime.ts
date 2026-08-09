@@ -15,12 +15,13 @@ import {
   ProxyConfigurationChangedError,
   ProxyConfigurationMissingError,
 } from './proxy';
-import type { ProxyConfig } from '@socialhub/shared';
+import type { ProxyConfig, SocialEgressPolicy } from '@socialhub/shared';
 import type { WorkspaceProxySettingRecord } from './proxy';
 import dns from 'node:dns/promises';
 
 export interface PreparedProxyContext {
   enabled: boolean;
+  egressPolicy: SocialEgressPolicy;
   config: ProxyConfig;
   configVersion: number;
   routeFingerprint: string | null;
@@ -49,10 +50,28 @@ export class ProxyRuntimeService {
     options?: {
       forceAttestation?: boolean;
       getWorkspaceConfigVersion?: (workspaceId: string) => Promise<number | null>;
+      getWorkspaceEgressPolicy?: (workspaceId: string) => Promise<SocialEgressPolicy | null>;
     },
   ): Promise<PreparedProxyContext> {
-    const setting = await getWorkspaceSetting(workspaceId);
+    const [setting, durablePolicy] = await Promise.all([
+      getWorkspaceSetting(workspaceId),
+      options?.getWorkspaceEgressPolicy?.(workspaceId),
+    ]);
+    const egressPolicy = durablePolicy ?? 'DIRECT_ALLOWED';
+
+    if (egressPolicy === 'PROXY_REQUIRED' && (!setting || !setting.enabled)) {
+      throw new ProxyConfigurationMissingError(
+        'Workspace policy requires proxy egress, but no enabled workspace proxy is configured.',
+      );
+    }
+
     const proxyConfig = resolveWorkspaceProxyConfig(setting, decryptProxyUrl);
+
+    if (egressPolicy === 'PROXY_REQUIRED' && !proxyConfig.enabled) {
+      throw new ProxyConfigurationMissingError(
+        'Workspace policy requires proxy egress, but resolved proxy config is disabled.',
+      );
+    }
 
     let attestation: ProxyAttestation | null = null;
     let dispatcherHandle: ProxyDispatcherHandle | undefined = undefined;
@@ -119,6 +138,7 @@ export class ProxyRuntimeService {
 
     return {
       enabled: proxyConfig.enabled,
+      egressPolicy,
       config: proxyConfig,
       configVersion: snapshotVersion,
       routeFingerprint: attestation?.proxyFingerprint ?? null,

@@ -5,4 +5,5 @@ export {
   type PrismaClientInstance,
   type PrismaClientOptions,
 } from './client';
+export * from './outbox';
 export * from './tenant';

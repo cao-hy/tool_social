@@ -60,6 +60,13 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
               select: { configVersion: true },
             })
           )?.configVersion ?? null,
+        getWorkspaceEgressPolicy: async (id) =>
+          (
+            await this.prisma.workspace.findUnique({
+              where: { id },
+              select: { socialEgressPolicy: true },
+            })
+          )?.socialEgressPolicy ?? null,
       },
     );
 

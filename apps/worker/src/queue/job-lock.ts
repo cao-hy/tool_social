@@ -57,7 +57,7 @@ export class JobLockService {
     return result === 1;
   }
 
-  /** Chạy `fn` khi giành được khóa; tự động heartbeat gia hạn lock mỗi 30s; trả `null` nếu tài nguyên đang bận. */
+  /** Chạy `fn` khi giành được khóa; heartbeat luôn chạy trong một phần ba TTL; trả `null` nếu tài nguyên đang bận. */
   async withLock<T>(
     resource: string,
     ttlMs: number,
@@ -67,6 +67,7 @@ export class JobLockService {
     if (!lock) return null;
 
     let lockOwned = true;
+    const heartbeatMs = Math.max(1000, Math.floor(ttlMs / 3));
     const heartbeatTimer = setInterval(async () => {
       try {
         const extended = await this.extend(lock, ttlMs);
@@ -74,7 +75,7 @@ export class JobLockService {
       } catch {
         lockOwned = false;
       }
-    }, 30000);
+    }, heartbeatMs);
 
     const ownedLock: OwnedJobLock = {
       ...lock,

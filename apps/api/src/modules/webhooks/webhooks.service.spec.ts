@@ -22,8 +22,13 @@ describe('WebhooksService', () => {
 
   const webhookCreate = vi.fn();
   const prisma = {
+    $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => await fn(prisma)),
     webhookEvent: {
       create: webhookCreate,
+    },
+    outboxEvent: {
+      create: vi.fn(async ({ data }) => ({ ...data, id: 'outbox_1' })),
+      update: vi.fn(async () => ({})),
     },
   } as unknown as PrismaService;
   const redis = { getClient: vi.fn(() => ({})) } as unknown as RedisService;
@@ -72,6 +77,15 @@ describe('WebhooksService', () => {
       }),
     );
     expect(queueAdd).toHaveBeenCalledTimes(1);
+    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          topic: 'process-webhook',
+          aggregateType: 'WebhookEvent',
+          aggregateId: 'webhook_1',
+        }),
+      }),
+    );
   });
 
   it('replay theo unique constraint trả 200-equivalent và không enqueue lại', async () => {

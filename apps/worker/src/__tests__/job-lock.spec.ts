@@ -128,8 +128,8 @@ describe('cấu hình queue', () => {
   });
 
   it('concurrency scale được theo biến môi trường', () => {
-    expect(buildWorkerOptions('publish-post', 1).concurrency).toBe(5);
-    expect(buildWorkerOptions('publish-post', 2).concurrency).toBe(10);
+    expect(buildWorkerOptions('publish-post', 1).concurrency).toBe(2);
+    expect(buildWorkerOptions('publish-post', 2).concurrency).toBe(4);
     // Không bao giờ xuống 0 — worker với concurrency 0 sẽ im lặng không làm gì.
     expect(buildWorkerOptions('cleanup-unused-media', 0.1).concurrency).toBe(1);
   });

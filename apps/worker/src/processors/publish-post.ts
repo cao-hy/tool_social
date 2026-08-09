@@ -34,6 +34,14 @@ import { decideOnError } from '../queue/error-policy';
 import { JobLockService } from '../queue/job-lock';
 
 import { getFreshAccessToken } from './token-refresh';
+import {
+  beginOutboundAttempt,
+  markLocalCommitted,
+  markRemoteConfirmed,
+  markRemoteUnknown,
+  rollbackBeforeConnect,
+  type OutboundAttemptOwnership,
+} from './outbound-operation';
 
 const publishPostPayloadSchema = z
   .object({
@@ -41,6 +49,7 @@ const publishPostPayloadSchema = z
     workspaceId: z.string().min(1),
     correlationId: z.string().min(1).optional(),
     requestedByUserId: z.string().min(1).optional(),
+    operationId: z.string().min(1).optional(),
   })
   .transform((payload) => ({
     ...payload,
@@ -250,6 +259,7 @@ async function publishPlatformPost(
 
     let publishNetworkProof = adaptersContext.proxy?.attestation || null;
     let publishAttemptId: string | null = null;
+    let operationOwnership: OutboundAttemptOwnership | null = null;
 
     try {
       const accessToken = await getFreshAccessToken({
@@ -351,7 +361,12 @@ async function publishPlatformPost(
         },
       } satisfies AdapterContext;
 
-      publishAttemptId = randomUUID();
+      const startOperation = await beginOutboundAttempt(input.prisma, payload.operationId);
+      if (startOperation.action === 'NOOP') {
+        return { published: false, reason: startOperation.reason };
+      }
+      operationOwnership = startOperation.ownership;
+      publishAttemptId = operationOwnership.attemptId || randomUUID();
       await input.prisma.platformPost.update({
         where: { id: platformPost.id },
         data: {
@@ -377,6 +392,9 @@ async function publishPlatformPost(
       );
 
       const result = await adapter.publishPost(adapterContext, publishInput);
+      await markRemoteConfirmed(input.prisma, operationOwnership, {
+        remoteId: result.externalPostId,
+      });
       const platformState = await platformStateAfterPublish(
         adapter,
         adapterContext,
@@ -434,6 +452,7 @@ async function publishPlatformPost(
           },
         }),
       ]);
+      await markLocalCommitted(input.prisma, operationOwnership);
 
       await updateParentStatus(input.prisma, platformPost.contentPostId);
       return { published: true, externalPostId: result.externalPostId };
@@ -444,6 +463,13 @@ async function publishPlatformPost(
       const message = error instanceof Error ? error.message : 'Lỗi không xác định khi publish.';
 
       if (error instanceof RemoteRequestError && !error.requestMayHaveReachedRemote) {
+        if (operationOwnership) {
+          const rolledBack = await rollbackBeforeConnect(input.prisma, operationOwnership, {
+            code: error.phase,
+            message,
+          });
+          if (!rolledBack) throw error;
+        }
         await input.prisma.platformPost.update({
           where: { id: platformPost.id },
           data: {
@@ -466,6 +492,15 @@ async function publishPlatformPost(
       const isRemoteUnknown =
         (error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
         (isPlatformError(error) && error.kind === 'NETWORK');
+
+      if (isRemoteUnknown && operationOwnership) {
+        await markRemoteUnknown(input.prisma, operationOwnership, {
+          code: 'REMOTE_RESULT_UNKNOWN',
+          message,
+          providerRequestId:
+            error instanceof RemoteRequestError ? error.providerRequestId : undefined,
+        });
+      }
 
       const targetStatus: PlatformPostStatus = isRemoteUnknown
         ? 'REMOTE_RESULT_UNKNOWN'
@@ -629,30 +664,23 @@ async function storeRemoteCheckpoint(
   publishAttemptId: string,
   checkpoint: RemotePublishCheckpoint,
 ): Promise<void> {
-  try {
-    const current = await prisma.platformPost.findUnique({
-      where: { id: platformPostId },
-      select: { platformState: true },
-    });
-    await prisma.platformPost.update({
-      where: { id: platformPostId },
-      data: {
-        platformState: {
-          ...(jsonObject(current?.platformState) ?? {}),
-          remoteCheckpoint: {
-            ...checkpoint,
-            publishAttemptId,
-            recordedAt: new Date().toISOString(),
-          },
-        } as Prisma.InputJsonValue,
-      },
-    });
-  } catch (error) {
-    logger.warn(
-      { err: error, platformPostId, publishAttemptId },
-      'Không thể lưu remote checkpoint',
-    );
-  }
+  const current = await prisma.platformPost.findUnique({
+    where: { id: platformPostId },
+    select: { platformState: true },
+  });
+  await prisma.platformPost.update({
+    where: { id: platformPostId },
+    data: {
+      platformState: {
+        ...(jsonObject(current?.platformState) ?? {}),
+        remoteCheckpoint: {
+          ...checkpoint,
+          publishAttemptId,
+          recordedAt: new Date().toISOString(),
+        },
+      } as Prisma.InputJsonValue,
+    },
+  });
 }
 
 async function platformStateAfterPublish(
@@ -976,12 +1004,27 @@ async function markFailed(
   code: string,
   message: string,
 ): Promise<string> {
-  const post = await prisma.platformPost.update({
+  const current = await prisma.platformPost.findUnique({
     where: { id: platformPostId },
-    data: { status: 'FAILED', errorCode: code, errorMessage: message },
-    select: { contentPostId: true },
+    select: { contentPostId: true, status: true, externalPostId: true },
   });
-  return post.contentPostId;
+  if (!current) throw new Error('PlatformPost not found');
+  if (
+    current.externalPostId ||
+    current.status === 'PUBLISHED' ||
+    current.status === 'REMOTE_RESULT_UNKNOWN'
+  ) {
+    return current.contentPostId;
+  }
+  await prisma.platformPost.updateMany({
+    where: {
+      id: platformPostId,
+      externalPostId: null,
+      status: { notIn: ['PUBLISHED', 'REMOTE_RESULT_UNKNOWN'] },
+    },
+    data: { status: 'FAILED', errorCode: code, errorMessage: message },
+  });
+  return current.contentPostId;
 }
 
 async function updateParentStatus(

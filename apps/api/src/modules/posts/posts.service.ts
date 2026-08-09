@@ -1,7 +1,7 @@
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { Prisma } from '@socialhub/db';
+import { createQueueOutboxEvent, findOrCreateOutboundOperation, type Prisma } from '@socialhub/db';
 import {
   type AdapterContext,
   type PostMetrics,
@@ -900,17 +900,8 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     if (!post) throw AppError.notFound('post');
 
     if (runAt) {
-      const delay = Math.max(0, runAt.getTime() - Date.now());
       for (const platformPost of post.platformPosts) {
-        const payload: QueuePayload<'publish-post'> = {
-          platformPostId: platformPost.id,
-          workspaceId,
-          correlationId,
-        };
-        const jobId = buildJobId('publish-post', payload);
-        await this.publishQueue.add('publish-post', payload, {
-          ...buildQueueJobOptions('publish-post', jobId, { delay }),
-        });
+        await this.enqueuePlatformPost(platformPost.id, workspaceId, correlationId, runAt);
       }
       await this.prisma.postSchedule.updateMany({
         where: { contentPostId },
@@ -939,14 +930,41 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     platformPostId: string,
     workspaceId: string,
     correlationId = 'manual',
+    runAt?: Date,
   ): Promise<void> {
-    const payload: QueuePayload<'publish-post'> = { platformPostId, workspaceId, correlationId };
-    const jobId = buildJobId('publish-post', payload);
-    await this.publishQueue.add(
-      'publish-post',
-      payload,
-      buildQueueJobOptions('publish-post', jobId),
-    );
+    const event = await this.prisma.$transaction(async (tx) => {
+      const operation = await findOrCreateOutboundOperation(tx, {
+        workspaceId,
+        operationType: 'PUBLISH_POST',
+        resourceType: 'PlatformPost',
+        resourceId: platformPostId,
+        operationGeneration: 1,
+      });
+      const payload: QueuePayload<'publish-post'> = {
+        platformPostId,
+        workspaceId,
+        correlationId,
+        operationId: operation.id,
+      };
+      const jobId = buildJobId('publish-post', payload);
+      const delay = runAt ? Math.max(0, runAt.getTime() - Date.now()) : undefined;
+      const options = buildQueueJobOptions(
+        'publish-post',
+        jobId,
+        delay === undefined ? {} : { delay },
+      );
+      return await createQueueOutboxEvent(tx, {
+        workspaceId,
+        queueName: 'publish-post',
+        jobId,
+        payload,
+        options,
+        aggregateType: 'OutboundOperation',
+        aggregateId: operation.id,
+      });
+    });
+
+    await this.dispatchPublishOutboxEvent(event.id);
   }
 
   private async enqueueRetryPlatformPost(
@@ -954,17 +972,76 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     workspaceId: string,
     requestedByUserId: string,
   ): Promise<void> {
-    const payload: QueuePayload<'retry-failed-post'> = {
-      platformPostId,
-      workspaceId,
-      requestedByUserId,
+    const event = await this.prisma.$transaction(async (tx) => {
+      const latest = await tx.outboundOperation.findFirst({
+        where: {
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: platformPostId,
+        },
+        orderBy: { operationGeneration: 'desc' },
+        select: { operationGeneration: true, state: true },
+      });
+      if (latest?.state === 'REMOTE_UNKNOWN' || latest?.state === 'MANUAL_REVIEW') {
+        throw AppError.conflict('Không thể retry tự động khi kết quả remote chưa xác định.');
+      }
+      const operation = await findOrCreateOutboundOperation(tx, {
+        workspaceId,
+        operationType: 'PUBLISH_POST',
+        resourceType: 'PlatformPost',
+        resourceId: platformPostId,
+        operationGeneration: (latest?.operationGeneration ?? 0) + 1,
+      });
+      const payload: QueuePayload<'retry-failed-post'> = {
+        platformPostId,
+        workspaceId,
+        requestedByUserId,
+        operationId: operation.id,
+      };
+      const jobId = buildJobId('retry-failed-post', payload);
+      return await createQueueOutboxEvent(tx, {
+        workspaceId,
+        queueName: 'retry-failed-post',
+        jobId,
+        payload,
+        options: buildQueueJobOptions('retry-failed-post', jobId),
+        aggregateType: 'OutboundOperation',
+        aggregateId: operation.id,
+      });
+    });
+
+    await this.dispatchPublishOutboxEvent(event.id);
+  }
+
+  private async dispatchPublishOutboxEvent(outboxEventId: string): Promise<void> {
+    const event = await this.prisma.outboxEvent.findUnique({ where: { id: outboxEventId } });
+    if (!event) return;
+    const value = event.payload as unknown as {
+      queueName: 'publish-post' | 'retry-failed-post';
+      jobName: 'publish-post' | 'retry-failed-post';
+      payload: QueuePayload<'publish-post'> | QueuePayload<'retry-failed-post'>;
+      options: ReturnType<typeof buildQueueJobOptions>;
     };
-    const jobId = buildJobId('retry-failed-post', payload);
-    await this.retryQueue.add(
-      'retry-failed-post',
-      payload,
-      buildQueueJobOptions('retry-failed-post', jobId),
-    );
+    const queue = value.queueName === 'publish-post' ? this.publishQueue : this.retryQueue;
+    try {
+      await queue.add(value.jobName, value.payload, value.options);
+      await this.prisma.outboxEvent.update({
+        where: { id: outboxEventId },
+        data: { dispatchedAt: new Date(), lastError: null },
+      });
+    } catch (error) {
+      await this.prisma.outboxEvent.update({
+        where: { id: outboxEventId },
+        data: {
+          dispatchAttempts: { increment: 1 },
+          lastError: error instanceof Error ? error.message.slice(0, 1000) : 'Redis enqueue failed',
+        },
+      });
+      logger.warn(
+        { err: error, outboxEventId },
+        'Immediate publish enqueue failed; outbox will retry',
+      );
+    }
   }
 
   private async removeScheduledJobs(

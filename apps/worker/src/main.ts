@@ -30,6 +30,7 @@ import { createReconciliationProcessor } from './processors/reconciliation.proce
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
 import { startScheduledPostScanner } from './schedulers/scheduled-post-scanner';
+import { startOutboxDispatcher } from './outbox-dispatcher';
 
 /**
  * Worker chạy như một process riêng, KHÔNG phải một phần của HTTP API.
@@ -132,6 +133,13 @@ async function main(): Promise<void> {
     publishQueue: registry.getQueue('publish-post'),
     enabled: env.SCHEDULER_ENABLED,
   });
+  const outboxDispatcher = startOutboxDispatcher({
+    prisma,
+    registry,
+    batchSize: env.OUTBOX_BATCH_SIZE,
+    pollIntervalMs: env.OUTBOX_POLL_INTERVAL_MS,
+    claimLeaseMs: env.OUTBOX_CLAIM_LEASE_MS,
+  });
   logger.info({ workers: registry.getWorkerCount() }, 'Đã đăng ký processor Phase 3');
 
   const healthServer = startHealthServer(env, registry, connection);
@@ -142,6 +150,7 @@ async function main(): Promise<void> {
 
     logger.info({ signal }, 'Nhận tín hiệu dừng');
     scheduledPostScanner.stop();
+    outboxDispatcher.stop();
     healthServer.close();
     await registry.shutdown(30_000);
     await adapterFactory.close();

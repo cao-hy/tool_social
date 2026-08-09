@@ -185,6 +185,28 @@ enum InvitationStatus {
   EXPIRED
 }
 
+enum SocialEgressPolicy {
+  DIRECT_ALLOWED
+  PROXY_REQUIRED
+}
+
+enum OutboundOperationType {
+  PUBLISH_POST
+  CREATE_COMMENT
+  REPLY_COMMENT
+}
+
+enum OutboundOperationState {
+  PREPARED
+  DISPATCHING
+  REMOTE_CONFIRMED
+  REMOTE_UNKNOWN
+  LOCAL_COMMITTED
+  CONFIRMED_ABSENT
+  MANUAL_REVIEW
+  FAILED
+}
+
 // ============================================================ AUTH & USERS
 
 model User {
@@ -207,19 +229,19 @@ model User {
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
 
-  accounts           Account[]
-  sessions           Session[]
-  memberships        WorkspaceMember[]
-  passwordResets     PasswordResetToken[]
-  auditLogs          AuditLog[]
-  notifications      Notification[]
-  createdPosts       ContentPost[]         @relation("PostCreator")
-  uploadedMedia      MediaAsset[]
-  sentReplies        CommentReply[]
-  assignedComments   CommentAssignment[]   @relation("AssignedTo")
-  assignedByComments CommentAssignment[]   @relation("AssignedBy")
-  commentNotes       CommentNote[]
-  sentInvitations    WorkspaceInvitation[]
+  accounts             Account[]
+  sessions             Session[]
+  memberships          WorkspaceMember[]
+  passwordResets       PasswordResetToken[]
+  auditLogs            AuditLog[]
+  notifications        Notification[]
+  createdPosts         ContentPost[]         @relation("PostCreator")
+  uploadedMedia        MediaAsset[]
+  sentReplies          CommentReply[]
+  assignedComments     CommentAssignment[]   @relation("AssignedTo")
+  assignedByComments   CommentAssignment[]   @relation("AssignedBy")
+  commentNotes         CommentNote[]
+  sentInvitations      WorkspaceInvitation[]
   externalPostSyncJobs ExternalPostSyncJob[]
 
   @@index([email])
@@ -286,10 +308,11 @@ model PasswordResetToken {
 // ============================================================ WORKSPACE & TEAM
 
 model Workspace {
-  id       String  @id @default(cuid())
-  name     String
-  slug     String  @unique
-  imageUrl String?
+  id                 String             @id @default(cuid())
+  name               String
+  slug               String             @unique
+  imageUrl           String?
+  socialEgressPolicy SocialEgressPolicy @default(DIRECT_ALLOWED)
 
   /// Timezone dùng để hiển thị lịch và tính khoảng thời gian analytics.
   /// Dữ liệu trong DB luôn là UTC (rủi ro R10).
@@ -299,22 +322,25 @@ model Workspace {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  members        WorkspaceMember[]
-  invitations    WorkspaceInvitation[]
-  socialAccounts SocialAccount[]
-  contentPosts   ContentPost[]
-  platformPosts  PlatformPost[]
-  mediaAssets    MediaAsset[]
-  comments       Comment[]
-  notifications  Notification[]
-  auditLogs      AuditLog[]
-  replyTemplates ReplyTemplate[]
-  commentTags    CommentTag[]
-  backgroundJobs BackgroundJob[]
-  proxySetting   WorkspaceProxySetting?
+  members              WorkspaceMember[]
+  invitations          WorkspaceInvitation[]
+  socialAccounts       SocialAccount[]
+  contentPosts         ContentPost[]
+  platformPosts        PlatformPost[]
+  mediaAssets          MediaAsset[]
+  comments             Comment[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+  replyTemplates       ReplyTemplate[]
+  commentTags          CommentTag[]
+  backgroundJobs       BackgroundJob[]
+  proxySetting         WorkspaceProxySetting?
+  outboundOperations   OutboundOperation[]
+  outboxEvents         OutboxEvent[]
   externalPostSyncJobs ExternalPostSyncJob[]
 
   @@index([slug])
+  @@index([socialEgressPolicy])
   @@index([deletedAt])
 }
 
@@ -363,17 +389,17 @@ model WorkspaceMember {
 }
 
 model WorkspaceInvitation {
-  id          String           @id @default(cuid())
-  workspaceId String
-  email       String
-  role        WorkspaceRole    @default(VIEWER)
-  tokenHash   String           @unique
-  status      InvitationStatus @default(PENDING)
+  id           String           @id @default(cuid())
+  workspaceId  String
+  email        String
+  role         WorkspaceRole    @default(VIEWER)
+  tokenHash    String           @unique
+  status       InvitationStatus @default(PENDING)
   pendingEmail String?
-  invitedById String
-  expiresAt   DateTime
-  acceptedAt  DateTime?
-  createdAt   DateTime         @default(now())
+  invitedById  String
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  createdAt    DateTime         @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   invitedBy User      @relation(fields: [invitedById], references: [id], onDelete: Cascade)
@@ -411,11 +437,11 @@ model SocialAccount {
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  token           SocialToken?
-  platformPosts   PlatformPost[]
-  comments        Comment[]
-  metricSnapshots MetricSnapshot[]
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  token                SocialToken?
+  platformPosts        PlatformPost[]
+  comments             Comment[]
+  metricSnapshots      MetricSnapshot[]
   externalPostSyncJobs ExternalPostSyncJob[]
 
   // Constraint này được xử lý bằng partial unique index trong SQL migration
@@ -738,19 +764,19 @@ model MetricSnapshot {
   /// Ngày mà số liệu này thuộc về (khác capturedAt khi nền tảng trả dữ liệu trễ).
   metricDate DateTime @db.Date
 
-  views       Int?
-  likes       Int?
-  comments    Int?
-  shares      Int?
-  reach       Int?
-  impressions Int?
-  saves       Int?
-  followers   Int?
-  watchTime   Int?
-  avgWatchTime Int?
+  views          Int?
+  likes          Int?
+  comments       Int?
+  shares         Int?
+  reach          Int?
+  impressions    Int?
+  saves          Int?
+  followers      Int?
+  watchTime      Int?
+  avgWatchTime   Int?
   completionRate Float?
-  clicks      Int?
-  linkClicks  Int?
+  clicks         Int?
+  linkClicks     Int?
 
   source MetricSource @default(PLATFORM_API)
   /// Payload thô đã redact, giữ lại để đối chiếu khi nghi ngờ mapping sai.
@@ -1051,6 +1077,80 @@ model BackgroundJob {
   @@index([queueName, status])
   @@index([workspaceId])
   @@index([isDead])
+}
+
+model OutboundOperation {
+  id          String @id @default(cuid())
+  workspaceId String
+
+  operationType OutboundOperationType
+  resourceType  String
+  resourceId    String
+
+  operationGeneration Int
+  requestKey          String @unique
+
+  state            OutboundOperationState @default(PREPARED)
+  attemptId        String?
+  fence            Int                    @default(0)
+  dispatchAttempts Int                    @default(0)
+
+  payloadHash String?
+
+  routeConfigVersion    Int?
+  routeProxyFingerprint String?
+  routeCountryCode      String?
+
+  providerRequestId String?
+  remoteId          String?
+  remoteCheckpoint  Json?
+
+  reconciliationAttempts Int     @default(0)
+  requiresManualReview   Boolean @default(false)
+
+  lastErrorCode    String?
+  lastErrorMessage String? @db.Text
+
+  remoteStartedAt   DateTime?
+  remoteConfirmedAt DateTime?
+  lastReconciledAt  DateTime?
+  completedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([operationType, resourceType, resourceId, operationGeneration])
+  @@index([workspaceId, state, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+}
+
+model OutboxEvent {
+  id String @id @default(cuid())
+
+  workspaceId String?
+  topic       String
+
+  aggregateType String
+  aggregateId   String
+
+  payload Json
+
+  createdAt DateTime @default(now())
+
+  claimedAt DateTime?
+  claimedBy String?
+
+  dispatchedAt     DateTime?
+  dispatchAttempts Int       @default(0)
+  lastError        String?   @db.Text
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([topic, createdAt])
+  @@index([aggregateType, aggregateId])
 }
 
 /// Log mọi lời gọi ra platform API — phục vụ phân tích quota và điều tra sự cố

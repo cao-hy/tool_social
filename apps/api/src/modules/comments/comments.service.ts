@@ -1,5 +1,5 @@
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
-import type { Prisma } from '@socialhub/db';
+import { createQueueOutboxEvent, findOrCreateOutboundOperation, type Prisma } from '@socialhub/db';
 import { buildJobId, buildQueueJobOptions, type QueuePayload } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
 import { decryptToken, encryptToken, type Keyring } from '@socialhub/security';
@@ -10,6 +10,7 @@ import {
 } from '@socialhub/platform-adapters';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
+import { logger } from '../../common/logger';
 import { KEYRING } from '../../infrastructure/infrastructure.module';
 import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -632,45 +633,76 @@ export class CommentsService implements OnModuleDestroy {
       this.ensureCreateCommentScopes(platformPost);
     });
 
-    const payload: QueuePayload<'create-platform-comment'> = {
-      platformPostId: platformPost.id,
-      socialAccountId: platformPost.socialAccountId,
-      workspaceId,
-      message: input.message,
-      requestedByUserId: actorUserId,
-      correlationId: auditContext.requestId ?? `comment-create:${platformPost.id}:${Date.now()}`,
-    };
-    const jobId = buildJobId('create-platform-comment', payload);
-    const opts = buildQueueJobOptions('create-platform-comment', jobId);
-    const backgroundJob = await this.prisma.backgroundJob.upsert({
-      where: { queueName_jobId: { queueName: 'create-platform-comment', jobId } },
-      create: {
+    const correlationId =
+      auditContext.requestId ?? `comment-create:${platformPost.id}:${Date.now()}`;
+    const queued = await this.prisma.$transaction(async (tx) => {
+      const latest = await tx.outboundOperation.findFirst({
+        where: {
+          operationType: 'CREATE_COMMENT',
+          resourceType: 'PlatformPost',
+          resourceId: platformPost.id,
+        },
+        orderBy: { operationGeneration: 'desc' },
+        select: { operationGeneration: true },
+      });
+      const operation = await findOrCreateOutboundOperation(tx, {
+        workspaceId,
+        operationType: 'CREATE_COMMENT',
+        resourceType: 'PlatformPost',
+        resourceId: platformPost.id,
+        operationGeneration: (latest?.operationGeneration ?? 0) + 1,
+      });
+      const payload: QueuePayload<'create-platform-comment'> = {
+        platformPostId: platformPost.id,
+        socialAccountId: platformPost.socialAccountId,
+        workspaceId,
+        message: input.message,
+        requestedByUserId: actorUserId,
+        correlationId,
+        operationId: operation.id,
+      };
+      const jobId = buildJobId('create-platform-comment', payload);
+      const opts = buildQueueJobOptions('create-platform-comment', jobId);
+      const backgroundJob = await tx.backgroundJob.upsert({
+        where: { queueName_jobId: { queueName: 'create-platform-comment', jobId } },
+        create: {
+          workspaceId,
+          queueName: 'create-platform-comment',
+          jobId,
+          status: 'QUEUED',
+          payload: payload as Prisma.InputJsonValue,
+          attempts: 0,
+          maxAttempts: opts.attempts,
+          correlationId,
+        },
+        update: {
+          workspaceId,
+          status: 'QUEUED',
+          payload: payload as Prisma.InputJsonValue,
+          attempts: 0,
+          maxAttempts: opts.attempts,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          errorCode: null,
+          errorMessage: null,
+          isDead: false,
+          correlationId,
+        },
+      });
+      const outboxEvent = await createQueueOutboxEvent(tx, {
         workspaceId,
         queueName: 'create-platform-comment',
         jobId,
-        status: 'QUEUED',
-        payload: payload as Prisma.InputJsonValue,
-        attempts: 0,
-        maxAttempts: opts.attempts,
-        correlationId: payload.correlationId,
-      },
-      update: {
-        workspaceId,
-        status: 'QUEUED',
-        payload: payload as Prisma.InputJsonValue,
-        attempts: 0,
-        maxAttempts: opts.attempts,
-        startedAt: null,
-        finishedAt: null,
-        durationMs: null,
-        errorCode: null,
-        errorMessage: null,
-        isDead: false,
-        correlationId: payload.correlationId,
-      },
+        payload,
+        options: opts,
+        aggregateType: 'OutboundOperation',
+        aggregateId: operation.id,
+      });
+      return { payload, jobId, opts, backgroundJob, outboxEventId: outboxEvent.id };
     });
 
-    await this.createPlatformCommentQueue.add('create-platform-comment', payload, opts);
+    await this.dispatchCommentOutboxEvent(queued.outboxEventId);
     await this.audit.record({
       ...auditContext,
       actorUserId,
@@ -687,8 +719,8 @@ export class CommentsService implements OnModuleDestroy {
 
     return {
       queued: true,
-      jobId,
-      backgroundJobId: backgroundJob.id,
+      jobId: queued.jobId,
+      backgroundJobId: queued.backgroundJob.id,
       message: 'Đã đưa comment công khai vào queue.',
     };
   }
@@ -801,48 +833,68 @@ export class CommentsService implements OnModuleDestroy {
       this.ensureReplyCommentScopes(comment);
     });
 
-    const reply = await this.prisma.commentReply.create({
-      data: { workspaceId, commentId: comment.id, message, sentById: actorUserId },
-    });
-    const payload: QueuePayload<'reply-platform-comment'> = {
-      commentId: comment.id,
-      workspaceId,
-      message,
-      requestedByUserId: actorUserId,
-      replyRecordId: reply.id,
-      correlationId: auditContext.requestId ?? `comment-reply:${reply.id}`,
-    };
-    const jobId = buildJobId('reply-platform-comment', payload);
-    const opts = buildQueueJobOptions('reply-platform-comment', jobId);
-    const backgroundJob = await this.prisma.backgroundJob.upsert({
-      where: { queueName_jobId: { queueName: 'reply-platform-comment', jobId } },
-      create: {
+    const queued = await this.prisma.$transaction(async (tx) => {
+      const reply = await tx.commentReply.create({
+        data: { workspaceId, commentId: comment.id, message, sentById: actorUserId },
+      });
+      const operation = await findOrCreateOutboundOperation(tx, {
+        workspaceId,
+        operationType: 'REPLY_COMMENT',
+        resourceType: 'CommentReply',
+        resourceId: reply.id,
+        operationGeneration: 1,
+      });
+      const payload: QueuePayload<'reply-platform-comment'> = {
+        commentId: comment.id,
+        workspaceId,
+        message,
+        requestedByUserId: actorUserId,
+        replyRecordId: reply.id,
+        correlationId: auditContext.requestId ?? `comment-reply:${reply.id}`,
+        operationId: operation.id,
+      };
+      const jobId = buildJobId('reply-platform-comment', payload);
+      const opts = buildQueueJobOptions('reply-platform-comment', jobId);
+      const backgroundJob = await tx.backgroundJob.upsert({
+        where: { queueName_jobId: { queueName: 'reply-platform-comment', jobId } },
+        create: {
+          workspaceId,
+          queueName: 'reply-platform-comment',
+          jobId,
+          status: 'QUEUED',
+          payload: payload as Prisma.InputJsonValue,
+          attempts: 0,
+          maxAttempts: opts.attempts,
+          correlationId: payload.correlationId,
+        },
+        update: {
+          workspaceId,
+          status: 'QUEUED',
+          payload: payload as Prisma.InputJsonValue,
+          attempts: 0,
+          maxAttempts: opts.attempts,
+          startedAt: null,
+          finishedAt: null,
+          durationMs: null,
+          errorCode: null,
+          errorMessage: null,
+          isDead: false,
+          correlationId: payload.correlationId,
+        },
+      });
+      const outboxEvent = await createQueueOutboxEvent(tx, {
         workspaceId,
         queueName: 'reply-platform-comment',
         jobId,
-        status: 'QUEUED',
-        payload: payload as Prisma.InputJsonValue,
-        attempts: 0,
-        maxAttempts: opts.attempts,
-        correlationId: payload.correlationId,
-      },
-      update: {
-        workspaceId,
-        status: 'QUEUED',
-        payload: payload as Prisma.InputJsonValue,
-        attempts: 0,
-        maxAttempts: opts.attempts,
-        startedAt: null,
-        finishedAt: null,
-        durationMs: null,
-        errorCode: null,
-        errorMessage: null,
-        isDead: false,
-        correlationId: payload.correlationId,
-      },
+        payload,
+        options: opts,
+        aggregateType: 'OutboundOperation',
+        aggregateId: operation.id,
+      });
+      return { reply, jobId, backgroundJob, outboxEventId: outboxEvent.id };
     });
 
-    await this.replyPlatformCommentQueue.add('reply-platform-comment', payload, opts);
+    await this.dispatchCommentOutboxEvent(queued.outboxEventId);
     await this.audit.record({
       ...auditContext,
       actorUserId,
@@ -850,15 +902,49 @@ export class CommentsService implements OnModuleDestroy {
       action: 'COMMENT_REPLIED',
       resourceType: 'Comment',
       resourceId: comment.id,
-      metadata: { queued: true, replyRecordId: reply.id },
+      metadata: { queued: true, replyRecordId: queued.reply.id },
     });
 
     return {
       queued: true,
-      jobId,
-      backgroundJobId: backgroundJob.id,
+      jobId: queued.jobId,
+      backgroundJobId: queued.backgroundJob.id,
       message: 'Đã đưa reply vào queue.',
     };
+  }
+
+  private async dispatchCommentOutboxEvent(outboxEventId: string): Promise<void> {
+    const event = await this.prisma.outboxEvent.findUnique({ where: { id: outboxEventId } });
+    if (!event) return;
+    const value = event.payload as unknown as {
+      queueName: 'create-platform-comment' | 'reply-platform-comment';
+      jobName: 'create-platform-comment' | 'reply-platform-comment';
+      payload: QueuePayload<'create-platform-comment'> | QueuePayload<'reply-platform-comment'>;
+      options: ReturnType<typeof buildQueueJobOptions>;
+    };
+    const queue =
+      value.queueName === 'create-platform-comment'
+        ? this.createPlatformCommentQueue
+        : this.replyPlatformCommentQueue;
+    try {
+      await queue.add(value.jobName, value.payload, value.options);
+      await this.prisma.outboxEvent.update({
+        where: { id: outboxEventId },
+        data: { dispatchedAt: new Date(), lastError: null },
+      });
+    } catch (error) {
+      await this.prisma.outboxEvent.update({
+        where: { id: outboxEventId },
+        data: {
+          dispatchAttempts: { increment: 1 },
+          lastError: error instanceof Error ? error.message.slice(0, 1000) : 'Redis enqueue failed',
+        },
+      });
+      logger.warn(
+        { err: error, outboxEventId },
+        'Immediate comment enqueue failed; outbox will retry',
+      );
+    }
   }
 
   private toBulkQueueSummary(requested: number, results: BulkQueueResult[]) {

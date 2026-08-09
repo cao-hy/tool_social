@@ -7,6 +7,14 @@ describe('scheduled post scanner', () => {
   it('bù job publish cho bài đã đến lịch nhưng queue bị thiếu job', async () => {
     const now = new Date('2026-07-28T03:00:00.000Z');
     const prisma = {
+      $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => await fn(prisma)),
+      outboundOperation: {
+        upsert: vi.fn(async ({ create }) => ({ ...create, id: `op_${create.resourceId}` })),
+      },
+      outboxEvent: {
+        create: vi.fn(async ({ data }) => ({ ...data, id: `outbox_${data.aggregateId}` })),
+        update: vi.fn(async () => ({})),
+      },
       postSchedule: {
         findMany: vi.fn(async () => [
           {
@@ -44,6 +52,7 @@ describe('scheduled post scanner', () => {
         platformPostId: 'platform_post_1',
         workspaceId: 'workspace_1',
         correlationId: 'scheduled-scan:schedule_1',
+        operationId: 'op_platform_post_1',
       },
       expect.objectContaining({
         jobId: 'publish-post-platform_post_1',
@@ -58,6 +67,7 @@ describe('scheduled post scanner', () => {
         platformPostId: 'platform_post_2',
         workspaceId: 'workspace_1',
         correlationId: 'scheduled-scan:schedule_1',
+        operationId: 'op_platform_post_2',
       },
       expect.objectContaining({
         jobId: 'publish-post-platform_post_2',

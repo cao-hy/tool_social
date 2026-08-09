@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
-import type { Prisma } from '@socialhub/db';
+import { createQueueOutboxEvent, type Prisma } from '@socialhub/db';
 import { buildJobId, buildQueueJobOptions, platformSchema, type Platform } from '@socialhub/shared';
 import type { AdapterRegistry } from '@socialhub/platform-adapters';
 import { Queue } from 'bullmq';
@@ -73,23 +73,52 @@ export class WebhooksService implements OnModuleDestroy {
     const eventType = parsedEvents[0]?.eventType;
 
     try {
-      const webhookEvent = await this.prisma.webhookEvent.create({
-        data: {
-          platform,
-          externalEventId,
-          eventType,
-          payload: request.body as Prisma.InputJsonValue,
-          headers: safeHeaders(headers) as Prisma.InputJsonValue,
-          signatureOk: true,
-        },
+      const queued = await this.prisma.$transaction(async (tx) => {
+        const webhookEvent = await tx.webhookEvent.create({
+          data: {
+            platform,
+            externalEventId,
+            eventType,
+            payload: request.body as Prisma.InputJsonValue,
+            headers: safeHeaders(headers) as Prisma.InputJsonValue,
+            signatureOk: true,
+          },
+        });
+        const payload = { webhookEventId: webhookEvent.id };
+        const jobId = buildJobId('process-webhook', payload);
+        const options = buildQueueJobOptions('process-webhook', jobId);
+        const outboxEvent = await createQueueOutboxEvent(tx, {
+          queueName: 'process-webhook',
+          jobId,
+          payload,
+          options,
+          aggregateType: 'WebhookEvent',
+          aggregateId: webhookEvent.id,
+        });
+        return { webhookEvent, payload, jobId, options, outboxEventId: outboxEvent.id };
       });
-      const jobId = buildJobId('process-webhook', { webhookEventId: webhookEvent.id });
-      await this.processQueue.add(
-        'process-webhook',
-        { webhookEventId: webhookEvent.id },
-        buildQueueJobOptions('process-webhook', jobId),
-      );
-      return { accepted: true, duplicate: false, webhookEventId: webhookEvent.id, jobId };
+      try {
+        await this.processQueue.add('process-webhook', queued.payload, queued.options);
+        await this.prisma.outboxEvent.update({
+          where: { id: queued.outboxEventId },
+          data: { dispatchedAt: new Date(), lastError: null },
+        });
+      } catch (error) {
+        await this.prisma.outboxEvent.update({
+          where: { id: queued.outboxEventId },
+          data: {
+            dispatchAttempts: { increment: 1 },
+            lastError:
+              error instanceof Error ? error.message.slice(0, 1000) : 'Redis enqueue failed',
+          },
+        });
+      }
+      return {
+        accepted: true,
+        duplicate: false,
+        webhookEventId: queued.webhookEvent.id,
+        jobId: queued.jobId,
+      };
     } catch (error) {
       if (isUniqueConstraintError(error)) {
         return { accepted: true, duplicate: true };
