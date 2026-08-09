@@ -155,10 +155,10 @@ export class ProxyPolicyService {
 
     if (!locked && forceAttestation) {
       let attempts = 0;
-      while (!locked && attempts < 15) {
-        await sleepForAttestationRetry(attempts);
+      const deadline = Date.now() + LOCK_TTL;
+      while (!locked && Date.now() < deadline) {
+        await sleepForAttestationRetry(attempts++);
         locked = await lock.acquire(lockKey, token, LOCK_TTL);
-        attempts++;
       }
 
       if (!locked) {

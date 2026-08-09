@@ -1,3 +1,5 @@
+import { RemoteRequestError } from '@socialhub/shared';
+
 /**
  * Hỗ trợ hủy / consume HTTP response body để đảm bảo giải phóng `activeRequests` lease
  * trong Undici proxied fetch dispatcher khi caller không cần đọc nội dung response.
@@ -24,4 +26,8 @@ export function requireHttpsUrl(rawUrl: string, label: string): string {
   }
 
   return url.toString();
+}
+
+export function throwIfRemoteRequestError(error: unknown): void {
+  if (error instanceof RemoteRequestError) throw error;
 }

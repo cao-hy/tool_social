@@ -40,11 +40,20 @@ export function decideOnError(
     return decideOnPlatformError(error, attempt, maxAttempts);
   }
 
-  if (isProxyConfigurationError(error)) {
+  if (isProxyConfigurationMissingError(error)) {
     return {
       action: 'FAIL_PERMANENTLY',
       reason: error.message,
       notifyUser: true,
+      markAccountDisconnected: false,
+    };
+  }
+
+  if (isProxyConfigurationChangedError(error)) {
+    return {
+      action: attempt < maxAttempts ? 'RETRY' : 'FAIL_PERMANENTLY',
+      reason: error.message,
+      notifyUser: attempt >= maxAttempts,
       markAccountDisconnected: false,
     };
   }
@@ -96,6 +105,10 @@ function decideOnPlatformError(
   };
 }
 
-function isProxyConfigurationError(error: unknown): error is Error & { code: string } {
+function isProxyConfigurationMissingError(error: unknown): error is Error & { code: string } {
   return error instanceof Error && 'code' in error && error.code === 'PROXY_CONFIGURATION_MISSING';
+}
+
+function isProxyConfigurationChangedError(error: unknown): error is Error & { code: string } {
+  return error instanceof Error && 'code' in error && error.code === 'PROXY_CONFIGURATION_CHANGED';
 }

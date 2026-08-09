@@ -20,6 +20,8 @@ import type {
   EditPostInput,
   PublishPostInput,
   PublishResult,
+  PublishReconciliationResult,
+  ReconcilePublishInput,
   SocialAccountProfile,
   SyncCommentsParams,
   SyncPostsParams,
@@ -181,12 +183,20 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
     });
 
     if (input.thumbnail?.bytes?.length) {
-      await this.client.setThumbnail({
-        accessToken: ctx.accessToken,
-        videoId: result.id,
-        bytes: input.thumbnail.bytes,
-        mimeType: input.thumbnail.mimeType,
-      });
+      try {
+        await this.client.setThumbnail({
+          accessToken: ctx.accessToken,
+          videoId: result.id,
+          bytes: input.thumbnail.bytes,
+          mimeType: input.thumbnail.mimeType,
+        });
+      } catch (error) {
+        ctx.logger?.warn('YouTube thumbnail update failed after video publish', {
+          correlationId: ctx.correlationId,
+          videoId: result.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     return {
@@ -197,6 +207,17 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
         ? !['uploaded', 'processed'].includes(result.status.uploadStatus.toLowerCase())
         : undefined,
     };
+  }
+
+  reconcilePublish(
+    _ctx: AdapterContext,
+    _input: ReconcilePublishInput,
+  ): Promise<PublishReconciliationResult> {
+    return Promise.resolve({
+      result: 'INDETERMINATE',
+      reason:
+        'YouTube adapter chưa có đủ content fingerprint/provider request id để đối soát publish tự động đáng tin cậy.',
+    });
   }
 
   async getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage> {

@@ -139,6 +139,53 @@ describe('InstagramAdapter', () => {
     ]);
   });
 
+  it('không làm fail publish Instagram nếu lookup permalink lỗi sau khi đã có media id', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/ig-user-1/media') && init?.method === 'POST') {
+        return jsonResponse({ id: 'container-1' });
+      }
+      if (url.pathname.endsWith('/ig-user-1/media_publish') && init?.method === 'POST') {
+        return jsonResponse({ id: 'media-1' });
+      }
+      if (url.pathname.endsWith('/media-1')) {
+        return jsonResponse({ error: { message: 'temporary lookup failure' } }, { status: 500 });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const warn = vi.fn();
+
+    await expect(
+      createAdapter().publishPost(
+        {
+          accessToken: 'page-token',
+          externalAccountId: 'ig-user-1',
+          correlationId: 'corr-1',
+          logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+        },
+        {
+          caption: 'hello',
+          media: [
+            {
+              type: 'IMAGE',
+              url: 'https://cdn.test/photo.jpg',
+              mimeType: 'image/jpeg',
+              sizeBytes: 100,
+            },
+          ],
+        },
+      ),
+    ).resolves.toMatchObject({
+      externalPostId: 'media-1',
+      externalUrl: 'https://www.instagram.com/p/media-1',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'Instagram permalink lookup failed after publish',
+      expect.objectContaining({ postId: 'media-1' }),
+    );
+  });
+
   it('không expose deletePost vì Instagram Media API không hỗ trợ xóa media', () => {
     expect('deletePost' in createAdapter()).toBe(false);
   });

@@ -12,7 +12,8 @@ import {
   checkProxyAwareNetwork,
   createProxiedFetch,
   resolveWorkspaceProxyConfig,
-  ProxyConfigurationError,
+  ProxyConfigurationChangedError,
+  ProxyConfigurationMissingError,
 } from './proxy';
 import type { ProxyConfig } from '@socialhub/shared';
 import type { WorkspaceProxySettingRecord } from './proxy';
@@ -45,7 +46,10 @@ export class ProxyRuntimeService {
     workspaceId: string,
     getWorkspaceSetting: (workspaceId: string) => Promise<WorkspaceProxySettingRecord | null>,
     decryptProxyUrl: (ciphertext: string) => string,
-    options?: { forceAttestation?: boolean },
+    options?: {
+      forceAttestation?: boolean;
+      getWorkspaceConfigVersion?: (workspaceId: string) => Promise<number | null>;
+    },
   ): Promise<PreparedProxyContext> {
     const setting = await getWorkspaceSetting(workspaceId);
     const proxyConfig = resolveWorkspaceProxyConfig(setting, decryptProxyUrl);
@@ -55,15 +59,21 @@ export class ProxyRuntimeService {
     let reAttest: (() => Promise<ProxyAttestation | null>) | undefined = undefined;
     const snapshotVersion = setting?.configVersion ?? 0;
     const assertCurrentVersion = async () => {
-      const currentSetting = await getWorkspaceSetting(workspaceId);
-      if ((currentSetting?.configVersion ?? 0) !== snapshotVersion) {
-        throw new ProxyConfigurationError('Proxy configuration changed during request processing');
+      const currentVersion = options?.getWorkspaceConfigVersion
+        ? ((await options.getWorkspaceConfigVersion(workspaceId)) ?? 0)
+        : ((await getWorkspaceSetting(workspaceId))?.configVersion ?? 0);
+      if (currentVersion !== snapshotVersion) {
+        throw new ProxyConfigurationChangedError(
+          'Proxy configuration changed during request processing',
+        );
       }
     };
 
     if (proxyConfig.enabled) {
       if (!proxyConfig.proxyUrl) {
-        throw new ProxyConfigurationError('Proxy is enabled but no proxy URL is configured.');
+        throw new ProxyConfigurationMissingError(
+          'Proxy is enabled but no proxy URL is configured.',
+        );
       }
 
       const validatedEndpoint = await this.endpointValidator.validate(proxyConfig.proxyUrl);

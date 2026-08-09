@@ -111,5 +111,22 @@ describe('decideOnError — chính sách retry của worker', () => {
     it('không bao giờ đánh dấu mất kết nối vì lỗi nội bộ của chính ta', () => {
       expect(decideOnError(new Error('lỗi'), 3, 3).markAccountDisconnected).toBe(false);
     });
+
+    it('proxy thiếu cấu hình → thất bại vĩnh viễn', () => {
+      const error = Object.assign(new Error('missing proxy'), {
+        code: 'PROXY_CONFIGURATION_MISSING',
+      });
+      const decision = decideOnError(error, 1, 5);
+      expect(decision.action).toBe('FAIL_PERMANENTLY');
+      expect(decision.notifyUser).toBe(true);
+    });
+
+    it('proxy vừa bị đổi → retry nếu còn lượt', () => {
+      const error = Object.assign(new Error('proxy changed'), {
+        code: 'PROXY_CONFIGURATION_CHANGED',
+      });
+      expect(decideOnError(error, 1, 5).action).toBe('RETRY');
+      expect(decideOnError(error, 5, 5).action).toBe('FAIL_PERMANENTLY');
+    });
   });
 });

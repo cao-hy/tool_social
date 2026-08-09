@@ -10,6 +10,7 @@ import {
   createRuntimeAdapterRegistry,
   TIKTOK_OAUTH_SCOPES,
 } from '@socialhub/platform-adapters';
+import { RemoteRequestError } from '@socialhub/shared';
 import {
   decryptToken,
   ProxyPolicyService,
@@ -50,6 +51,15 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
       workspaceId,
       (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
       (ciphertext) => decryptToken(ciphertext, this.keyring),
+      {
+        getWorkspaceConfigVersion: async (id) =>
+          (
+            await this.prisma.workspaceProxySetting.findUnique({
+              where: { workspaceId: id },
+              select: { configVersion: true },
+            })
+          )?.configVersion ?? null,
+      },
     );
 
     let baseFetch: typeof fetch;
@@ -66,7 +76,16 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
     }
 
     const fetchImpl: typeof fetch = async (input, init) => {
-      await ctx.assertCurrentVersion();
+      try {
+        await ctx.assertCurrentVersion();
+      } catch (error) {
+        throw new RemoteRequestError(
+          'Proxy configuration changed before outbound request',
+          'BEFORE_CONNECT',
+          false,
+          error,
+        );
+      }
       return baseFetch(input, init);
     };
 

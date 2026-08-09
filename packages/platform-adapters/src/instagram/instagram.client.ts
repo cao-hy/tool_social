@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
+import { throwIfRemoteRequestError } from '../core/utils';
 import {
   instagramNetworkError,
   instagramUnexpectedPayloadError,
@@ -363,6 +364,7 @@ export class InstagramGraphClient {
     try {
       response = await this.fetch(url, { signal: AbortSignal.timeout(15000) });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw instagramNetworkError(error);
     }
 
@@ -394,6 +396,7 @@ export class InstagramGraphClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw instagramNetworkError(error);
     }
 
@@ -428,6 +431,7 @@ export class InstagramGraphClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw instagramNetworkError(error);
     }
 

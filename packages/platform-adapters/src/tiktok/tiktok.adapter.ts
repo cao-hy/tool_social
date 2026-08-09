@@ -15,6 +15,8 @@ import type {
   PostMetrics,
   PublishPostInput,
   PublishResult,
+  PublishReconciliationResult,
+  ReconcilePublishInput,
   SocialAccountProfile,
   SyncPostsParams,
   TikTokCreatorInfo,
@@ -209,6 +211,17 @@ export class TikTokAdapter implements SocialPlatformAdapter {
       publishedAt: new Date(),
       pending: true,
     };
+  }
+
+  reconcilePublish(
+    _ctx: AdapterContext,
+    _input: ReconcilePublishInput,
+  ): Promise<PublishReconciliationResult> {
+    return Promise.resolve({
+      result: 'INDETERMINATE',
+      reason:
+        'TikTok adapter chưa có đủ content fingerprint/provider request id để đối soát publish tự động đáng tin cậy.',
+    });
   }
 
   async getPublishPlatformState(

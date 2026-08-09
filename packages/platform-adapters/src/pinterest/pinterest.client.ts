@@ -32,7 +32,7 @@ import {
   type PinterestBoardSection,
 } from './pinterest.schemas';
 
-import { discardResponseBody, requireHttpsUrl } from '../core/utils';
+import { discardResponseBody, requireHttpsUrl, throwIfRemoteRequestError } from '../core/utils';
 
 export interface PinterestClientConfig {
   appId: string;
@@ -448,6 +448,7 @@ export class PinterestClient {
         signal: AbortSignal.timeout(180000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw pinterestNetworkError(error);
     }
 
@@ -531,6 +532,7 @@ export class PinterestClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw pinterestNetworkError(error);
     }
 
@@ -562,6 +564,7 @@ export class PinterestClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw pinterestNetworkError(error);
     }
 
@@ -586,6 +589,7 @@ export class PinterestClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw pinterestNetworkError(error);
     }
 
@@ -610,6 +614,7 @@ export class PinterestClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw pinterestNetworkError(error);
     }
 
@@ -625,6 +630,7 @@ export class PinterestClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw pinterestNetworkError(error);
     }
 

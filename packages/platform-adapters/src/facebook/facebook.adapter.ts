@@ -16,6 +16,8 @@ import type {
   AuthUrlInput,
   PublishPostInput,
   PublishResult,
+  PublishReconciliationResult,
+  ReconcilePublishInput,
   SocialAccountProfile,
   PostMetrics,
   EditPostInput,
@@ -284,6 +286,17 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
       externalUrl: `https://www.facebook.com/${result.id}`,
       publishedAt: new Date(),
     };
+  }
+
+  reconcilePublish(
+    _ctx: AdapterContext,
+    _input: ReconcilePublishInput,
+  ): Promise<PublishReconciliationResult> {
+    return Promise.resolve({
+      result: 'INDETERMINATE',
+      reason:
+        'Facebook adapter chưa có đủ content fingerprint/provider request id để đối soát publish tự động đáng tin cậy.',
+    });
   }
 
   async getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage> {

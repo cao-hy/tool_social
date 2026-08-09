@@ -74,7 +74,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (
       exception instanceof Error &&
       'code' in exception &&
-      exception.code === 'PROXY_CONFIGURATION_MISSING'
+      (exception.code === 'PROXY_CONFIGURATION_MISSING' ||
+        exception.code === 'PROXY_CONFIGURATION_CHANGED')
     ) {
       return {
         status: HttpStatus.SERVICE_UNAVAILABLE,

@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
-import { discardResponseBody, requireHttpsUrl } from '../core/utils';
+import { discardResponseBody, requireHttpsUrl, throwIfRemoteRequestError } from '../core/utils';
 import {
   normalizeYouTubeError,
   youtubeNetworkError,
@@ -116,6 +116,7 @@ export class YouTubeClient {
     try {
       response = await this.fetch(url, { method: 'POST', signal: AbortSignal.timeout(15000) });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -220,6 +221,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(120000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -355,6 +357,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -464,6 +467,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -494,6 +498,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -532,6 +537,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -578,6 +584,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(600000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -602,6 +609,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -627,6 +635,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -647,6 +656,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -677,6 +687,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 
@@ -707,6 +718,7 @@ export class YouTubeClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw youtubeNetworkError(error);
     }
 

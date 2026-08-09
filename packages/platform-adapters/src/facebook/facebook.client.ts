@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
+import { throwIfRemoteRequestError } from '../core/utils';
 import {
   facebookNetworkError,
   facebookUnexpectedPayloadError,
@@ -440,6 +441,7 @@ export class FacebookGraphClient {
     try {
       response = await this.fetch(url, { signal: AbortSignal.timeout(15000) });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw facebookNetworkError(error);
     }
 
@@ -471,6 +473,7 @@ export class FacebookGraphClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw facebookNetworkError(error);
     }
 
@@ -506,6 +509,7 @@ export class FacebookGraphClient {
         signal: AbortSignal.timeout(120000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw facebookNetworkError(error);
     }
 
@@ -540,6 +544,7 @@ export class FacebookGraphClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw facebookNetworkError(error);
     }
 

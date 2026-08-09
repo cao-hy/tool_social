@@ -18,6 +18,8 @@ import type {
   PostMetrics,
   PublishPostInput,
   PublishResult,
+  PublishReconciliationResult,
+  ReconcilePublishInput,
   SocialAccountProfile,
   SyncPostsParams,
   TokenSet,
@@ -263,6 +265,17 @@ export class PinterestAdapter implements SocialPlatformAdapter {
       externalUrl: `https://www.pinterest.com/pin/${result.id}/`,
       publishedAt: result.created_at ? new Date(result.created_at) : new Date(),
     };
+  }
+
+  reconcilePublish(
+    _ctx: AdapterContext,
+    _input: ReconcilePublishInput,
+  ): Promise<PublishReconciliationResult> {
+    return Promise.resolve({
+      result: 'INDETERMINATE',
+      reason:
+        'Pinterest adapter chưa có đủ content fingerprint/provider request id để đối soát publish tự động đáng tin cậy.',
+    });
   }
 
   private async waitForVideoUpload(accessToken: string, mediaId: string): Promise<void> {

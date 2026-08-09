@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
-import { discardResponseBody, requireHttpsUrl } from '../core/utils';
+import { discardResponseBody, requireHttpsUrl, throwIfRemoteRequestError } from '../core/utils';
 import {
   normalizeTikTokError,
   tiktokApiEnvelopeError,
@@ -339,6 +339,7 @@ export class TikTokClient {
           signal: AbortSignal.timeout(600000),
         });
       } catch (error) {
+        throwIfRemoteRequestError(error);
         throw tiktokNetworkError(error);
       }
 
@@ -372,6 +373,7 @@ export class TikTokClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw tiktokNetworkError(error);
     }
 
@@ -392,6 +394,7 @@ export class TikTokClient {
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw tiktokNetworkError(error);
     }
 
@@ -416,6 +419,7 @@ export class TikTokClient {
         signal: AbortSignal.timeout(30000),
       });
     } catch (error) {
+      throwIfRemoteRequestError(error);
       throw tiktokNetworkError(error);
     }
 

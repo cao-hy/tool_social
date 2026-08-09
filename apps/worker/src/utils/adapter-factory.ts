@@ -7,6 +7,7 @@ import {
 import { decryptToken, ProxyPolicyService, RedisProxyPolicyCache } from '@socialhub/security';
 import type { PrismaClient } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
+import { RemoteRequestError } from '@socialhub/shared';
 import {
   createRuntimeAdapterRegistry,
   TIKTOK_OAUTH_SCOPES,
@@ -53,6 +54,15 @@ export class WorkerAdapterFactory {
       workspaceId,
       (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
       (ciphertext) => decryptToken(ciphertext, this.keyring),
+      {
+        getWorkspaceConfigVersion: async (id) =>
+          (
+            await this.prisma.workspaceProxySetting.findUnique({
+              where: { workspaceId: id },
+              select: { configVersion: true },
+            })
+          )?.configVersion ?? null,
+      },
     );
 
     let baseFetch: typeof fetch;
@@ -69,7 +79,16 @@ export class WorkerAdapterFactory {
     }
 
     const fetchImpl: typeof fetch = async (input, init) => {
-      await ctx.assertCurrentVersion();
+      try {
+        await ctx.assertCurrentVersion();
+      } catch (error) {
+        throw new RemoteRequestError(
+          'Proxy configuration changed before outbound request',
+          'BEFORE_CONNECT',
+          false,
+          error,
+        );
+      }
       return baseFetch(input, init);
     };
 

@@ -4,7 +4,8 @@ import {
   createDirectFetch,
   ProxyDispatcherPool,
   ProxyRuntimeService,
-  ProxyConfigurationError,
+  ProxyConfigurationMissingError,
+  ProxyConfigurationChangedError,
 } from '@socialhub/config';
 import {
   ProxyEndpointValidator,
@@ -104,7 +105,7 @@ describe('Proxy Canary & Security Integration Test Suite', () => {
     await new Promise((r) => targetServer.close(r));
   });
 
-  it('3. Proxy enabled with missing proxyUrl throws ProxyConfigurationError (Fail-Closed)', async () => {
+  it('3. Proxy enabled with missing proxyUrl throws ProxyConfigurationMissingError (Fail-Closed)', async () => {
     const dummyPolicy = {} as any;
     const runtime = new ProxyRuntimeService(dummyPolicy, 'test-secret');
 
@@ -121,7 +122,7 @@ describe('Proxy Canary & Security Integration Test Suite', () => {
         }),
         (c) => c,
       ),
-    ).rejects.toThrow(ProxyConfigurationError);
+    ).rejects.toThrow(ProxyConfigurationMissingError);
   });
 
   it('4. SOCKS proxy protocol is rejected in ProxyEndpointValidator', async () => {
@@ -209,7 +210,7 @@ describe('Proxy Canary & Security Integration Test Suite', () => {
         },
         (c) => c,
       ),
-    ).rejects.toThrow(ProxyConfigurationError);
+    ).rejects.toThrow(ProxyConfigurationChangedError);
 
     await runtime.closeAll();
   });

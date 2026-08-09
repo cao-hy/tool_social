@@ -17,6 +17,7 @@ import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { randomUUID } from 'node:crypto';
 import {
   deriveContentPostStatus,
+  buildJobId,
   PLATFORM_LABELS,
   RemoteRequestError,
   type MediaType,
@@ -230,6 +231,7 @@ async function publishPlatformPost(
     }
 
     let publishNetworkProof = adaptersContext.proxy?.attestation || null;
+    let publishAttemptId: string | null = null;
 
     try {
       const accessToken = await getFreshAccessToken({
@@ -327,7 +329,7 @@ async function publishPlatformPost(
         logger: adapterLogger,
       } satisfies AdapterContext;
 
-      const publishAttemptId = randomUUID();
+      publishAttemptId = randomUUID();
       await input.prisma.platformPost.update({
         where: { id: platformPost.id },
         data: {
@@ -416,10 +418,29 @@ async function publishPlatformPost(
     } catch (error) {
       const attempt = (job.attemptsMade ?? 0) + 1;
       const maxAttempts = job.opts?.attempts ?? 1;
-      const decision = decideOnError(error, attempt, maxAttempts);
       const code = isPlatformError(error) ? error.kind : 'UNKNOWN';
       const message = error instanceof Error ? error.message : 'Lỗi không xác định khi publish.';
 
+      if (error instanceof RemoteRequestError && !error.requestMayHaveReachedRemote) {
+        await input.prisma.platformPost.update({
+          where: { id: platformPost.id },
+          data: {
+            status: 'QUEUED',
+            errorCode: error.phase,
+            errorMessage: message,
+            platformState: publishNetworkProof
+              ? (mergePlatformStateWithNetworkProof(
+                  jsonObject(platformPost.platformState),
+                  publishNetworkProof,
+                ) as Prisma.InputJsonValue)
+              : undefined,
+          },
+        });
+        await updateParentStatus(input.prisma, platformPost.contentPostId);
+        throw error;
+      }
+
+      const decision = decideOnError(error, attempt, maxAttempts);
       const isRemoteUnknown =
         (error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
         (isPlatformError(error) && error.kind === 'NETWORK');
@@ -447,22 +468,19 @@ async function publishPlatformPost(
         },
       });
 
-      if (isRemoteUnknown && input.reconcileQueue) {
-        const reconcileJobId = `reconcile-${platformPost.id}-${job.id ?? 'attempt'}`;
-        await input.reconcileQueue.add(
-          'reconcile-platform-post',
-          {
-            platformPostId: platformPost.id,
-            workspaceId: payload.workspaceId,
-            publishAttemptId: job.id ?? 'attempt',
-          },
-          {
-            jobId: reconcileJobId,
-            delay: 60_000,
-            attempts: 5,
-            backoff: { type: 'exponential', delay: 60_000 },
-          },
-        );
+      if (isRemoteUnknown && input.reconcileQueue && publishAttemptId) {
+        const reconcilePayload = {
+          platformPostId: platformPost.id,
+          workspaceId: payload.workspaceId,
+          publishAttemptId,
+        };
+        const reconcileJobId = buildJobId('reconcile-platform-post', reconcilePayload);
+        await input.reconcileQueue.add('reconcile-platform-post', reconcilePayload, {
+          jobId: reconcileJobId,
+          delay: 60_000,
+          attempts: 5,
+          backoff: { type: 'exponential', delay: 60_000 },
+        });
       }
 
       if (decision.markAccountDisconnected) {
@@ -495,6 +513,7 @@ async function publishPlatformPost(
 
       await updateParentStatus(input.prisma, platformPost.contentPostId);
 
+      if (isRemoteUnknown) return { published: false, reason: 'REMOTE_RESULT_UNKNOWN' };
       if (decision.action === 'RETRY') throw error;
       return { published: false, reason: decision.reason };
     }
@@ -520,7 +539,11 @@ async function assertProxyConfigVersion(
     select: { configVersion: true },
   });
   if ((currentSetting?.configVersion ?? 0) !== expectedVersion) {
-    throw new Error('Proxy configuration changed before publish; retry with the latest config.');
+    throw new RemoteRequestError(
+      'Proxy configuration changed before publish; retry with the latest config.',
+      'BEFORE_CONNECT',
+      false,
+    );
   }
 }
 
@@ -847,7 +870,7 @@ function shouldMarkDead(result: unknown): result is { reason: string } {
   if (!result || typeof result !== 'object') return false;
   const reason = (result as { reason?: unknown }).reason;
   if (typeof reason !== 'string') return false;
-  return !['already_published', 'locked', 'not_found'].includes(reason);
+  return !['already_published', 'locked', 'not_found', 'REMOTE_RESULT_UNKNOWN'].includes(reason);
 }
 
 async function markFailed(

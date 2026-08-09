@@ -2,9 +2,25 @@ import { fetch as undiciFetch } from 'undici';
 import { isIP } from 'node:net';
 import type { ProxyConfig } from '@socialhub/shared';
 
-export class ProxyConfigurationError extends Error {
+export class ProxyConfigurationMissingError extends Error {
   readonly code = 'PROXY_CONFIGURATION_MISSING';
 
+  constructor(message = 'Proxy đang bật nhưng chưa có Proxy URL.') {
+    super(message);
+    this.name = 'ProxyConfigurationMissingError';
+  }
+}
+
+export class ProxyConfigurationChangedError extends Error {
+  readonly code = 'PROXY_CONFIGURATION_CHANGED';
+
+  constructor(message = 'Proxy configuration changed during request processing') {
+    super(message);
+    this.name = 'ProxyConfigurationChangedError';
+  }
+}
+
+export class ProxyConfigurationError extends ProxyConfigurationMissingError {
   constructor(message = 'Proxy đang bật nhưng chưa có Proxy URL.') {
     super(message);
     this.name = 'ProxyConfigurationError';

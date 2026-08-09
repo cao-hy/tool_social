@@ -17,6 +17,8 @@ import type {
   PlatformComment,
   PublishPostInput,
   PublishResult,
+  PublishReconciliationResult,
+  ReconcilePublishInput,
   SocialAccountProfile,
   PostMetrics,
   SyncCommentsParams,
@@ -181,14 +183,11 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         creationId,
       });
 
-      const publishedMedia = await this.client.getMedia({
-        mediaId: postId,
-        accessToken: ctx.accessToken,
-      });
+      const permalink = await this.lookupPermalinkBestEffort(ctx, postId);
 
       return {
         externalPostId: postId,
-        externalUrl: publishedMedia.permalink ?? `https://www.instagram.com/p/${postId}`,
+        externalUrl: permalink ?? `https://www.instagram.com/p/${postId}`,
         publishedAt: new Date(),
       };
     }
@@ -233,19 +232,47 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         creationId: carouselCreationId,
       });
 
-      const media = await this.client.getMedia({
-        mediaId: postId,
-        accessToken: ctx.accessToken,
-      });
+      const permalink = await this.lookupPermalinkBestEffort(ctx, postId);
 
       return {
         externalPostId: postId,
-        externalUrl: media.permalink ?? `https://www.instagram.com/p/${postId}`,
+        externalUrl: permalink ?? `https://www.instagram.com/p/${postId}`,
         publishedAt: new Date(),
       };
     }
 
     throw new Error('Cần ít nhất một ảnh hoặc video để đăng lên Instagram.');
+  }
+
+  reconcilePublish(
+    _ctx: AdapterContext,
+    _input: ReconcilePublishInput,
+  ): Promise<PublishReconciliationResult> {
+    return Promise.resolve({
+      result: 'INDETERMINATE',
+      reason:
+        'Instagram adapter chưa có đủ content fingerprint/provider request id để đối soát publish tự động đáng tin cậy.',
+    });
+  }
+
+  private async lookupPermalinkBestEffort(
+    ctx: AdapterContext,
+    postId: string,
+  ): Promise<string | undefined> {
+    try {
+      const media = await this.client.getMedia({
+        mediaId: postId,
+        accessToken: ctx.accessToken,
+      });
+      return media.permalink ?? undefined;
+    } catch (error) {
+      ctx.logger?.warn('Instagram permalink lookup failed after publish', {
+        correlationId: ctx.correlationId,
+        postId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private async waitUntilContainerReady(
