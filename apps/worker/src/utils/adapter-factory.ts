@@ -3,6 +3,7 @@ import {
   createDirectFetch,
   ProxyRuntimeService,
   ProxyConfigurationError,
+  ProxyConfigurationChangedError,
 } from '@socialhub/config';
 import { decryptToken, ProxyPolicyService, RedisProxyPolicyCache } from '@socialhub/security';
 import type { PrismaClient } from '@socialhub/db';
@@ -82,6 +83,9 @@ export class WorkerAdapterFactory {
       try {
         await ctx.assertCurrentVersion();
       } catch (error) {
+        if (!(error instanceof ProxyConfigurationChangedError)) {
+          throw error;
+        }
         throw new RemoteRequestError(
           'Proxy configuration changed before outbound request',
           'BEFORE_CONNECT',

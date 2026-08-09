@@ -4,6 +4,7 @@ import {
   createDirectFetch,
   ProxyRuntimeService,
   ProxyConfigurationError,
+  ProxyConfigurationChangedError,
 } from '@socialhub/config';
 import {
   AdapterRegistry,
@@ -79,6 +80,9 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
       try {
         await ctx.assertCurrentVersion();
       } catch (error) {
+        if (!(error instanceof ProxyConfigurationChangedError)) {
+          throw error;
+        }
         throw new RemoteRequestError(
           'Proxy configuration changed before outbound request',
           'BEFORE_CONNECT',

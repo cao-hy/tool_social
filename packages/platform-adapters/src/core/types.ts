@@ -32,6 +32,7 @@ export interface AdapterContext {
   /** Để truy vết một hành động xuyên api → queue → worker → adapter. */
   readonly correlationId: string;
   readonly logger?: AdapterLogger;
+  readonly onRemoteCheckpoint?: (checkpoint: RemotePublishCheckpoint) => Promise<void>;
 }
 
 export interface AdapterLogger {
@@ -39,6 +40,13 @@ export interface AdapterLogger {
   info(message: string, context?: Record<string, unknown>): void;
   warn(message: string, context?: Record<string, unknown>): void;
   error(message: string, context?: Record<string, unknown>): void;
+}
+
+export interface RemotePublishCheckpoint {
+  phase: string;
+  providerRequestId?: string;
+  remotePublishId?: string;
+  remoteMediaId?: string;
 }
 
 export interface TokenSet {
@@ -252,6 +260,7 @@ export interface ReconcilePublishInput {
   publishAttemptId?: string;
   providerRequestId?: string;
   payloadHash?: string;
+  remoteCheckpoint?: RemotePublishCheckpoint;
 }
 
 export type PublishReconciliationResult =

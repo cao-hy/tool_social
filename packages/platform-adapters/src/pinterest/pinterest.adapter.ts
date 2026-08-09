@@ -203,6 +203,10 @@ export class PinterestAdapter implements SocialPlatformAdapter {
       }
 
       const upload = await this.client.registerVideoUpload(ctx.accessToken);
+      await ctx.onRemoteCheckpoint?.({
+        phase: 'VIDEO_UPLOAD_REGISTERED',
+        remoteMediaId: upload.media_id,
+      });
       await this.client.uploadVideoToPinterestStorage({
         uploadUrl: upload.upload_url,
         uploadParameters: upload.upload_parameters,

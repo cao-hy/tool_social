@@ -44,12 +44,14 @@ export interface TikTokDirectVideoPostInput {
   brandContentToggle?: boolean;
   brandOrganicToggle?: boolean;
   isAiGenerated?: boolean;
+  onPublishInitialized?: (publishId: string) => Promise<void>;
 }
 
 export interface TikTokInboxVideoUploadInput {
   accessToken: string;
   bytes: Uint8Array;
   mimeType: string;
+  onPublishInitialized?: (publishId: string) => Promise<void>;
 }
 
 export interface TikTokPhotoPostInput {
@@ -183,6 +185,8 @@ export class TikTokClient {
       throw tiktokUnexpectedPayloadError(new Error('TikTok không trả upload_url.'), init);
     }
 
+    await input.onPublishInitialized?.(init.data.publish_id);
+
     let uploadUrl: string;
     try {
       uploadUrl = requireHttpsUrl(init.data.upload_url, 'TikTok upload_url');
@@ -218,6 +222,8 @@ export class TikTokClient {
     if (!init.data.upload_url) {
       throw tiktokUnexpectedPayloadError(new Error('TikTok không trả upload_url.'), init);
     }
+
+    await input.onPublishInitialized?.(init.data.publish_id);
 
     let uploadUrl: string;
     try {

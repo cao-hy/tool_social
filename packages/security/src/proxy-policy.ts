@@ -86,10 +86,11 @@ export function computeProxyFingerprint(proxyUrl: string, secret: string): strin
   return createHmac('sha256', secret).update(proxyUrl).digest('hex');
 }
 
-function sleepForAttestationRetry(attempt: number): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, 100 * Math.pow(1.3, attempt) + Math.random() * 50),
-  );
+function sleepForAttestationRetry(attempt: number, maxDelayMs?: number): Promise<void> {
+  const delayMs = 100 * Math.pow(1.3, attempt) + Math.random() * 50;
+  const cappedDelayMs =
+    maxDelayMs === undefined ? delayMs : Math.max(0, Math.min(delayMs, maxDelayMs));
+  return new Promise((resolve) => setTimeout(resolve, cappedDelayMs));
 }
 
 export class ProxyPolicyService {
@@ -157,7 +158,7 @@ export class ProxyPolicyService {
       let attempts = 0;
       const deadline = Date.now() + LOCK_TTL;
       while (!locked && Date.now() < deadline) {
-        await sleepForAttestationRetry(attempts++);
+        await sleepForAttestationRetry(attempts++, deadline - Date.now());
         locked = await lock.acquire(lockKey, token, LOCK_TTL);
       }
 
@@ -168,14 +169,14 @@ export class ProxyPolicyService {
 
     if (!locked) {
       let attempts = 0;
-      while (attempts < 15) {
-        await sleepForAttestationRetry(attempts);
+      const deadline = Date.now() + LOCK_TTL;
+      while (Date.now() < deadline) {
+        await sleepForAttestationRetry(attempts++, deadline - Date.now());
         const cached = await this.cache.get(cacheKey);
         if (cached) {
           if (cached.kind === 'FAILURE') throw new Error(cached.safeMessage);
           return cached.attestation;
         }
-        attempts++;
       }
       throw new Error('Timeout waiting for proxy attestation lock');
     }

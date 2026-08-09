@@ -1,10 +1,18 @@
-import type { PrismaClientInstance } from '@socialhub/db';
+import type { Prisma, PrismaClientInstance } from '@socialhub/db';
+import type { RemotePublishCheckpoint } from '@socialhub/platform-adapters';
 import type { Keyring } from '@socialhub/security';
 import type { WorkspacePlatformResolver } from '@socialhub/social-runtime';
 import { deriveContentPostStatus, type PlatformPostStatus } from '@socialhub/shared';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { getFreshAccessToken } from './token-refresh';
+
+class ReconciliationIndeterminateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ReconciliationIndeterminateError';
+  }
+}
 
 const reconcilePayloadSchema = z.object({
   platformPostId: z.string().min(1),
@@ -42,6 +50,18 @@ export function createReconciliationProcessor(input: {
       return { status: 'SKIPPED', currentStatus: post.status };
     }
 
+    if (post.publishAttemptId !== payload.publishAttemptId) {
+      logger.info(
+        {
+          platformPostId: post.id,
+          currentAttemptId: post.publishAttemptId,
+          jobAttemptId: payload.publishAttemptId,
+        },
+        'Bỏ qua reconciliation job của publish attempt cũ',
+      );
+      return { status: 'STALE_ATTEMPT' };
+    }
+
     if (post.reconciliationAttempts >= 5) {
       await input.prisma.platformPost.update({
         where: { id: post.id },
@@ -67,7 +87,12 @@ export function createReconciliationProcessor(input: {
             reconciliationError: 'Platform adapter chưa hỗ trợ đối soát tự động.',
           },
         });
-        return { status: 'INDETERMINATE', reason: 'unsupported_adapter' };
+        if (attempts < 5) {
+          throw new ReconciliationIndeterminateError(
+            'Platform adapter chưa hỗ trợ đối soát tự động.',
+          );
+        }
+        return { status: 'MANUAL_REVIEW_REQUIRED' };
       }
 
       const accessToken = await getFreshAccessToken({
@@ -89,9 +114,12 @@ export function createReconciliationProcessor(input: {
         correlationId: `reconcile:${post.id}:${payload.publishAttemptId}`,
       };
 
+      const remoteCheckpoint = remoteCheckpointFromState(post.platformState);
       const result = await adapter.reconcilePublish(ctx, {
         platformPostId: post.id,
         publishAttemptId: payload.publishAttemptId,
+        providerRequestId: remoteCheckpoint?.providerRequestId,
+        remoteCheckpoint,
       });
 
       if (result.result === 'FOUND') {
@@ -139,8 +167,43 @@ export function createReconciliationProcessor(input: {
           reconciliationError: result.reason,
         },
       });
-      return { status: 'INDETERMINATE', reason: result.reason };
+      if (nextAttempts < 5) {
+        throw new ReconciliationIndeterminateError(
+          result.reason ?? 'Không thể xác định kết quả publish phía nền tảng.',
+        );
+      }
+      return { status: 'MANUAL_REVIEW_REQUIRED', reason: result.reason };
     });
+  };
+}
+
+function remoteCheckpointFromState(
+  platformState: Prisma.JsonValue | null,
+): RemotePublishCheckpoint | undefined {
+  if (!platformState || typeof platformState !== 'object' || Array.isArray(platformState)) {
+    return undefined;
+  }
+  const state = platformState as Record<string, unknown>;
+  const checkpoint = state.remoteCheckpoint;
+  if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) {
+    return undefined;
+  }
+  const checkpointRecord = checkpoint as Record<string, unknown>;
+  if (typeof checkpointRecord.phase !== 'string') return undefined;
+  return {
+    phase: checkpointRecord.phase,
+    providerRequestId:
+      typeof checkpointRecord.providerRequestId === 'string'
+        ? checkpointRecord.providerRequestId
+        : undefined,
+    remotePublishId:
+      typeof checkpointRecord.remotePublishId === 'string'
+        ? checkpointRecord.remotePublishId
+        : undefined,
+    remoteMediaId:
+      typeof checkpointRecord.remoteMediaId === 'string'
+        ? checkpointRecord.remoteMediaId
+        : undefined,
   };
 }
 

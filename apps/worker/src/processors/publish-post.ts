@@ -5,6 +5,7 @@ import {
   type AdapterContext,
   type AdapterLogger,
   type MediaInput,
+  type RemotePublishCheckpoint,
   type SocialPlatformAdapter,
   type TikTokPublishPlatformState,
   type YouTubeVideoPlatformState,
@@ -142,7 +143,13 @@ export function createPublishPostProcessor(input: {
 
       if (isDead) {
         // Cập nhật post thành FAILED để người dùng biết
-        await markFailed(input.prisma, payload.platformPostId, errorCode, decision.reason);
+        const contentPostId = await markFailed(
+          input.prisma,
+          payload.platformPostId,
+          errorCode,
+          decision.reason,
+        );
+        await updateParentStatus(input.prisma, contentPostId);
         throw new UnrecoverableError(decision.reason);
       }
 
@@ -184,6 +191,17 @@ async function publishPlatformPost(
 
   if (platformPost.externalPostId || platformPost.status === 'PUBLISHED') {
     return { published: false, reason: 'already_published' };
+  }
+
+  if (platformPost.status === 'REMOTE_RESULT_UNKNOWN') {
+    logger.warn(
+      {
+        platformPostId: platformPost.id,
+        publishAttemptId: platformPost.publishAttemptId,
+      },
+      'Không publish lại khi remote result chưa được xác định',
+    );
+    return { published: false, reason: 'REMOTE_RESULT_UNKNOWN' };
   }
 
   if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
@@ -327,6 +345,10 @@ async function publishPlatformPost(
         externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
         correlationId: payload.correlationId,
         logger: adapterLogger,
+        onRemoteCheckpoint: async (checkpoint: RemotePublishCheckpoint) => {
+          if (!publishAttemptId) return;
+          await storeRemoteCheckpoint(input.prisma, platformPost.id, publishAttemptId, checkpoint);
+        },
       } satisfies AdapterContext;
 
       publishAttemptId = randomUUID();
@@ -452,6 +474,12 @@ async function publishPlatformPost(
           : 'FAILED';
 
       const targetCode = isRemoteUnknown ? 'REMOTE_RESULT_UNKNOWN' : code;
+      const currentPostState = publishNetworkProof
+        ? await input.prisma.platformPost.findUnique({
+            where: { id: platformPost.id },
+            select: { platformState: true },
+          })
+        : null;
 
       await input.prisma.platformPost.update({
         where: { id: platformPost.id },
@@ -461,26 +489,63 @@ async function publishPlatformPost(
           errorMessage: message,
           platformState: publishNetworkProof
             ? (mergePlatformStateWithNetworkProof(
-                jsonObject(platformPost.platformState),
+                jsonObject(currentPostState?.platformState) ??
+                  jsonObject(platformPost.platformState),
                 publishNetworkProof,
               ) as Prisma.InputJsonValue)
             : undefined,
         },
       });
 
-      if (isRemoteUnknown && input.reconcileQueue && publishAttemptId) {
-        const reconcilePayload = {
-          platformPostId: platformPost.id,
-          workspaceId: payload.workspaceId,
-          publishAttemptId,
-        };
-        const reconcileJobId = buildJobId('reconcile-platform-post', reconcilePayload);
-        await input.reconcileQueue.add('reconcile-platform-post', reconcilePayload, {
-          jobId: reconcileJobId,
-          delay: 60_000,
-          attempts: 5,
-          backoff: { type: 'exponential', delay: 60_000 },
-        });
+      if (isRemoteUnknown) {
+        if (input.reconcileQueue && publishAttemptId) {
+          const reconcilePayload = {
+            platformPostId: platformPost.id,
+            workspaceId: payload.workspaceId,
+            publishAttemptId,
+          };
+          const reconcileJobId = buildJobId('reconcile-platform-post', reconcilePayload);
+          try {
+            await input.reconcileQueue.add('reconcile-platform-post', reconcilePayload, {
+              jobId: reconcileJobId,
+              delay: 60_000,
+              attempts: 5,
+              backoff: { type: 'exponential', delay: 60_000 },
+            });
+          } catch (enqueueError) {
+            logger.error(
+              {
+                err: enqueueError,
+                platformPostId: platformPost.id,
+                publishAttemptId,
+              },
+              'Không thể enqueue reconciliation',
+            );
+            await input.prisma.platformPost.update({
+              where: { id: platformPost.id },
+              data: {
+                requiresManualReview: true,
+                reconciliationError: 'Không thể lên lịch đối soát tự động.',
+              },
+            });
+          }
+        } else {
+          logger.error(
+            {
+              platformPostId: platformPost.id,
+              publishAttemptId,
+              hasReconcileQueue: Boolean(input.reconcileQueue),
+            },
+            'Không thể lên lịch reconciliation cho remote result unknown',
+          );
+          await input.prisma.platformPost.update({
+            where: { id: platformPost.id },
+            data: {
+              requiresManualReview: true,
+              reconciliationError: 'Không thể lên lịch đối soát tự động.',
+            },
+          });
+        }
       }
 
       if (decision.markAccountDisconnected) {
@@ -556,6 +621,38 @@ function mergePlatformStateWithNetworkProof(
     ...(platformState ?? {}),
     publishNetwork,
   };
+}
+
+async function storeRemoteCheckpoint(
+  prisma: PrismaClientInstance,
+  platformPostId: string,
+  publishAttemptId: string,
+  checkpoint: RemotePublishCheckpoint,
+): Promise<void> {
+  try {
+    const current = await prisma.platformPost.findUnique({
+      where: { id: platformPostId },
+      select: { platformState: true },
+    });
+    await prisma.platformPost.update({
+      where: { id: platformPostId },
+      data: {
+        platformState: {
+          ...(jsonObject(current?.platformState) ?? {}),
+          remoteCheckpoint: {
+            ...checkpoint,
+            publishAttemptId,
+            recordedAt: new Date().toISOString(),
+          },
+        } as Prisma.InputJsonValue,
+      },
+    });
+  } catch (error) {
+    logger.warn(
+      { err: error, platformPostId, publishAttemptId },
+      'Không thể lưu remote checkpoint',
+    );
+  }
 }
 
 async function platformStateAfterPublish(
@@ -878,11 +975,13 @@ async function markFailed(
   platformPostId: string,
   code: string,
   message: string,
-): Promise<void> {
-  await prisma.platformPost.update({
+): Promise<string> {
+  const post = await prisma.platformPost.update({
     where: { id: platformPostId },
     data: { status: 'FAILED', errorCode: code, errorMessage: message },
+    select: { contentPostId: true },
   });
+  return post.contentPostId;
 }
 
 async function updateParentStatus(

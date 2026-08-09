@@ -157,6 +157,11 @@ export class TikTokAdapter implements SocialPlatformAdapter {
           accessToken: ctx.accessToken,
           bytes: video.bytes,
           mimeType: video.mimeType,
+          onPublishInitialized: (publishId) =>
+            ctx.onRemoteCheckpoint?.({
+              phase: 'PUBLISH_INITIALIZED',
+              remotePublishId: publishId,
+            }) ?? Promise.resolve(),
         });
       } else {
         const creator = await this.client.queryCreatorInfo(ctx.accessToken);
@@ -177,6 +182,11 @@ export class TikTokAdapter implements SocialPlatformAdapter {
           brandContentToggle: options.brandContentToggle,
           brandOrganicToggle: options.brandOrganicToggle,
           isAiGenerated: options.isAiGenerated,
+          onPublishInitialized: (publishId) =>
+            ctx.onRemoteCheckpoint?.({
+              phase: 'PUBLISH_INITIALIZED',
+              remotePublishId: publishId,
+            }) ?? Promise.resolve(),
         });
       }
     } else {
@@ -203,6 +213,10 @@ export class TikTokAdapter implements SocialPlatformAdapter {
         brandContentToggle: options.brandContentToggle,
         brandOrganicToggle: options.brandOrganicToggle,
         isAiGenerated: options.isAiGenerated,
+      });
+      await ctx.onRemoteCheckpoint?.({
+        phase: 'PUBLISH_INITIALIZED',
+        remotePublishId: init.data.publish_id,
       });
     }
 
