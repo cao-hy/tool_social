@@ -25,6 +25,8 @@ import {
   type YouTubePlaylistItemsResponse,
 } from './youtube.schemas';
 
+const YOUTUBE_UPLOAD_CHUNK_SIZE_BYTES = 8 * 1024 * 1024;
+
 export interface YouTubeClientConfig {
   clientId: string;
   clientSecret: string;
@@ -36,7 +38,9 @@ export interface YouTubeUploadVideoInput {
   title: string;
   description?: string;
   tags?: string[];
-  bytes: Uint8Array;
+  bytes?: Uint8Array;
+  readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
+  sizeBytes: number;
   mimeType: string;
   privacyStatus?: 'public' | 'private' | 'unlisted';
   categoryId?: string;
@@ -190,15 +194,17 @@ export class YouTubeClient {
 
     const sessionUrl = await this.startResumableUpload({
       accessToken: input.accessToken,
-      bytesLength: input.bytes.byteLength,
+      bytesLength: input.sizeBytes,
       mimeType: input.mimeType,
       metadata,
     });
 
-    return this.putUploadBytes({
+    return this.putUploadMedia({
       accessToken: input.accessToken,
       sessionUrl,
       bytes: input.bytes,
+      readRange: input.readRange,
+      sizeBytes: input.sizeBytes,
       mimeType: input.mimeType,
     });
   }
@@ -565,22 +571,81 @@ export class YouTubeClient {
     }
   }
 
-  private async putUploadBytes(input: {
+  private async putUploadMedia(input: {
     accessToken: string;
     sessionUrl: string;
-    bytes: Uint8Array;
+    bytes?: Uint8Array;
+    readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
+    sizeBytes: number;
     mimeType: string;
   }): Promise<YouTubeVideoResponse> {
+    if (input.bytes?.length) {
+      return await this.putUploadChunk({
+        accessToken: input.accessToken,
+        sessionUrl: input.sessionUrl,
+        chunk: input.bytes,
+        mimeType: input.mimeType,
+        contentRange: null,
+      });
+    }
+
+    if (!input.readRange) {
+      throw new Error('YouTube upload missing media bytes/readRange.');
+    }
+
+    for (let start = 0; start < input.sizeBytes; start += YOUTUBE_UPLOAD_CHUNK_SIZE_BYTES) {
+      const endInclusive = Math.min(
+        start + YOUTUBE_UPLOAD_CHUNK_SIZE_BYTES - 1,
+        input.sizeBytes - 1,
+      );
+      const chunk = await input.readRange(start, endInclusive);
+      const response = await this.putUploadChunkResponse({
+        accessToken: input.accessToken,
+        sessionUrl: input.sessionUrl,
+        chunk,
+        mimeType: input.mimeType,
+        contentRange: `bytes ${start}-${endInclusive}/${input.sizeBytes}`,
+      });
+
+      if (response.status === 308) {
+        await discardResponseBody(response);
+        continue;
+      }
+
+      return parseResponse(response, youtubeVideoResponseSchema);
+    }
+
+    throw new Error('YouTube upload missing media bytes/readRange.');
+  }
+
+  private async putUploadChunk(input: {
+    accessToken: string;
+    sessionUrl: string;
+    chunk: Uint8Array;
+    mimeType: string;
+    contentRange: string | null;
+  }): Promise<YouTubeVideoResponse> {
+    return parseResponse(await this.putUploadChunkResponse(input), youtubeVideoResponseSchema);
+  }
+
+  private async putUploadChunkResponse(input: {
+    accessToken: string;
+    sessionUrl: string;
+    chunk: Uint8Array;
+    mimeType: string;
+    contentRange: string | null;
+  }): Promise<Response> {
     let response: Response;
     try {
       response = await this.fetch(input.sessionUrl, {
         method: 'PUT',
         headers: {
           authorization: `Bearer ${input.accessToken}`,
-          'content-length': String(input.bytes.byteLength),
+          'content-length': String(input.chunk.byteLength),
+          ...(input.contentRange ? { 'content-range': input.contentRange } : {}),
           'content-type': input.mimeType,
         },
-        body: input.bytes,
+        body: input.chunk,
         signal: AbortSignal.timeout(600000),
       });
     } catch (error) {
@@ -588,7 +653,7 @@ export class YouTubeClient {
       throw youtubeNetworkError(error);
     }
 
-    return parseResponse(response, youtubeVideoResponseSchema);
+    return response;
   }
 
   private async get<T>(

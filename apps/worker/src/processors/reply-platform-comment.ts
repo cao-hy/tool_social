@@ -62,7 +62,9 @@ export function createReplyPlatformCommentProcessor(input: {
       const isDead = platformError
         ? !platformError.retryable || attempt >= maxAttempts
         : attempt >= maxAttempts;
-      await markReplyFailed(input.prisma, payload, error);
+      if (!(await hasDurableRemoteOutcome(input.prisma, payload.operationId))) {
+        await markReplyFailed(input.prisma, payload, error);
+      }
       let errorCode: string =
         platformError?.kind ?? (error instanceof Error ? error.name : 'UNKNOWN');
       let errorMessage =
@@ -159,6 +161,18 @@ async function replyPlatformComment(
     let ownership: OutboundAttemptOwnership | null = null;
     let result: Awaited<ReturnType<typeof replyToComment>>;
     try {
+      const currentAccount = await input.prisma.socialAccount.findUnique({
+        where: { id: account.id },
+        select: { status: true, disconnectGeneration: true },
+      });
+      if (
+        !currentAccount ||
+        currentAccount.status !== 'CONNECTED' ||
+        currentAccount.disconnectGeneration !== account.disconnectGeneration
+      ) {
+        throw new Error('ACCOUNT_DISCONNECTED');
+      }
+
       const start = await beginOutboundAttempt(input.prisma, payload.operationId);
       if (start.action === 'LOCAL_COMMIT') {
         return await commitReplyLocally(input.prisma, {
@@ -173,6 +187,21 @@ async function replyPlatformComment(
         return { replied: false, reason: start.reason };
       }
       ownership = start.ownership;
+      const accountStillEligible = await input.prisma.socialAccount.findUnique({
+        where: { id: account.id },
+        select: { status: true, disconnectGeneration: true },
+      });
+      if (
+        !accountStillEligible ||
+        accountStillEligible.status !== 'CONNECTED' ||
+        accountStillEligible.disconnectGeneration !== account.disconnectGeneration
+      ) {
+        await rollbackBeforeConnect(input.prisma, ownership, {
+          code: 'ACCOUNT_DISCONNECTED',
+          message: 'Social account disconnected before remote reply dispatch.',
+        });
+        return { replied: false, reason: 'account_disconnected' };
+      }
       result = await replyToComment(
         {
           accessToken,
@@ -356,6 +385,25 @@ async function markReplyFailed(
       },
     })
     .catch(() => undefined);
+}
+
+async function hasDurableRemoteOutcome(
+  prisma: PrismaClientInstance,
+  operationId: string | undefined,
+): Promise<boolean> {
+  if (!operationId) return false;
+  const operation = await prisma.outboundOperation
+    .findUnique({
+      where: { id: operationId },
+      select: { state: true },
+    })
+    .catch(() => null);
+  return (
+    operation?.state === 'REMOTE_CONFIRMED' ||
+    operation?.state === 'REMOTE_UNKNOWN' ||
+    operation?.state === 'LOCAL_COMMITTED' ||
+    operation?.state === 'MANUAL_REVIEW'
+  );
 }
 
 async function markJob(

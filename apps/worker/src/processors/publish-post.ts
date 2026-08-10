@@ -300,7 +300,9 @@ async function publishPlatformPost(
       const media = await Promise.all(
         sourceMedia
           .filter((item) => item.mediaAsset.status === 'READY')
-          .map((item) => mediaInputFromAsset(input.storage, item.mediaAsset)),
+          .map((item) =>
+            mediaInputFromAsset(input.storage, item.mediaAsset, platformPost.platform),
+          ),
       );
       const thumbnail = await thumbnailInputFromOptions({
         storage: input.storage,
@@ -376,8 +378,8 @@ async function publishPlatformPost(
         correlationId: payload.correlationId,
         logger: adapterLogger,
         onRemoteCheckpoint: async (checkpoint: RemotePublishCheckpoint) => {
-          if (!publishAttemptId) return;
-          await storeRemoteCheckpoint(input.prisma, platformPost.id, publishAttemptId, checkpoint);
+          if (!operationOwnership) return;
+          await storeRemoteCheckpoint(input.prisma, operationOwnership, checkpoint);
         },
       } satisfies AdapterContext;
 
@@ -386,6 +388,26 @@ async function publishPlatformPost(
         platformPost,
         payload.operationId,
       );
+
+      const currentAccount = await input.prisma.socialAccount.findUnique({
+        where: { id: platformPost.socialAccountId },
+        select: { status: true, disconnectGeneration: true },
+      });
+      if (
+        !currentAccount ||
+        currentAccount.status !== 'CONNECTED' ||
+        currentAccount.disconnectGeneration !== platformPost.socialAccount.disconnectGeneration
+      ) {
+        await markFailed(
+          input.prisma,
+          platformPost.id,
+          'ACCOUNT_DISCONNECTED',
+          'Social account disconnected during preparation.',
+        );
+        await updateParentStatus(input.prisma, platformPost.contentPostId);
+        return { published: false, reason: 'account_disconnected' };
+      }
+
       const startOperation = await beginOutboundAttempt(input.prisma, operationId);
       if (startOperation.action === 'LOCAL_COMMIT') {
         return await commitPublishLocally(input.prisma, {
@@ -399,6 +421,31 @@ async function publishPlatformPost(
         return { published: false, reason: startOperation.reason };
       }
       operationOwnership = startOperation.ownership;
+
+      const accountStillEligible = await input.prisma.socialAccount.findUnique({
+        where: { id: platformPost.socialAccountId },
+        select: { status: true, disconnectGeneration: true },
+      });
+      if (
+        !accountStillEligible ||
+        accountStillEligible.status !== 'CONNECTED' ||
+        accountStillEligible.disconnectGeneration !==
+          platformPost.socialAccount.disconnectGeneration
+      ) {
+        await rollbackBeforeConnect(input.prisma, operationOwnership, {
+          code: 'ACCOUNT_DISCONNECTED',
+          message: 'Social account disconnected before remote publish dispatch.',
+        });
+        await markFailed(
+          input.prisma,
+          platformPost.id,
+          'ACCOUNT_DISCONNECTED',
+          'Social account disconnected before remote publish dispatch.',
+        );
+        await updateParentStatus(input.prisma, platformPost.contentPostId);
+        return { published: false, reason: 'account_disconnected' };
+      }
+
       publishAttemptId = operationOwnership.attemptId || randomUUID();
       await input.prisma.platformPost.update({
         where: { id: platformPost.id },
@@ -410,18 +457,18 @@ async function publishPlatformPost(
       });
 
       publishNetworkProof = buildPublishNetworkProof({
-        egressPolicy: adaptersContext.proxy.egressPolicy,
-        proxyEnabled: adaptersContext.proxy.config.enabled,
-        proxyActive: Boolean(adaptersContext.proxy.attestation),
-        configVersion: adaptersContext.proxy.configVersion,
-        proxyFingerprint: adaptersContext.proxy.routeFingerprint,
-        countryLock: adaptersContext.proxy.config.countryLock ?? null,
-        countryLockSatisfied: adaptersContext.proxy.config.countryLock
+        egressPolicy: adaptersContext.proxy?.egressPolicy ?? null,
+        proxyEnabled: adaptersContext.proxy?.config.enabled ?? null,
+        proxyActive: adaptersContext.proxy ? Boolean(adaptersContext.proxy.attestation) : null,
+        configVersion: adaptersContext.proxy?.configVersion ?? null,
+        proxyFingerprint: adaptersContext.proxy?.routeFingerprint ?? null,
+        countryLock: adaptersContext.proxy?.config.countryLock ?? null,
+        countryLockSatisfied: adaptersContext.proxy?.config.countryLock
           ? adaptersContext.proxy.attestation?.countryCode ===
             adaptersContext.proxy.config.countryLock
           : null,
-        attestation: adaptersContext.proxy.attestation,
-        checkOk: adaptersContext.proxy.attestation ? true : null,
+        attestation: adaptersContext.proxy?.attestation ?? null,
+        checkOk: adaptersContext.proxy?.attestation ? true : null,
       });
 
       const result = await adapter.publishPost(adapterContext, publishInput);
@@ -506,6 +553,7 @@ async function publishPlatformPost(
       const decision = decideOnError(error, attempt, maxAttempts);
       const isRemoteUnknown =
         (remoteReturnedSuccess && !remoteConfirmationPersisted) ||
+        error instanceof RemoteCheckpointPersistenceError ||
         (error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
         (isPlatformError(error) && error.kind === 'NETWORK');
 
@@ -841,27 +889,38 @@ async function loadPublishCheckpoint(
 
 async function storeRemoteCheckpoint(
   prisma: PrismaClientInstance,
-  platformPostId: string,
-  publishAttemptId: string,
+  ownership: OutboundAttemptOwnership,
   checkpoint: RemotePublishCheckpoint,
 ): Promise<void> {
-  const current = await prisma.platformPost.findUnique({
-    where: { id: platformPostId },
-    select: { platformState: true },
-  });
-  await prisma.platformPost.update({
-    where: { id: platformPostId },
+  const recordedAt = new Date().toISOString();
+  const updated = await prisma.outboundOperation.updateMany({
+    where: {
+      id: ownership.operationId,
+      state: 'DISPATCHING',
+      attemptId: ownership.attemptId,
+      fence: ownership.fence,
+    },
     data: {
-      platformState: {
-        ...(jsonObject(current?.platformState) ?? {}),
-        remoteCheckpoint: {
-          ...checkpoint,
-          publishAttemptId,
-          recordedAt: new Date().toISOString(),
-        },
+      remoteCheckpoint: {
+        ...checkpoint,
+        operationId: ownership.operationId,
+        attemptId: ownership.attemptId,
+        fence: ownership.fence,
+        recordedAt,
       } as Prisma.InputJsonValue,
     },
   });
+
+  if (updated.count === 0) {
+    throw new RemoteCheckpointPersistenceError();
+  }
+}
+
+class RemoteCheckpointPersistenceError extends Error {
+  constructor() {
+    super('Checkpoint persistence failed after provider initialized remote state');
+    this.name = 'RemoteCheckpointPersistenceError';
+  }
 }
 
 async function platformStateAfterPublish(
@@ -1075,7 +1134,24 @@ async function readObjectBytes(client: S3Client, bucket: string, key: string): P
   return new Uint8Array((await object.Body?.transformToByteArray()) ?? []);
 }
 
-async function mediaInputFromAsset(
+async function readObjectRange(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  start: number,
+  endInclusive: number,
+): Promise<Uint8Array> {
+  const object = await client.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Range: `bytes=${start}-${endInclusive}`,
+    }),
+  );
+  return new Uint8Array((await object.Body?.transformToByteArray()) ?? []);
+}
+
+export async function mediaInputFromAsset(
   storage: { client: S3Client; bucket: string; publicBaseUrl?: string },
   mediaAsset: {
     type: unknown;
@@ -1086,16 +1162,29 @@ async function mediaInputFromAsset(
     height: number | null;
     durationSec: number | null;
   },
+  platform?: Platform,
 ): Promise<MediaInput> {
-  return {
+  const base = {
     type: mediaAsset.type as MediaType,
     url: publicMediaUrl(storage.publicBaseUrl, storage.bucket, mediaAsset.storageKey),
-    bytes: await readObjectBytes(storage.client, storage.bucket, mediaAsset.storageKey),
     mimeType: mediaAsset.mimeType ?? 'application/octet-stream',
     sizeBytes: mediaAsset.sizeBytes ?? 0,
     width: mediaAsset.width ?? undefined,
     height: mediaAsset.height ?? undefined,
     durationSec: mediaAsset.durationSec ?? undefined,
+  };
+
+  if ((platform === 'TIKTOK' || platform === 'YOUTUBE') && mediaAsset.type === 'VIDEO') {
+    return {
+      ...base,
+      readRange: (start, endInclusive) =>
+        readObjectRange(storage.client, storage.bucket, mediaAsset.storageKey, start, endInclusive),
+    };
+  }
+
+  return {
+    ...base,
+    bytes: await readObjectBytes(storage.client, storage.bucket, mediaAsset.storageKey),
   };
 }
 

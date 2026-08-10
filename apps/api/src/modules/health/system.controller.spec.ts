@@ -25,7 +25,7 @@ function controllerWithPrisma(prisma: Record<string, unknown>) {
 }
 
 describe('SystemController proxy policy persistence', () => {
-  it('enable proxy persists Workspace.socialEgressPolicy = PROXY_REQUIRED in the same transaction', async () => {
+  it('T32 enable proxy persists Workspace.socialEgressPolicy = PROXY_REQUIRED in the same transaction', async () => {
     const workspaceUpdate = vi.fn();
     const createdSetting = {
       workspaceId: 'workspace_1',

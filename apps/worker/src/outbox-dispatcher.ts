@@ -43,7 +43,7 @@ export function startOutboxDispatcher(input: {
         claimLeaseMs,
       });
       for (const event of events) {
-        await dispatchEvent(input.prisma, input.registry, event);
+        await dispatchClaimedOutboxEvent(input.prisma, input.registry, event);
       }
     } catch (err) {
       logger.error({ err }, 'Outbox dispatcher tick failed');
@@ -89,7 +89,7 @@ async function claimPendingEvents(
   });
 }
 
-async function dispatchEvent(
+export async function dispatchClaimedOutboxEvent(
   prisma: PrismaClientInstance,
   registry: QueueRegistry,
   event: ClaimedOutboxEvent,

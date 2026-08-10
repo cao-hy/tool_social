@@ -14,7 +14,7 @@ describe('SocialAccountsService disconnect safety', () => {
     vi.clearAllMocks();
   });
 
-  it('marks DISCONNECTING before queue cleanup and still blocks dispatch if cleanup fails', async () => {
+  it('T41 marks DISCONNECTING before queue cleanup and still blocks dispatch if cleanup fails', async () => {
     const keyring = Keyring.fromEnv(`v1:${Keyring.generateKey()}`, 'v1');
     const access = encryptToken('access-token', keyring);
     const revokeToken = vi.fn();

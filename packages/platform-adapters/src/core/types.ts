@@ -116,6 +116,7 @@ export interface MediaInput {
    * Bắt buộc với storage private/local vì nền tảng không thể fetch URL nội bộ.
    */
   bytes?: Uint8Array;
+  readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
   mimeType: string;
   sizeBytes: number;
   width?: number;

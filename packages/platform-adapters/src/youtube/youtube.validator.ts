@@ -34,10 +34,10 @@ export function validateYouTubePost(input: PublishPostInput): ValidationResult {
     });
   }
 
-  if (video && !video.bytes?.length) {
+  if (video && !video.bytes?.length && !video.readRange) {
     issues.push({
       field: 'media.video',
-      message: 'YouTube cần bytes từ storage để upload video trực tiếp lên API.',
+      message: 'YouTube cần bytes hoặc readRange từ storage để upload video trực tiếp lên API.',
     });
   }
 

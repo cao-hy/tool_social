@@ -166,7 +166,9 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
     }
 
     const video = input.media.find((item) => item.type === 'VIDEO');
-    if (!video?.bytes?.length) throw new Error('YouTube cần bytes video từ storage để upload.');
+    if (!video || (!video.bytes?.length && !video.readRange)) {
+      throw new Error('YouTube cần bytes hoặc readRange video từ storage để upload.');
+    }
 
     const options = youtubePublishOptions(input.options);
     const result = await this.client.uploadVideo({
@@ -175,6 +177,8 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
       description: input.description ?? input.caption,
       tags: input.hashtags?.map((tag) => tag.replace(/^#/, '')).filter(Boolean),
       bytes: video.bytes,
+      readRange: video.readRange,
+      sizeBytes: video.sizeBytes,
       mimeType: video.mimeType,
       privacyStatus: options.privacyStatus,
       categoryId: options.categoryId,

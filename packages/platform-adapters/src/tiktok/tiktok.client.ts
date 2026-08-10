@@ -34,7 +34,9 @@ export interface TikTokClientConfig {
 export interface TikTokDirectVideoPostInput {
   accessToken: string;
   title?: string;
-  bytes: Uint8Array;
+  bytes?: Uint8Array;
+  sizeBytes: number;
+  readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
   mimeType: string;
   privacyLevel: string;
   disableComment?: boolean;
@@ -49,7 +51,9 @@ export interface TikTokDirectVideoPostInput {
 
 export interface TikTokInboxVideoUploadInput {
   accessToken: string;
-  bytes: Uint8Array;
+  bytes?: Uint8Array;
+  sizeBytes: number;
+  readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
   mimeType: string;
   onPublishInitialized?: (publishId: string) => Promise<void>;
 }
@@ -155,7 +159,7 @@ export class TikTokClient {
   }
 
   async directPostVideo(input: TikTokDirectVideoPostInput): Promise<TikTokPublishInitResponse> {
-    const uploadPlan = createUploadPlan(input.bytes.byteLength);
+    const uploadPlan = createUploadPlan(input.sizeBytes);
     const init = await this.postJson(
       '/v2/post/publish/video/init/',
       {
@@ -172,7 +176,7 @@ export class TikTokClient {
         },
         source_info: {
           source: 'FILE_UPLOAD',
-          video_size: input.bytes.byteLength,
+          video_size: input.sizeBytes,
           chunk_size: uploadPlan.chunkSize,
           total_chunk_count: uploadPlan.totalChunkCount,
         },
@@ -196,6 +200,8 @@ export class TikTokClient {
     await this.uploadChunks({
       uploadUrl,
       bytes: input.bytes,
+      sizeBytes: input.sizeBytes,
+      readRange: input.readRange,
       mimeType: input.mimeType,
       uploadPlan,
     });
@@ -204,13 +210,13 @@ export class TikTokClient {
   }
 
   async uploadVideoToInbox(input: TikTokInboxVideoUploadInput): Promise<TikTokPublishInitResponse> {
-    const uploadPlan = createUploadPlan(input.bytes.byteLength);
+    const uploadPlan = createUploadPlan(input.sizeBytes);
     const init = await this.postJson(
       '/v2/post/publish/inbox/video/init/',
       {
         source_info: {
           source: 'FILE_UPLOAD',
-          video_size: input.bytes.byteLength,
+          video_size: input.sizeBytes,
           chunk_size: uploadPlan.chunkSize,
           total_chunk_count: uploadPlan.totalChunkCount,
         },
@@ -234,6 +240,8 @@ export class TikTokClient {
     await this.uploadChunks({
       uploadUrl,
       bytes: input.bytes,
+      sizeBytes: input.sizeBytes,
+      readRange: input.readRange,
       mimeType: input.mimeType,
       uploadPlan,
     });
@@ -319,18 +327,23 @@ export class TikTokClient {
 
   private async uploadChunks(input: {
     uploadUrl: string;
-    bytes: Uint8Array;
+    bytes?: Uint8Array;
+    sizeBytes: number;
+    readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
     mimeType: string;
     uploadPlan: UploadPlan;
   }): Promise<void> {
-    const total = input.bytes.byteLength;
+    const total = input.sizeBytes;
     for (let index = 0; index < input.uploadPlan.totalChunkCount; index += 1) {
       const firstByte = index * input.uploadPlan.chunkSize;
       const lastByte =
         index === input.uploadPlan.totalChunkCount - 1
           ? total - 1
           : firstByte + input.uploadPlan.chunkSize - 1;
-      const chunk = input.bytes.slice(firstByte, lastByte + 1);
+      const chunk = input.readRange
+        ? await input.readRange(firstByte, lastByte)
+        : input.bytes?.slice(firstByte, lastByte + 1);
+      if (!chunk) throw new Error('TikTok upload missing media bytes/readRange.');
 
       let response: Response;
       try {

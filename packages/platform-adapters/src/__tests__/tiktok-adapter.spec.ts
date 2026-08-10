@@ -361,6 +361,92 @@ describe('TikTokAdapter', () => {
     });
   });
 
+  it('reconcile TikTok publish_id thành FOUND khi status trả public post id', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/post/publish/status/fetch/') {
+        return jsonResponse({
+          data: {
+            status: 'PUBLISH_COMPLETE',
+            publicaly_available_post_id: ['public-video-1'],
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new TikTokAdapter({
+      fetch: testFetch,
+      clientKey: 'tt-key',
+      clientSecret: 'tt-secret',
+    });
+
+    await expect(
+      adapter.reconcilePublish(
+        {
+          accessToken: 'tt-access',
+          externalAccountId: 'creator',
+          correlationId: 'reconcile',
+        },
+        {
+          platformPostId: 'platform-post-1',
+          remoteCheckpoint: {
+            phase: 'PUBLISH_INITIALIZED',
+            remotePublishId: 'v_pub_file~123',
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      result: 'FOUND',
+      remotePostId: 'public-video-1',
+    });
+  });
+
+  it('reconcile TikTok ambiguous/terminal status stays INDETERMINATE, never guessed absent', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/post/publish/status/fetch/') {
+        return jsonResponse({
+          data: {
+            status: 'FAILED',
+            fail_reason: 'provider still has no public object evidence',
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new TikTokAdapter({
+      fetch: testFetch,
+      clientKey: 'tt-key',
+      clientSecret: 'tt-secret',
+    });
+
+    await expect(
+      adapter.reconcilePublish(
+        {
+          accessToken: 'tt-access',
+          externalAccountId: 'creator',
+          correlationId: 'reconcile',
+        },
+        {
+          platformPostId: 'platform-post-1',
+          remoteCheckpoint: {
+            phase: 'PUBLISH_INITIALIZED',
+            remotePublishId: 'v_pub_file~123',
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      result: 'INDETERMINATE',
+      reason: expect.stringContaining('FAILED'),
+    });
+  });
+
   it('chặn bài TikTok không đúng 1 video', () => {
     const adapter = new TikTokAdapter({
       fetch: testFetch,

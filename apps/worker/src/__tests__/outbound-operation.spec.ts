@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaClientInstance } from '@socialhub/db';
-import { beginOutboundAttempt, markRemoteUnknown } from '../processors/outbound-operation';
+import {
+  beginOutboundAttempt,
+  markRemoteUnknown,
+  rollbackBeforeConnect,
+} from '../processors/outbound-operation';
 
 function prismaWithOperation(operation: {
   id: string;
@@ -101,6 +105,40 @@ describe('outbound operation fencing', () => {
         requiresManualReview: true,
         lastErrorCode: 'REMOTE_RESULT_UNKNOWN',
       }),
+    });
+  });
+
+  it('re-reads durable state when BEFORE_CONNECT rollback CAS loses', async () => {
+    const prisma = {
+      outboundOperation: {
+        updateMany: vi.fn(async () => ({ count: 0 })),
+        findUnique: vi.fn(async () => ({
+          id: 'op_3',
+          state: 'REMOTE_UNKNOWN',
+          attemptId: 'attempt_newer',
+          fence: 4,
+        })),
+      },
+    } as unknown as PrismaClientInstance;
+
+    await expect(
+      rollbackBeforeConnect(
+        prisma,
+        { operationId: 'op_3', attemptId: 'attempt_old', fence: 3 },
+        { code: 'SENDING_HEADERS', message: 'socket closed before connect' },
+      ),
+    ).resolves.toBe(false);
+
+    expect(prisma.outboundOperation.updateMany).toHaveBeenCalledWith({
+      where: { id: 'op_3', state: 'DISPATCHING', attemptId: 'attempt_old', fence: 3 },
+      data: expect.objectContaining({
+        state: 'PREPARED',
+        attemptId: null,
+      }),
+    });
+    expect(prisma.outboundOperation.findUnique).toHaveBeenCalledWith({
+      where: { id: 'op_3' },
+      select: { id: true, state: true, attemptId: true, fence: true },
     });
   });
 });

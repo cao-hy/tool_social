@@ -164,6 +164,18 @@ async function createPlatformComment(
     let ownership: OutboundAttemptOwnership | null = null;
     let result: Awaited<ReturnType<typeof createComment>>;
     try {
+      const currentAccount = await input.prisma.socialAccount.findUnique({
+        where: { id: account.id },
+        select: { status: true, disconnectGeneration: true },
+      });
+      if (
+        !currentAccount ||
+        currentAccount.status !== 'CONNECTED' ||
+        currentAccount.disconnectGeneration !== account.disconnectGeneration
+      ) {
+        throw new Error('ACCOUNT_DISCONNECTED');
+      }
+
       const start = await beginOutboundAttempt(input.prisma, payload.operationId);
       if (start.action === 'LOCAL_COMMIT') {
         return await commitCreateCommentLocally(input.prisma, {
@@ -177,6 +189,21 @@ async function createPlatformComment(
         return { created: false, reason: start.reason };
       }
       ownership = start.ownership;
+      const accountStillEligible = await input.prisma.socialAccount.findUnique({
+        where: { id: account.id },
+        select: { status: true, disconnectGeneration: true },
+      });
+      if (
+        !accountStillEligible ||
+        accountStillEligible.status !== 'CONNECTED' ||
+        accountStillEligible.disconnectGeneration !== account.disconnectGeneration
+      ) {
+        await rollbackBeforeConnect(input.prisma, ownership, {
+          code: 'ACCOUNT_DISCONNECTED',
+          message: 'Social account disconnected before remote comment dispatch.',
+        });
+        return { created: false, reason: 'account_disconnected' };
+      }
       result = await createComment(
         {
           accessToken,

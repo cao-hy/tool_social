@@ -150,12 +150,16 @@ export class TikTokAdapter implements SocialPlatformAdapter {
 
     let init;
     if (video) {
-      if (!video.bytes?.length) throw new Error('TikTok cần bytes video từ storage để upload.');
+      if (!video.bytes?.length && !video.readRange) {
+        throw new Error('TikTok cần bytes hoặc readRange video từ storage để upload.');
+      }
 
       if (options.postMode === 'MEDIA_UPLOAD') {
         init = await this.client.uploadVideoToInbox({
           accessToken: ctx.accessToken,
           bytes: video.bytes,
+          sizeBytes: video.sizeBytes,
+          readRange: video.readRange,
           mimeType: video.mimeType,
           onPublishInitialized: (publishId) =>
             ctx.onRemoteCheckpoint?.({
@@ -173,6 +177,8 @@ export class TikTokAdapter implements SocialPlatformAdapter {
           accessToken: ctx.accessToken,
           title: caption || undefined,
           bytes: video.bytes,
+          sizeBytes: video.sizeBytes,
+          readRange: video.readRange,
           mimeType: video.mimeType,
           privacyLevel,
           disableComment: options.disableComment || (creator.data.comment_disabled ?? false),
@@ -227,15 +233,41 @@ export class TikTokAdapter implements SocialPlatformAdapter {
     };
   }
 
-  reconcilePublish(
-    _ctx: AdapterContext,
-    _input: ReconcilePublishInput,
+  async reconcilePublish(
+    ctx: AdapterContext,
+    input: ReconcilePublishInput,
   ): Promise<PublishReconciliationResult> {
-    return Promise.resolve({
+    const publishId = input.remoteCheckpoint?.remotePublishId;
+    if (!publishId) {
+      return {
+        result: 'INDETERMINATE',
+        reason: 'TikTok reconciliation thiếu publish_id bền vững từ provider.',
+      };
+    }
+
+    const status = await this.client.fetchPublishStatus(ctx.accessToken, publishId);
+    const publicIds = status.data.publicaly_available_post_id?.map(String).filter(Boolean) ?? [];
+    if (publicIds.length > 0) {
+      const remotePostId = publicIds[0];
+      if (!remotePostId) {
+        return {
+          result: 'INDETERMINATE',
+          reason: `TikTok publish ${publishId} trả public post id rỗng.`,
+        };
+      }
+      return {
+        result: 'FOUND',
+        remotePostId,
+        remoteUrl: `https://www.tiktok.com/@${ctx.externalAccountId}/video/${remotePostId}`,
+      };
+    }
+
+    return {
       result: 'INDETERMINATE',
-      reason:
-        'TikTok adapter chưa có đủ content fingerprint/provider request id để đối soát publish tự động đáng tin cậy.',
-    });
+      reason: status.data.fail_reason
+        ? `TikTok publish ${publishId} chưa xác nhận public post: ${status.data.status} (${status.data.fail_reason})`
+        : `TikTok publish ${publishId} chưa xác nhận public post: ${status.data.status}`,
+    };
   }
 
   async getPublishPlatformState(

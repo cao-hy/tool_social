@@ -126,29 +126,44 @@ export class WebhooksService implements OnModuleDestroy {
           select: { id: true },
         });
         if (existing) {
-          const payload = { webhookEventId: existing.id };
-          const jobId = buildJobId('process-webhook', payload);
-          const outboxPayload = {
-            queueName: 'process-webhook',
-            jobName: 'process-webhook',
-            jobId,
-            payload,
-            options: buildQueueJobOptions('process-webhook', jobId),
-          } as unknown as Prisma.InputJsonValue;
-
-          await this.prisma.outboxEvent.create({
-            data: {
-              topic: 'process-webhook',
-              aggregateType: 'WebhookEvent',
-              aggregateId: existing.id,
-              payload: outboxPayload,
-            },
-          });
+          await this.ensureWebhookProcessingIntent(existing.id);
         }
         return { accepted: true, duplicate: true };
       }
       throw error;
     }
+  }
+
+  private async ensureWebhookProcessingIntent(webhookEventId: string): Promise<void> {
+    const existingIntent = await this.prisma.outboxEvent.findFirst({
+      where: {
+        topic: 'process-webhook',
+        aggregateType: 'WebhookEvent',
+        aggregateId: webhookEventId,
+        dispatchedAt: null,
+      },
+      select: { id: true },
+    });
+    if (existingIntent) return;
+
+    const payload = { webhookEventId };
+    const jobId = buildJobId('process-webhook', payload);
+    const outboxPayload = {
+      queueName: 'process-webhook',
+      jobName: 'process-webhook',
+      jobId,
+      payload,
+      options: buildQueueJobOptions('process-webhook', jobId),
+    } as unknown as Prisma.InputJsonValue;
+
+    await this.prisma.outboxEvent.create({
+      data: {
+        topic: 'process-webhook',
+        aggregateType: 'WebhookEvent',
+        aggregateId: webhookEventId,
+        payload: outboxPayload,
+      },
+    });
   }
 
   private verifyTokenFor(platform: Platform): string | undefined {

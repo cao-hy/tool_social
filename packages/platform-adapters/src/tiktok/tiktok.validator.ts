@@ -47,10 +47,10 @@ export function validateTikTokPost(input: PublishPostInput): ValidationResult {
       });
     }
 
-    if (!video.bytes?.length) {
+    if (!video.bytes?.length && !video.readRange) {
       issues.push({
         field: 'media.video',
-        message: 'TikTok cần bytes từ storage để upload video trực tiếp.',
+        message: 'TikTok cần bytes hoặc readRange từ storage để upload video trực tiếp.',
       });
     }
 

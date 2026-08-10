@@ -269,7 +269,7 @@ describe('createReconciliationProcessor', () => {
     expect(platformResolver.withWorkspace).not.toHaveBeenCalled();
   });
 
-  it('discard stale reconciliation result when operation fence changed', async () => {
+  it('T22 discard stale reconciliation result when operation fence changed', async () => {
     const { processor, prisma } = createHarness({
       reconcilePublish: vi.fn(async () => ({
         result: 'FOUND' as const,

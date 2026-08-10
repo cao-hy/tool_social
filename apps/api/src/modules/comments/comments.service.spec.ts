@@ -126,4 +126,96 @@ describe('CommentsService', () => {
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(commentAssignmentUpsert).not.toHaveBeenCalled();
   });
+
+  it('T19 two distinct top-level comment intents create two commands, operations, and job identities', async () => {
+    const platformPost = {
+      id: 'platform_post_1',
+      workspaceId: 'workspace_1',
+      platform: 'YOUTUBE',
+      status: 'PUBLISHED',
+      externalPostId: 'remote_post_1',
+      socialAccountId: 'account_1',
+      socialAccount: {
+        id: 'account_1',
+        status: 'CONNECTED',
+        token: { accessToken: 'encrypted' },
+        scopes: ['https://www.googleapis.com/auth/youtube.force-ssl'],
+      },
+      contentPost: {},
+    };
+    const createdCommands: Array<{ id: string }> = [];
+    const outboxEvents = new Map<string, unknown>();
+    const operationUpsert = vi.fn(async ({ create }) => ({
+      id: `operation_${create.resourceId}`,
+      ...create,
+    }));
+    const outboxCreate = vi.fn(async ({ data }) => {
+      const id = `outbox_${data.aggregateId}`;
+      const event = { id, ...data };
+      outboxEvents.set(id, event);
+      return event;
+    });
+    const tx = {
+      commentCreateCommand: {
+        create: vi.fn(async ({ data }) => {
+          const command = { id: `command_${createdCommands.length + 1}`, ...data };
+          createdCommands.push(command);
+          return command;
+        }),
+      },
+      outboundOperation: { upsert: operationUpsert },
+      backgroundJob: {
+        upsert: vi.fn(async ({ create }) => ({ id: `bg_${create.jobId}`, ...create })),
+      },
+      outboxEvent: { create: outboxCreate },
+    };
+    const prismaForCreate = {
+      platformPost: { findFirst: vi.fn(async () => platformPost) },
+      outboxEvent: {
+        findUnique: vi.fn(async ({ where }) => outboxEvents.get(where.id)),
+        update: vi.fn(async () => ({})),
+      },
+      $transaction: vi.fn(async (fn) => fn(tx)),
+    };
+    const adapter = { createComment: vi.fn() };
+    const service = new CommentsService(
+      prismaForCreate as never,
+      redis,
+      audit,
+      {
+        withWorkspace: vi.fn(async (_workspaceId, fn) =>
+          fn({ adapters: { requireCapability: vi.fn(() => adapter) } as never }),
+        ),
+      } as never,
+      keyring,
+    );
+
+    await service.createPlatformComment(
+      'workspace_1',
+      'platform_post_1',
+      'user_1',
+      { message: 'same text' },
+      { requestId: 'req_1' },
+    );
+    await service.createPlatformComment(
+      'workspace_1',
+      'platform_post_1',
+      'user_1',
+      { message: 'same text' },
+      { requestId: 'req_2' },
+    );
+
+    expect(tx.commentCreateCommand.create).toHaveBeenCalledTimes(2);
+    expect(operationUpsert).toHaveBeenCalledTimes(2);
+    expect(operationUpsert.mock.calls.map((call) => call[0].create.resourceId)).toEqual([
+      'command_1',
+      'command_2',
+    ]);
+    expect(outboxCreate).toHaveBeenCalledTimes(2);
+    const payloads = outboxCreate.mock.calls.map((call) => call[0].data.payload);
+    expect(payloads.map((payload) => payload.jobId)).toEqual([
+      'create-platform-comment-outbound-operation_command_1',
+      'create-platform-comment-outbound-operation_command_2',
+    ]);
+  });
 });

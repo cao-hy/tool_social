@@ -120,7 +120,13 @@ export async function rollbackBeforeConnect(
       lastErrorMessage: input.message,
     },
   });
-  return updated.count === 1;
+  if (updated.count === 1) return true;
+
+  await prisma.outboundOperation.findUnique({
+    where: { id: ownership.operationId },
+    select: { id: true, state: true, attemptId: true, fence: true },
+  });
+  return false;
 }
 
 export async function markRemoteUnknown(

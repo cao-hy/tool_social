@@ -178,6 +178,94 @@ describe('YouTubeAdapter', () => {
     });
   });
 
+  it('uploads large YouTube video with bounded readRange chunks instead of full-buffer bytes', async () => {
+    const chunkSize = 8 * 1024 * 1024;
+    const totalBytes = chunkSize * 2 + 5;
+    const expectedRanges = [
+      [0, chunkSize - 1],
+      [chunkSize, chunkSize * 2 - 1],
+      [chunkSize * 2, totalBytes - 1],
+    ];
+    let uploadChunk = 0;
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/upload/youtube/v3/videos' && init?.method === 'POST') {
+        expect(init.headers).toMatchObject({
+          authorization: 'Bearer youtube-access',
+          'x-upload-content-length': String(totalBytes),
+          'x-upload-content-type': 'video/mp4',
+        });
+        return new Response(null, {
+          status: 200,
+          headers: { location: 'https://upload.youtube.test/session-large' },
+        });
+      }
+      if (url.href === 'https://upload.youtube.test/session-large') {
+        const [start, end] = expectedRanges[uploadChunk] as [number, number];
+        expect(init?.method).toBe('PUT');
+        expect(init?.headers).toMatchObject({
+          authorization: 'Bearer youtube-access',
+          'content-length': String(end - start + 1),
+          'content-range': `bytes ${start}-${end}/${totalBytes}`,
+          'content-type': 'video/mp4',
+        });
+        expect((init?.body as Uint8Array).byteLength).toBe(end - start + 1);
+        uploadChunk += 1;
+        if (uploadChunk < expectedRanges.length) {
+          return new Response(null, {
+            status: 308,
+            headers: { range: `bytes=0-${end}` },
+          });
+        }
+        return jsonResponse(
+          {
+            id: 'video-large-1',
+            status: { uploadStatus: 'uploaded', privacyStatus: 'public' },
+          },
+          { status: 201 },
+        );
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const readRange = vi.fn(async (start: number, endInclusive: number) => {
+      return new Uint8Array(endInclusive - start + 1);
+    });
+
+    const adapter = new YouTubeAdapter({
+      fetch: testFetch,
+      clientId: 'youtube-client',
+      clientSecret: 'youtube-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'youtube-access',
+          externalAccountId: 'channel-1',
+          correlationId: 'test',
+        },
+        {
+          title: 'Large demo video',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/large-video.mp4',
+              readRange,
+              mimeType: 'video/mp4',
+              sizeBytes: totalBytes,
+            },
+          ],
+        },
+      ),
+    ).resolves.toMatchObject({
+      externalPostId: 'video-large-1',
+      externalUrl: 'https://www.youtube.com/watch?v=video-large-1',
+    });
+    expect(readRange).toHaveBeenCalledTimes(expectedRanges.length);
+    expect(readRange.mock.calls).toEqual(expectedRanges);
+  });
+
   it('chặn YouTube resumable upload session không dùng HTTPS', async () => {
     const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
       const url = new URL(String(input));

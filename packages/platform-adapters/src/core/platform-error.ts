@@ -112,7 +112,7 @@ export function createPlatformError(
 }
 
 export function isPlatformError(error: unknown): error is PlatformError {
-  return error instanceof PlatformError;
+  return error instanceof Error && error.name === 'PlatformError';
 }
 
 /**

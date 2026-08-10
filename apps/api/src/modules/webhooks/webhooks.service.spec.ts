@@ -30,6 +30,7 @@ describe('WebhooksService', () => {
     },
     outboxEvent: {
       create: vi.fn(async ({ data }) => ({ ...data, id: 'outbox_1' })),
+      findFirst: vi.fn(async () => null),
       update: vi.fn(async () => ({})),
     },
   } as unknown as PrismaService;
@@ -90,7 +91,36 @@ describe('WebhooksService', () => {
     );
   });
 
-  it('replay theo unique constraint trả 200-equivalent và không enqueue lại', async () => {
+  it('T38 webhook DB transaction keeps durable OutboxEvent when immediate Redis enqueue fails', async () => {
+    queueAdd.mockRejectedValueOnce(new Error('redis unavailable'));
+    webhookCreate.mockResolvedValueOnce({ id: 'webhook_1' });
+    const service = new WebhooksService(prisma, redis, adapters, env);
+
+    await expect(service.receive('FACEBOOK', request as never)).resolves.toMatchObject({
+      accepted: true,
+      duplicate: false,
+      webhookEventId: 'webhook_1',
+    });
+
+    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          topic: 'process-webhook',
+          aggregateType: 'WebhookEvent',
+          aggregateId: 'webhook_1',
+        }),
+      }),
+    );
+    expect(prisma.outboxEvent.update).toHaveBeenCalledWith({
+      where: { id: 'outbox_1' },
+      data: expect.objectContaining({
+        dispatchAttempts: { increment: 1 },
+        lastError: 'redis unavailable',
+      }),
+    });
+  });
+
+  it('T39 duplicate webhook repairs missing durable processing intent idempotently', async () => {
     webhookCreate.mockRejectedValueOnce({ code: 'P2002' });
     webhookFindUnique.mockResolvedValueOnce({ id: 'webhook_existing' });
     const service = new WebhooksService(prisma, redis, adapters, env);
@@ -100,6 +130,15 @@ describe('WebhooksService', () => {
       duplicate: true,
     });
     expect(queueAdd).not.toHaveBeenCalled();
+    expect(prisma.outboxEvent.findFirst).toHaveBeenCalledWith({
+      where: {
+        topic: 'process-webhook',
+        aggregateType: 'WebhookEvent',
+        aggregateId: 'webhook_existing',
+        dispatchedAt: null,
+      },
+      select: { id: true },
+    });
     expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -109,5 +148,18 @@ describe('WebhooksService', () => {
         }),
       }),
     );
+
+    vi.clearAllMocks();
+    webhookCreate.mockRejectedValueOnce({ code: 'P2002' });
+    webhookFindUnique.mockResolvedValueOnce({ id: 'webhook_existing' });
+    vi.mocked(prisma.outboxEvent.findFirst).mockResolvedValueOnce({
+      id: 'outbox_existing',
+    } as never);
+
+    await expect(service.receive('FACEBOOK', request as never)).resolves.toEqual({
+      accepted: true,
+      duplicate: true,
+    });
+    expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
   });
 });
