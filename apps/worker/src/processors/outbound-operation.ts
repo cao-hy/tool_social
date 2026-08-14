@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Prisma, type PrismaClientInstance } from '@socialhub/db';
+import { Prisma, type OutboundOperationType, type PrismaClientInstance } from '@socialhub/db';
 
 export class StaleOperationError extends Error {
   constructor(message = 'Outbound operation ownership is stale') {
@@ -20,9 +20,22 @@ export type OperationStartResult =
   | { action: 'RECONCILE'; reason: string }
   | { action: 'NOOP'; reason: string };
 
+type ExpectedOperationBinding = {
+  workspaceId: string;
+  operationType: OutboundOperationType;
+  resourceType: string;
+  resourceId: string;
+};
+
+const DEFAULT_ABANDONED_DISPATCHING_MS = 15 * 60 * 1000;
+
 export async function beginOutboundAttempt(
   prisma: PrismaClientInstance,
   operationId: string | undefined,
+  options?: {
+    expected?: ExpectedOperationBinding;
+    abandonedDispatchingMs?: number;
+  },
 ): Promise<OperationStartResult> {
   if (!operationId) {
     return { action: 'NOOP', reason: 'operation_id_required' };
@@ -30,6 +43,9 @@ export async function beginOutboundAttempt(
 
   const operation = await prisma.outboundOperation.findUnique({ where: { id: operationId } });
   if (!operation) return { action: 'NOOP', reason: 'operation_not_found' };
+  if (options?.expected && !operationMatches(operation, options.expected)) {
+    return { action: 'NOOP', reason: 'operation_resource_mismatch' };
+  }
 
   switch (operation.state) {
     case 'LOCAL_COMMITTED':
@@ -52,6 +68,11 @@ export async function beginOutboundAttempt(
     case 'FAILED':
       return { action: 'NOOP', reason: operation.state };
     case 'DISPATCHING': {
+      const abandonedDispatchingMs =
+        options?.abandonedDispatchingMs ?? DEFAULT_ABANDONED_DISPATCHING_MS;
+      const startedAt = operation.remoteStartedAt?.getTime();
+      const isStale = startedAt !== undefined && Date.now() - startedAt >= abandonedDispatchingMs;
+      if (!isStale) return { action: 'NOOP', reason: 'DISPATCHING' };
       const updated = await prisma.outboundOperation.updateMany({
         where: {
           id: operation.id,
@@ -69,7 +90,7 @@ export async function beginOutboundAttempt(
         },
       });
       if (updated.count !== 1) throw new StaleOperationError();
-      return { action: 'NOOP', reason: 'REMOTE_UNKNOWN' };
+      return { action: 'RECONCILE', reason: 'REMOTE_UNKNOWN' };
     }
     case 'PREPARED': {
       const attemptId = randomUUID();
@@ -97,6 +118,78 @@ export async function beginOutboundAttempt(
       return { action: 'NOOP', reason: String(exhaustive) };
     }
   }
+}
+
+function operationMatches(
+  operation: {
+    workspaceId: string;
+    operationType: OutboundOperationType;
+    resourceType: string;
+    resourceId: string;
+  },
+  expected: ExpectedOperationBinding,
+): boolean {
+  return (
+    operation.workspaceId === expected.workspaceId &&
+    operation.operationType === expected.operationType &&
+    operation.resourceType === expected.resourceType &&
+    operation.resourceId === expected.resourceId
+  );
+}
+
+export async function markPreTargetFailed(
+  prisma: PrismaClientInstance,
+  ownership: OutboundAttemptOwnership,
+  input: { code: string; message: string },
+): Promise<void> {
+  if (!ownership.operationId) return;
+  const updated = await prisma.outboundOperation.updateMany({
+    where: {
+      id: ownership.operationId,
+      state: 'DISPATCHING',
+      attemptId: ownership.attemptId,
+      fence: ownership.fence,
+    },
+    data: {
+      state: 'FAILED',
+      lastErrorCode: input.code,
+      lastErrorMessage: input.message,
+    },
+  });
+  if (updated.count !== 1) throw new StaleOperationError();
+}
+
+export async function recordRouteMetadata(
+  prisma: PrismaClientInstance,
+  ownership: OutboundAttemptOwnership,
+  input: {
+    routeConfigVersion?: number | null;
+    routeProxyFingerprint?: string | null;
+    routeCountryCode?: string | null;
+  },
+): Promise<void> {
+  if (!ownership.operationId) return;
+  if (
+    input.routeConfigVersion == null &&
+    input.routeProxyFingerprint == null &&
+    input.routeCountryCode == null
+  ) {
+    return;
+  }
+  const updated = await prisma.outboundOperation.updateMany({
+    where: {
+      id: ownership.operationId,
+      state: 'DISPATCHING',
+      attemptId: ownership.attemptId,
+      fence: ownership.fence,
+    },
+    data: {
+      routeConfigVersion: input.routeConfigVersion ?? undefined,
+      routeProxyFingerprint: input.routeProxyFingerprint ?? undefined,
+      routeCountryCode: input.routeCountryCode ?? undefined,
+    },
+  });
+  if (updated.count !== 1) throw new StaleOperationError();
 }
 
 export async function rollbackBeforeConnect(
@@ -132,9 +225,21 @@ export async function rollbackBeforeConnect(
 export async function markRemoteUnknown(
   prisma: PrismaClientInstance,
   ownership: OutboundAttemptOwnership,
-  input: { code: string; message: string; providerRequestId?: string },
+  input: {
+    code: string;
+    message: string;
+    providerRequestId?: string;
+    requiresManualReview?: boolean;
+    checkpoint?: unknown;
+  },
 ): Promise<void> {
   if (!ownership.operationId) return;
+  const existing = input.checkpoint
+    ? await prisma.outboundOperation.findUnique({
+        where: { id: ownership.operationId },
+        select: { remoteCheckpoint: true },
+      })
+    : null;
   const updated = await prisma.outboundOperation.updateMany({
     where: {
       id: ownership.operationId,
@@ -144,13 +249,39 @@ export async function markRemoteUnknown(
     },
     data: {
       state: 'REMOTE_UNKNOWN',
-      requiresManualReview: true,
+      requiresManualReview: input.requiresManualReview ?? true,
       providerRequestId: input.providerRequestId,
+      remoteCheckpoint:
+        input.checkpoint === undefined
+          ? undefined
+          : ({
+              ...jsonObject(existing?.remoteCheckpoint),
+              ...(input.checkpoint as Record<string, unknown>),
+            } as Prisma.InputJsonValue),
       lastErrorCode: input.code,
       lastErrorMessage: input.message,
     },
   });
   if (updated.count !== 1) throw new StaleOperationError();
+}
+
+export async function transitionRemoteUnknownToManualReview(
+  prisma: Pick<PrismaClientInstance, 'outboundOperation'>,
+  operationId: string,
+  input: { code: string; message: string },
+): Promise<boolean> {
+  if (!operationId) return false;
+  const updated = await prisma.outboundOperation.updateMany({
+    where: { id: operationId, state: 'REMOTE_UNKNOWN' },
+    data: {
+      state: 'MANUAL_REVIEW',
+      requiresManualReview: true,
+      fence: { increment: 1 },
+      lastErrorCode: input.code,
+      lastErrorMessage: input.message,
+    },
+  });
+  return updated.count === 1;
 }
 
 export async function markRemoteConfirmed(
@@ -159,6 +290,12 @@ export async function markRemoteConfirmed(
   input: { remoteId: string; providerRequestId?: string; checkpoint?: unknown },
 ): Promise<void> {
   if (!ownership.operationId) return;
+  const existing = input.checkpoint
+    ? await prisma.outboundOperation.findUnique({
+        where: { id: ownership.operationId },
+        select: { remoteCheckpoint: true },
+      })
+    : null;
   const updated = await prisma.outboundOperation.updateMany({
     where: {
       id: ownership.operationId,
@@ -175,13 +312,21 @@ export async function markRemoteConfirmed(
           ? undefined
           : input.checkpoint === null
             ? Prisma.JsonNull
-            : (input.checkpoint as Prisma.InputJsonValue),
+            : ({
+                ...jsonObject(existing?.remoteCheckpoint),
+                ...(input.checkpoint as Record<string, unknown>),
+              } as Prisma.InputJsonValue),
       remoteConfirmedAt: new Date(),
       lastErrorCode: null,
       lastErrorMessage: null,
     },
   });
   if (updated.count !== 1) throw new StaleOperationError();
+}
+
+function jsonObject(value: Prisma.JsonValue | null | undefined): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
 }
 
 export async function markLocalCommitted(

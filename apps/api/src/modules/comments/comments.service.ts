@@ -3,6 +3,7 @@ import { createQueueOutboxEvent, findOrCreateOutboundOperation, type Prisma } fr
 import { buildJobId, buildQueueJobOptions, type QueuePayload } from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
 import { decryptToken, type Keyring } from '@socialhub/security';
+import { RedisTokenRefreshLock } from '@socialhub/social-runtime';
 import { isPlatformError, type SocialPlatformAdapter } from '@socialhub/platform-adapters';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
@@ -996,6 +997,7 @@ export class CommentsService implements OnModuleDestroy {
         prisma: this.prisma,
         keyring: this.keyring,
         adapterFactory: this.adapterFactory,
+        tokenRefreshLock: new RedisTokenRefreshLock(this.redis.getClient()),
         account,
       },
       adapter,

@@ -28,10 +28,12 @@ import {
   publishPostSchema,
   schedulePostSchema,
   updatePostSchema,
+  manualReviewResolutionSchema,
   type BulkDeletePostsInput,
   type CreatePostInput,
   type DeletePostQuery,
   type ListPostsQuery,
+  type ManualReviewResolutionInput,
   type PublishPostInputDto,
   type SchedulePostInput,
   type UpdatePostInput,
@@ -190,6 +192,35 @@ export class PostsController {
       postId,
       platformPostId,
       requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
+  @Get(':postId/platform-posts/:platformPostId/manual-review')
+  @RequirePermissions('post:view')
+  getManualReview(
+    @Param('workspaceId') workspaceId: string,
+    @Param('postId') postId: string,
+    @Param('platformPostId') platformPostId: string,
+  ): Promise<unknown> {
+    return this.posts.getPlatformPostManualReview(workspaceId, postId, platformPostId);
+  }
+
+  @Post(':postId/platform-posts/:platformPostId/manual-review/resolve')
+  @RequirePermissions('post:publish')
+  resolveManualReview(
+    @Param('workspaceId') workspaceId: string,
+    @Param('postId') postId: string,
+    @Param('platformPostId') platformPostId: string,
+    @Body(zodPipe(manualReviewResolutionSchema)) body: ManualReviewResolutionInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ): Promise<unknown> {
+    return this.posts.resolvePlatformPostManualReview(
+      workspaceId,
+      postId,
+      platformPostId,
+      requireUser(request).id,
+      body,
       this.auditContext(request),
     );
   }

@@ -54,13 +54,27 @@ describe('Checkpoint Ownership (P1-02)', () => {
       },
       outboundOperation: {
         findFirst: vi.fn().mockResolvedValue(null),
-        findUnique: vi
-          .fn()
-          .mockResolvedValue({ id: 'op_1', state: 'PREPARED', fence: 0, attemptId: null }),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'op_1',
+          workspaceId: 'workspace_1',
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: 'post_1',
+          state: 'PREPARED',
+          fence: 0,
+          attemptId: null,
+        }),
         create: vi.fn().mockResolvedValue({ id: 'op_1' }),
-        upsert: vi
-          .fn()
-          .mockResolvedValue({ id: 'op_1', state: 'PREPARED', fence: 0, attemptId: null }),
+        upsert: vi.fn().mockResolvedValue({
+          id: 'op_1',
+          workspaceId: 'workspace_1',
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: 'post_1',
+          state: 'PREPARED',
+          fence: 0,
+          attemptId: null,
+        }),
         updateMany: outboundOperationUpdateMany, // Returns count: 0 for checkpoint update!
       },
       backgroundJob: {
@@ -70,6 +84,10 @@ describe('Checkpoint Ownership (P1-02)', () => {
       $transaction: vi.fn(async (cb) => cb(prisma)),
       notification: {
         create: vi.fn(),
+      },
+      outboxEvent: {
+        upsert: vi.fn().mockResolvedValue({}),
+        create: vi.fn().mockResolvedValue({}),
       },
     };
 
@@ -152,6 +170,159 @@ describe('Checkpoint Ownership (P1-02)', () => {
         data: expect.objectContaining({
           status: 'REMOTE_RESULT_UNKNOWN',
           errorCode: 'REMOTE_RESULT_UNKNOWN',
+        }),
+      }),
+    );
+    expect(platformPostUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'FAILED' }),
+      }),
+    );
+  });
+
+  it('T04 real processor path: provider success plus markRemoteConfirmed failure redelivers as reconciliation without republish', async () => {
+    let operation = {
+      id: 'op_1',
+      workspaceId: 'workspace_1',
+      operationType: 'PUBLISH_POST',
+      resourceType: 'PlatformPost',
+      resourceId: 'post_1',
+      state: 'PREPARED',
+      fence: 0,
+      attemptId: null as string | null,
+      remoteCheckpoint: null,
+      remoteStartedAt: null as Date | null,
+    };
+    const platformPostUpdate = vi.fn();
+    const outboxUpsert = vi.fn().mockResolvedValue({});
+    const adapter = {
+      validatePost: () => ({ valid: true }),
+      publishPost: vi.fn().mockResolvedValue({
+        externalPostId: 'remote_1',
+        externalUrl: 'https://youtube.test/watch?v=remote_1',
+        publishedAt: new Date('2026-08-13T00:00:00Z'),
+      }),
+    };
+    const prisma = {
+      platformPost: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'post_1',
+          workspaceId: 'workspace_1',
+          contentPostId: 'content_1',
+          platform: 'YOUTUBE',
+          socialAccountId: 'account_1',
+          status: 'QUEUED',
+          platformState: {},
+          publishFence: 0,
+          socialAccount: {
+            id: 'account_1',
+            workspaceId: 'workspace_1',
+            platform: 'YOUTUBE',
+            status: 'CONNECTED',
+            disconnectGeneration: 1,
+            externalAccountId: 'external_account_1',
+            externalPageId: null,
+            token: { accessToken: encryptToken('access-token', keyring).ciphertext },
+            scopes: [],
+            name: 'YouTube',
+          },
+          media: [],
+          contentPost: {
+            id: 'content_1',
+            createdById: 'user_1',
+            title: 'Post',
+            body: 'Body',
+            linkUrl: null,
+            hashtags: [],
+            media: [],
+            platformPosts: [],
+          },
+        }),
+        update: platformPostUpdate,
+        findUnique: vi.fn().mockResolvedValue({
+          contentPostId: 'content_1',
+          status: 'REMOTE_RESULT_UNKNOWN',
+          externalPostId: null,
+          platformState: {},
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      contentPost: { update: vi.fn() },
+      socialAccount: {
+        findUnique: vi.fn().mockResolvedValue({ status: 'CONNECTED', disconnectGeneration: 1 }),
+      },
+      outboundOperation: {
+        findFirst: vi.fn().mockResolvedValue(operation),
+        findUnique: vi.fn(async () => operation),
+        updateMany: vi.fn(async ({ data }) => {
+          if (data.state === 'DISPATCHING') {
+            operation = {
+              ...operation,
+              state: 'DISPATCHING',
+              attemptId: data.attemptId,
+              fence: operation.fence + 1,
+              remoteStartedAt: data.remoteStartedAt,
+            };
+            return { count: 1 };
+          }
+          if (data.state === 'REMOTE_CONFIRMED') {
+            return { count: 0 };
+          }
+          if (data.state === 'REMOTE_UNKNOWN') {
+            operation = { ...operation, state: 'REMOTE_UNKNOWN' };
+            return { count: 1 };
+          }
+          return { count: 1 };
+        }),
+      },
+      backgroundJob: {
+        upsert: vi.fn().mockResolvedValue({}),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      notification: { create: vi.fn() },
+      outboxEvent: {
+        upsert: outboxUpsert,
+        create: vi.fn().mockResolvedValue({}),
+      },
+      $transaction: vi.fn(async (cb) => cb(prisma)),
+    };
+    const processor = createPublishPostProcessor({
+      prisma: prisma as any,
+      keyring,
+      adapterFactory: {
+        forWorkspace: vi.fn().mockResolvedValue({
+          adapters: new Map([['YOUTUBE', adapter]]),
+          release: vi.fn(),
+        }),
+      } as any,
+      locks: { withLock: vi.fn(async (_key, _ttl, fn) => fn()) } as any,
+      storage: { client: {} as any, bucket: 'test-bucket' },
+    });
+    const job = {
+      id: 'job_1',
+      name: 'publish-post',
+      attemptsMade: 0,
+      opts: { attempts: 2 },
+      data: { platformPostId: 'post_1', workspaceId: 'workspace_1', operationId: 'op_1' },
+    };
+
+    await expect(processor(job)).resolves.toEqual({
+      published: false,
+      reason: 'REMOTE_RESULT_UNKNOWN',
+    });
+    await expect(processor({ ...job, id: 'job_2', attemptsMade: 1 })).resolves.toEqual({
+      published: false,
+      reason: 'REMOTE_RESULT_UNKNOWN',
+    });
+
+    expect(adapter.publishPost).toHaveBeenCalledTimes(1);
+    expect(prisma.outboundOperation.findFirst).not.toHaveBeenCalled();
+    expect(outboxUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          dedupeKey: expect.stringMatching(/^reconcile-publish:op_1:/),
+          topic: 'reconcile-platform-post',
         }),
       }),
     );

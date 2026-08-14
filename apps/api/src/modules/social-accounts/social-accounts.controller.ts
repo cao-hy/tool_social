@@ -13,6 +13,7 @@ import {
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { platformSchema, type Platform } from '@socialhub/shared';
 import { isPlatformError } from '@socialhub/platform-adapters';
+import { scrubSecretsFromText } from '@socialhub/security';
 import type { AuthenticatedRequest } from '../../common/auth/auth.types';
 import { requireUser } from '../../common/auth/request-auth';
 import { RequirePermissions } from '../../common/decorators/require-permissions.decorator';
@@ -305,12 +306,14 @@ export class SocialAccountsController {
   private errorLogObject(error: unknown): unknown {
     if (isPlatformError(error)) {
       return {
-        ...error.toLogObject(),
-        raw: error.raw,
+        ...this.scrubLogRecord(error.toLogObject()),
+        raw: this.scrubLogObject(error.raw),
         cause: this.errorCauseLogObject(error.cause),
       };
     }
-    return error instanceof Error ? { name: error.name, message: error.message } : error;
+    return error instanceof Error
+      ? { name: error.name, message: scrubSecretsFromText(error.message) }
+      : this.scrubLogObject(error);
   }
 
   private errorCauseLogObject(cause: unknown): unknown {
@@ -318,12 +321,26 @@ export class SocialAccountsController {
     if (cause instanceof Error) {
       return {
         name: cause.name,
-        message: cause.message,
+        message: scrubSecretsFromText(cause.message),
         issues:
           'issues' in cause && Array.isArray(cause.issues) ? cause.issues.slice(0, 10) : undefined,
       };
     }
-    return cause;
+    return this.scrubLogObject(cause);
+  }
+
+  private scrubLogObject(value: unknown): unknown {
+    if (typeof value === 'string') return scrubSecretsFromText(value);
+    if (Array.isArray(value)) return value.map((item) => this.scrubLogObject(item));
+    if (!value || typeof value !== 'object') return value;
+
+    return this.scrubLogRecord(value as Record<string, unknown>);
+  }
+
+  private scrubLogRecord(value: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, this.scrubLogObject(entry)]),
+    );
   }
 
   @Post('workspaces/:workspaceId/social-accounts/:accountId/sync-posts')

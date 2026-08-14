@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
+import { markRemoteMutationBoundary } from '../core/remote-mutation-boundary';
 import { discardResponseBody, requireHttpsUrl, throwIfRemoteRequestError } from '../core/utils';
 import {
   normalizeTikTokError,
@@ -160,29 +161,31 @@ export class TikTokClient {
 
   async directPostVideo(input: TikTokDirectVideoPostInput): Promise<TikTokPublishInitResponse> {
     const uploadPlan = createUploadPlan(input.sizeBytes);
-    const init = await this.postJson(
-      '/v2/post/publish/video/init/',
-      {
-        post_info: {
-          title: input.title,
-          privacy_level: input.privacyLevel,
-          disable_comment: input.disableComment ?? false,
-          disable_duet: input.disableDuet ?? false,
-          disable_stitch: input.disableStitch ?? false,
-          video_cover_timestamp_ms: input.videoCoverTimestampMs,
-          brand_content_toggle: input.brandContentToggle,
-          brand_organic_toggle: input.brandOrganicToggle,
-          is_aigc: input.isAiGenerated,
+    const init = await markRemoteMutationBoundary(() =>
+      this.postJson(
+        '/v2/post/publish/video/init/',
+        {
+          post_info: {
+            title: input.title,
+            privacy_level: input.privacyLevel,
+            disable_comment: input.disableComment ?? false,
+            disable_duet: input.disableDuet ?? false,
+            disable_stitch: input.disableStitch ?? false,
+            video_cover_timestamp_ms: input.videoCoverTimestampMs,
+            brand_content_toggle: input.brandContentToggle,
+            brand_organic_toggle: input.brandOrganicToggle,
+            is_aigc: input.isAiGenerated,
+          },
+          source_info: {
+            source: 'FILE_UPLOAD',
+            video_size: input.sizeBytes,
+            chunk_size: uploadPlan.chunkSize,
+            total_chunk_count: uploadPlan.totalChunkCount,
+          },
         },
-        source_info: {
-          source: 'FILE_UPLOAD',
-          video_size: input.sizeBytes,
-          chunk_size: uploadPlan.chunkSize,
-          total_chunk_count: uploadPlan.totalChunkCount,
-        },
-      },
-      tiktokPublishInitResponseSchema,
-      input.accessToken,
+        tiktokPublishInitResponseSchema,
+        input.accessToken,
+      ),
     );
 
     if (!init.data.upload_url) {
@@ -197,32 +200,38 @@ export class TikTokClient {
     } catch (error) {
       throw tiktokUnexpectedPayloadError(error, init);
     }
-    await this.uploadChunks({
-      uploadUrl,
-      bytes: input.bytes,
-      sizeBytes: input.sizeBytes,
-      readRange: input.readRange,
-      mimeType: input.mimeType,
-      uploadPlan,
-    });
+    await markRemoteMutationBoundary(
+      () =>
+        this.uploadChunks({
+          uploadUrl,
+          bytes: input.bytes,
+          sizeBytes: input.sizeBytes,
+          readRange: input.readRange,
+          mimeType: input.mimeType,
+          uploadPlan,
+        }),
+      { providerRequestId: init.data.publish_id },
+    );
 
     return init;
   }
 
   async uploadVideoToInbox(input: TikTokInboxVideoUploadInput): Promise<TikTokPublishInitResponse> {
     const uploadPlan = createUploadPlan(input.sizeBytes);
-    const init = await this.postJson(
-      '/v2/post/publish/inbox/video/init/',
-      {
-        source_info: {
-          source: 'FILE_UPLOAD',
-          video_size: input.sizeBytes,
-          chunk_size: uploadPlan.chunkSize,
-          total_chunk_count: uploadPlan.totalChunkCount,
+    const init = await markRemoteMutationBoundary(() =>
+      this.postJson(
+        '/v2/post/publish/inbox/video/init/',
+        {
+          source_info: {
+            source: 'FILE_UPLOAD',
+            video_size: input.sizeBytes,
+            chunk_size: uploadPlan.chunkSize,
+            total_chunk_count: uploadPlan.totalChunkCount,
+          },
         },
-      },
-      tiktokPublishInitResponseSchema,
-      input.accessToken,
+        tiktokPublishInitResponseSchema,
+        input.accessToken,
+      ),
     );
 
     if (!init.data.upload_url) {
@@ -237,44 +246,50 @@ export class TikTokClient {
     } catch (error) {
       throw tiktokUnexpectedPayloadError(error, init);
     }
-    await this.uploadChunks({
-      uploadUrl,
-      bytes: input.bytes,
-      sizeBytes: input.sizeBytes,
-      readRange: input.readRange,
-      mimeType: input.mimeType,
-      uploadPlan,
-    });
+    await markRemoteMutationBoundary(
+      () =>
+        this.uploadChunks({
+          uploadUrl,
+          bytes: input.bytes,
+          sizeBytes: input.sizeBytes,
+          readRange: input.readRange,
+          mimeType: input.mimeType,
+          uploadPlan,
+        }),
+      { providerRequestId: init.data.publish_id },
+    );
 
     return init;
   }
 
   publishPhoto(input: TikTokPhotoPostInput): Promise<TikTokPublishInitResponse> {
-    return this.postJson(
-      '/v2/post/publish/content/init/',
-      {
-        media_type: 'PHOTO',
-        post_mode: input.postMode,
-        post_info: {
-          title: input.title,
-          description: input.description,
-          privacy_level: input.postMode === 'DIRECT_POST' ? input.privacyLevel : undefined,
-          disable_comment: input.postMode === 'DIRECT_POST' ? input.disableComment : undefined,
-          auto_add_music: input.postMode === 'DIRECT_POST' ? input.autoAddMusic : undefined,
-          brand_content_toggle:
-            input.postMode === 'DIRECT_POST' ? input.brandContentToggle : undefined,
-          brand_organic_toggle:
-            input.postMode === 'DIRECT_POST' ? input.brandOrganicToggle : undefined,
-          is_aigc: input.postMode === 'DIRECT_POST' ? input.isAiGenerated : undefined,
+    return markRemoteMutationBoundary(() =>
+      this.postJson(
+        '/v2/post/publish/content/init/',
+        {
+          media_type: 'PHOTO',
+          post_mode: input.postMode,
+          post_info: {
+            title: input.title,
+            description: input.description,
+            privacy_level: input.postMode === 'DIRECT_POST' ? input.privacyLevel : undefined,
+            disable_comment: input.postMode === 'DIRECT_POST' ? input.disableComment : undefined,
+            auto_add_music: input.postMode === 'DIRECT_POST' ? input.autoAddMusic : undefined,
+            brand_content_toggle:
+              input.postMode === 'DIRECT_POST' ? input.brandContentToggle : undefined,
+            brand_organic_toggle:
+              input.postMode === 'DIRECT_POST' ? input.brandOrganicToggle : undefined,
+            is_aigc: input.postMode === 'DIRECT_POST' ? input.isAiGenerated : undefined,
+          },
+          source_info: {
+            source: 'PULL_FROM_URL',
+            photo_cover_index: input.photoCoverIndex ?? 0,
+            photo_images: input.photoUrls,
+          },
         },
-        source_info: {
-          source: 'PULL_FROM_URL',
-          photo_cover_index: input.photoCoverIndex ?? 0,
-          photo_images: input.photoUrls,
-        },
-      },
-      tiktokPublishInitResponseSchema,
-      input.accessToken,
+        tiktokPublishInitResponseSchema,
+        input.accessToken,
+      ),
     );
   }
 

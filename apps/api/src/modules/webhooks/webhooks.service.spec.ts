@@ -30,6 +30,7 @@ describe('WebhooksService', () => {
     },
     outboxEvent: {
       create: vi.fn(async ({ data }) => ({ ...data, id: 'outbox_1' })),
+      upsert: vi.fn(async ({ create }) => ({ ...create, id: 'outbox_1' })),
       findFirst: vi.fn(async () => null),
       update: vi.fn(async () => ({})),
     },
@@ -80,12 +81,14 @@ describe('WebhooksService', () => {
       }),
     );
     expect(queueAdd).toHaveBeenCalledTimes(1);
-    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+    expect(prisma.outboxEvent.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
+        where: { dedupeKey: 'process-webhook:webhook_1' },
+        create: expect.objectContaining({
           topic: 'process-webhook',
           aggregateType: 'WebhookEvent',
           aggregateId: 'webhook_1',
+          dedupeKey: 'process-webhook:webhook_1',
         }),
       }),
     );
@@ -102,12 +105,14 @@ describe('WebhooksService', () => {
       webhookEventId: 'webhook_1',
     });
 
-    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+    expect(prisma.outboxEvent.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
+        where: { dedupeKey: 'process-webhook:webhook_1' },
+        create: expect.objectContaining({
           topic: 'process-webhook',
           aggregateType: 'WebhookEvent',
           aggregateId: 'webhook_1',
+          dedupeKey: 'process-webhook:webhook_1',
         }),
       }),
     );
@@ -130,21 +135,15 @@ describe('WebhooksService', () => {
       duplicate: true,
     });
     expect(queueAdd).not.toHaveBeenCalled();
-    expect(prisma.outboxEvent.findFirst).toHaveBeenCalledWith({
-      where: {
-        topic: 'process-webhook',
-        aggregateType: 'WebhookEvent',
-        aggregateId: 'webhook_existing',
-        dispatchedAt: null,
-      },
-      select: { id: true },
-    });
-    expect(prisma.outboxEvent.create).toHaveBeenCalledWith(
+    expect(prisma.outboxEvent.findFirst).not.toHaveBeenCalled();
+    expect(prisma.outboxEvent.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
+        where: { dedupeKey: 'process-webhook:webhook_existing' },
+        create: expect.objectContaining({
           topic: 'process-webhook',
           aggregateType: 'WebhookEvent',
           aggregateId: 'webhook_existing',
+          dedupeKey: 'process-webhook:webhook_existing',
         }),
       }),
     );
@@ -152,14 +151,15 @@ describe('WebhooksService', () => {
     vi.clearAllMocks();
     webhookCreate.mockRejectedValueOnce({ code: 'P2002' });
     webhookFindUnique.mockResolvedValueOnce({ id: 'webhook_existing' });
-    vi.mocked(prisma.outboxEvent.findFirst).mockResolvedValueOnce({
-      id: 'outbox_existing',
-    } as never);
 
     await expect(service.receive('FACEBOOK', request as never)).resolves.toEqual({
       accepted: true,
       duplicate: true,
     });
-    expect(prisma.outboxEvent.create).not.toHaveBeenCalled();
+    expect(prisma.outboxEvent.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { dedupeKey: 'process-webhook:webhook_existing' },
+      }),
+    );
   });
 });

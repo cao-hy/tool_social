@@ -19,6 +19,7 @@ function prismaWithOperation(operation: {
     | 'FAILED';
   attemptId: string | null;
   fence: number;
+  remoteStartedAt?: Date | null;
 }) {
   const updateMany = vi.fn(async () => ({ count: 1 }));
   return {
@@ -69,11 +70,12 @@ describe('outbound operation fencing', () => {
       state: 'DISPATCHING',
       attemptId: 'attempt_1',
       fence: 7,
+      remoteStartedAt: new Date(Date.now() - 16 * 60 * 1000),
     });
 
     const result = await beginOutboundAttempt(prisma, 'op_1');
 
-    expect(result).toEqual({ action: 'NOOP', reason: 'REMOTE_UNKNOWN' });
+    expect(result).toEqual({ action: 'RECONCILE', reason: 'REMOTE_UNKNOWN' });
     expect(prisma.outboundOperation.updateMany).toHaveBeenCalledWith({
       where: { id: 'op_1', state: 'DISPATCHING', attemptId: 'attempt_1', fence: 7 },
       data: expect.objectContaining({

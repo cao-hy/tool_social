@@ -6,6 +6,7 @@ import {
   type PlatformMetricValue,
 } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
+import { markRemoteMutationBoundary } from '../core/remote-mutation-boundary';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
@@ -198,8 +199,8 @@ export class PinterestAdapter implements SocialPlatformAdapter {
       if (!hasPublicUrl && !hasBytes) {
         throw new Error('Pinterest video cần cover image URL public hoặc dữ liệu ảnh.');
       }
-      if (!video.bytes?.length) {
-        throw new Error('Pinterest video cần bytes từ storage để upload.');
+      if (!video.bytes?.length && !video.readRange) {
+        throw new Error('Pinterest video cần bytes hoặc readRange từ storage để upload.');
       }
 
       const upload = await this.client.registerVideoUpload(ctx.accessToken);
@@ -211,27 +212,33 @@ export class PinterestAdapter implements SocialPlatformAdapter {
         uploadUrl: upload.upload_url,
         uploadParameters: upload.upload_parameters,
         bytes: video.bytes,
+        readRange: video.readRange,
+        sizeBytes: video.sizeBytes,
         fileName: fileNameFromMediaUrl(video.url, 'video.mp4'),
         mimeType: video.mimeType,
       });
       await this.waitForVideoUpload(ctx.accessToken, upload.media_id);
 
-      const result = await this.client.createVideoPin({
-        accessToken: ctx.accessToken,
-        boardId,
-        boardSectionId: options.boardSectionId,
-        title: input.title,
-        description: pinterestDescription(input) || undefined,
-        link: input.linkUrl,
-        aiDisclosures: options.aiDisclosures,
-        mediaId: upload.media_id,
-        coverImageUrl: hasPublicUrl ? cover?.url : undefined,
-        coverImageData:
-          !hasPublicUrl && hasBytes && cover?.bytes
-            ? Buffer.from(cover.bytes).toString('base64')
-            : undefined,
-        coverImageContentType: !hasPublicUrl && hasBytes ? cover?.mimeType : undefined,
-      });
+      const result = await markRemoteMutationBoundary(
+        () =>
+          this.client.createVideoPin({
+            accessToken: ctx.accessToken,
+            boardId,
+            boardSectionId: options.boardSectionId,
+            title: input.title,
+            description: pinterestDescription(input) || undefined,
+            link: input.linkUrl,
+            aiDisclosures: options.aiDisclosures,
+            mediaId: upload.media_id,
+            coverImageUrl: hasPublicUrl ? cover?.url : undefined,
+            coverImageData:
+              !hasPublicUrl && hasBytes && cover?.bytes
+                ? Buffer.from(cover.bytes).toString('base64')
+                : undefined,
+            coverImageContentType: !hasPublicUrl && hasBytes ? cover?.mimeType : undefined,
+          }),
+        { providerRequestId: upload.media_id },
+      );
 
       return {
         externalPostId: result.id,
@@ -244,25 +251,27 @@ export class PinterestAdapter implements SocialPlatformAdapter {
     if (!image || image.type !== 'IMAGE') {
       throw new Error('Pinterest cần đúng 1 ảnh hoặc 1 video để tạo Pin.');
     }
-    const result = await this.client.createImagePin({
-      accessToken: ctx.accessToken,
-      boardId,
-      boardSectionId: options.boardSectionId,
-      title: input.title,
-      description: pinterestDescription(input) || undefined,
-      link: input.linkUrl,
-      altText: options.altText ?? image.altText,
-      dominantColor: options.dominantColor,
-      aiDisclosures: options.aiDisclosures,
-      image: image.bytes?.length
-        ? {
-            base64: Buffer.from(image.bytes).toString('base64'),
-            contentType: image.mimeType,
-          }
-        : {
-            url: image.url,
-          },
-    });
+    const result = await markRemoteMutationBoundary(() =>
+      this.client.createImagePin({
+        accessToken: ctx.accessToken,
+        boardId,
+        boardSectionId: options.boardSectionId,
+        title: input.title,
+        description: pinterestDescription(input) || undefined,
+        link: input.linkUrl,
+        altText: options.altText ?? image.altText,
+        dominantColor: options.dominantColor,
+        aiDisclosures: options.aiDisclosures,
+        image: image.bytes?.length
+          ? {
+              base64: Buffer.from(image.bytes).toString('base64'),
+              contentType: image.mimeType,
+            }
+          : {
+              url: image.url,
+            },
+      }),
+    );
 
     return {
       externalPostId: result.id,

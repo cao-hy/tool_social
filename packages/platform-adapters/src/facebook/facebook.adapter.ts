@@ -10,6 +10,7 @@ import {
 } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported } from '../core/platform-error';
+import { markRemoteMutationBoundary } from '../core/remote-mutation-boundary';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
@@ -167,23 +168,27 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
         sizeBytes: video.sizeBytes,
         byteLength: video.bytes?.byteLength ?? 0,
       });
-      const result = await this.client.publishPageVideo({
-        pageId: ctx.externalAccountId,
-        pageAccessToken: ctx.accessToken,
-        bytes: video.bytes ?? new Uint8Array(),
-        fileName: fileNameFromMediaUrl(video.url, 'video.mp4'),
-        mimeType: video.mimeType,
-        title: options.videoTitle ?? input.title,
-        description: message || input.description,
-        placeId: options.placeId,
-        thumbnail: input.thumbnail
-          ? {
-              bytes: input.thumbnail.bytes ?? new Uint8Array(),
-              fileName: fileNameFromMediaUrl(input.thumbnail.url, 'thumbnail.jpg'),
-              mimeType: input.thumbnail.mimeType,
-            }
-          : undefined,
-      });
+      const result = await markRemoteMutationBoundary(() =>
+        this.client.publishPageVideo({
+          pageId: ctx.externalAccountId,
+          pageAccessToken: ctx.accessToken,
+          bytes: video.bytes ?? new Uint8Array(),
+          readRange: video.readRange,
+          sizeBytes: video.sizeBytes,
+          fileName: fileNameFromMediaUrl(video.url, 'video.mp4'),
+          mimeType: video.mimeType,
+          title: options.videoTitle ?? input.title,
+          description: message || input.description,
+          placeId: options.placeId,
+          thumbnail: input.thumbnail
+            ? {
+                bytes: input.thumbnail.bytes ?? new Uint8Array(),
+                fileName: fileNameFromMediaUrl(input.thumbnail.url, 'thumbnail.jpg'),
+                mimeType: input.thumbnail.mimeType,
+              }
+            : undefined,
+        }),
+      );
 
       if (input.thumbnail?.bytes?.byteLength) {
         try {
@@ -225,17 +230,19 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
         sizeBytes: image.sizeBytes,
         byteLength: image.bytes?.byteLength ?? 0,
       });
-      const result = await this.client.uploadPagePhoto({
-        pageId: ctx.externalAccountId,
-        pageAccessToken: ctx.accessToken,
-        bytes: image.bytes ?? new Uint8Array(),
-        fileName: fileNameFromMediaUrl(image.url, 'image-1.jpg'),
-        mimeType: image.mimeType,
-        caption: message || undefined,
-        altText: options.photoAltText ?? image.altText,
-        placeId: options.placeId,
-        published: true,
-      });
+      const result = await markRemoteMutationBoundary(() =>
+        this.client.uploadPagePhoto({
+          pageId: ctx.externalAccountId,
+          pageAccessToken: ctx.accessToken,
+          bytes: image.bytes ?? new Uint8Array(),
+          fileName: fileNameFromMediaUrl(image.url, 'image-1.jpg'),
+          mimeType: image.mimeType,
+          caption: message || undefined,
+          altText: options.photoAltText ?? image.altText,
+          placeId: options.placeId,
+          published: true,
+        }),
+      );
 
       const postId = result.post_id || result.id;
       return {
@@ -272,14 +279,18 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
           )
         : undefined;
 
-    const result = await this.client.publishPageFeedPost({
-      pageId: ctx.externalAccountId,
-      pageAccessToken: ctx.accessToken,
-      message: message || undefined,
-      link: attachedMediaIds?.length ? undefined : input.linkUrl,
-      attachedMediaIds,
-      placeId: options.placeId,
-    });
+    const result = await markRemoteMutationBoundary(
+      () =>
+        this.client.publishPageFeedPost({
+          pageId: ctx.externalAccountId,
+          pageAccessToken: ctx.accessToken,
+          message: message || undefined,
+          link: attachedMediaIds?.length ? undefined : input.linkUrl,
+          attachedMediaIds,
+          placeId: options.placeId,
+        }),
+      { providerRequestId: attachedMediaIds?.join(',') },
+    );
 
     return {
       externalPostId: result.id,
@@ -419,11 +430,15 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     externalCommentId: string,
     message: string,
   ): Promise<{ externalReplyId: string; sentAt: Date }> {
-    const result = await this.client.replyToComment({
-      externalCommentId,
-      pageAccessToken: ctx.accessToken,
-      message,
-    });
+    const result = await markRemoteMutationBoundary(
+      () =>
+        this.client.replyToComment({
+          externalCommentId,
+          pageAccessToken: ctx.accessToken,
+          message,
+        }),
+      { providerRequestId: externalCommentId },
+    );
 
     return {
       externalReplyId: result.id,
@@ -436,11 +451,15 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     externalPostId: string,
     message: string,
   ): Promise<{ externalCommentId: string; postedAt: Date }> {
-    const result = await this.client.createPostComment({
-      externalPostId,
-      pageAccessToken: ctx.accessToken,
-      message,
-    });
+    const result = await markRemoteMutationBoundary(
+      () =>
+        this.client.createPostComment({
+          externalPostId,
+          pageAccessToken: ctx.accessToken,
+          message,
+        }),
+      { providerRequestId: externalPostId },
+    );
 
     return {
       externalCommentId: result.id,

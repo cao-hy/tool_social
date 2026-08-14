@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RemoteRequestError } from '@socialhub/shared';
 import { DevelopmentFixtureAdapter } from '../dev/development-fixture.adapter';
 import { createRuntimeAdapterRegistry } from '../registry-factory';
 import { TikTokAdapter } from '../tiktok/tiktok.adapter';
@@ -297,6 +298,123 @@ describe('TikTokAdapter', () => {
       externalPostId: 'v_inbox_file~123',
       pending: true,
     });
+  });
+
+  it('classifies TikTok publish init 5xx as remote outcome unknown', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/post/publish/creator_info/query/') {
+        return jsonResponse({
+          data: {
+            privacy_level_options: ['SELF_ONLY'],
+            max_video_post_duration_sec: 300,
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      if (url.pathname === '/v2/post/publish/video/init/') {
+        return jsonResponse(
+          { error: { code: 'internal_error', message: 'timeout' } },
+          { status: 500 },
+        );
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new TikTokAdapter({
+      fetch: testFetch,
+      clientKey: 'tt-key',
+      clientSecret: 'tt-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'tt-access',
+          externalAccountId: 'open-1',
+          correlationId: 'test',
+        },
+        {
+          caption: 'Demo TikTok',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+          options: {
+            postMode: 'DIRECT_POST',
+            privacyLevel: 'SELF_ONLY',
+            consentConfirmed: true,
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: 'RemoteRequestError',
+      phase: 'AWAITING_RESPONSE',
+      requestMayHaveReachedRemote: true,
+    } satisfies Partial<RemoteRequestError>);
+  });
+
+  it('classifies TikTok upload chunk 5xx after publish_id as remote outcome unknown', async () => {
+    const fetchMock = vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v2/post/publish/inbox/video/init/') {
+        return jsonResponse({
+          data: {
+            publish_id: 'v_inbox_file~500',
+            upload_url: 'https://open-upload.tiktokapis.com/upload/?upload_id=inbox-500',
+          },
+          error: { code: 'ok', message: '' },
+        });
+      }
+      if (url.origin === 'https://open-upload.tiktokapis.com') {
+        return jsonResponse(
+          { error: { code: 'internal_error', message: 'timeout' } },
+          { status: 500 },
+        );
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new TikTokAdapter({
+      fetch: testFetch,
+      clientKey: 'tt-key',
+      clientSecret: 'tt-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'tt-access',
+          externalAccountId: 'open-1',
+          correlationId: 'test',
+        },
+        {
+          caption: 'Upload later',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+          options: { postMode: 'MEDIA_UPLOAD' },
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: 'RemoteRequestError',
+      phase: 'AWAITING_RESPONSE',
+      requestMayHaveReachedRemote: true,
+      providerRequestId: 'v_inbox_file~500',
+    } satisfies Partial<RemoteRequestError>);
   });
 
   it('publish TikTok photo post bằng URL public đã verify', async () => {

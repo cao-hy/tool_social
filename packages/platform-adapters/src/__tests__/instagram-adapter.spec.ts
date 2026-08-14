@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RemoteRequestError } from '@socialhub/shared';
 import { InstagramAdapter } from '../instagram/instagram.adapter';
 import { normalizeInstagramError } from '../instagram/instagram.errors';
 
@@ -184,6 +185,46 @@ describe('InstagramAdapter', () => {
       'Instagram permalink lookup failed after publish',
       expect.objectContaining({ postId: 'media-1' }),
     );
+  });
+
+  it('classifies Instagram media_publish 5xx as remote outcome unknown', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/ig-user-1/media') && init?.method === 'POST') {
+        return jsonResponse({ id: 'container-1' });
+      }
+      if (url.pathname.endsWith('/ig-user-1/media_publish') && init?.method === 'POST') {
+        return jsonResponse({ error: { message: 'temporary server error' } }, { status: 500 });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      createAdapter().publishPost(
+        {
+          accessToken: 'page-token',
+          externalAccountId: 'ig-user-1',
+          correlationId: 'corr-1',
+        },
+        {
+          caption: 'hello',
+          media: [
+            {
+              type: 'IMAGE',
+              url: 'https://cdn.test/photo.jpg',
+              mimeType: 'image/jpeg',
+              sizeBytes: 100,
+            },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: 'RemoteRequestError',
+      phase: 'AWAITING_RESPONSE',
+      requestMayHaveReachedRemote: true,
+      providerRequestId: 'container-1',
+    } satisfies Partial<RemoteRequestError>);
   });
 
   it('không expose deletePost vì Instagram Media API không hỗ trợ xóa media', () => {

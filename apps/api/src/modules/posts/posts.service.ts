@@ -16,6 +16,7 @@ import {
   isPlatformError,
 } from '@socialhub/platform-adapters';
 import { decryptToken, type Keyring } from '@socialhub/security';
+import { RedisTokenRefreshLock } from '@socialhub/social-runtime';
 import { deriveContentPostStatus, buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import type { MediaType, Platform, PlatformPostStatus } from '@socialhub/shared';
 import type { QueuePayload } from '@socialhub/shared';
@@ -29,11 +30,13 @@ import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService, type AuditContext } from '../audit/audit.service';
-import { MediaService } from '../media/media.service';
+import type { MediaService } from '../media/media.service';
+import { MEDIA_SERVICE } from '../media/media.tokens';
 import type {
   BulkDeletePostsInput,
   CreatePostInput,
   ListPostsQuery,
+  ManualReviewResolutionInput,
   PublishPostInputDto,
   SchedulePostInput,
   UpdatePostInput,
@@ -52,7 +55,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     @Inject(KEYRING) private readonly keyring: Keyring,
     @Inject(AdapterRegistryFactory) private readonly adapterFactory: AdapterRegistryFactory,
     @Inject(AuditService) private readonly audit: AuditService,
-    @Inject(MediaService) private readonly media: MediaService,
+    @Inject(MEDIA_SERVICE) private readonly media: MediaService,
   ) {
     this.publishQueue = new Queue('publish-post', {
       connection: this.redis.getClient(),
@@ -177,6 +180,208 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
   async get(workspaceId: string, postId: string) {
     const post = await this.findPost(workspaceId, postId);
     return this.toPostView(post, await this.jobHistory(workspaceId, post.platformPosts));
+  }
+
+  async getPlatformPostManualReview(workspaceId: string, postId: string, platformPostId: string) {
+    const platformPost = await this.prisma.platformPost.findFirst({
+      where: { id: platformPostId, workspaceId, contentPostId: postId },
+      select: {
+        id: true,
+        platform: true,
+        status: true,
+        errorCode: true,
+        errorMessage: true,
+        reconciliationAttempts: true,
+        reconciliationError: true,
+        socialAccountId: true,
+        socialAccount: { select: { name: true } },
+      },
+    });
+    if (!platformPost) throw AppError.notFound('platform post');
+
+    const operation = await this.prisma.outboundOperation.findFirst({
+      where: {
+        workspaceId,
+        operationType: 'PUBLISH_POST',
+        resourceType: 'PlatformPost',
+        resourceId: platformPostId,
+        state: 'MANUAL_REVIEW',
+      },
+      orderBy: { operationGeneration: 'desc' },
+      select: {
+        id: true,
+        operationGeneration: true,
+        state: true,
+        fence: true,
+        attemptId: true,
+        dispatchAttempts: true,
+        reconciliationAttempts: true,
+        routeConfigVersion: true,
+        routeProxyFingerprint: true,
+        routeCountryCode: true,
+        providerRequestId: true,
+        remoteId: true,
+        lastErrorCode: true,
+        lastErrorMessage: true,
+        remoteStartedAt: true,
+        lastReconciledAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!operation) throw AppError.conflict('Platform post này không đang chờ manual review.');
+
+    return {
+      platformPost,
+      operation,
+      actions: ['CONFIRM_REMOTE_SUCCESS', 'CONFIRM_REMOTE_ABSENCE'],
+    };
+  }
+
+  async resolvePlatformPostManualReview(
+    workspaceId: string,
+    postId: string,
+    platformPostId: string,
+    actorUserId: string,
+    input: ManualReviewResolutionInput,
+    auditContext: AuditContext,
+  ) {
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const operation = await tx.outboundOperation.findFirst({
+        where: {
+          workspaceId,
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: platformPostId,
+        },
+        orderBy: { operationGeneration: 'desc' },
+        select: { id: true, state: true, fence: true, remoteCheckpoint: true },
+      });
+      if (!operation || operation.state !== 'MANUAL_REVIEW') {
+        throw AppError.conflict('Operation này không còn ở trạng thái manual review.');
+      }
+
+      const platformPost = await tx.platformPost.findFirst({
+        where: { id: platformPostId, workspaceId, contentPostId: postId },
+        select: {
+          id: true,
+          platform: true,
+          platformState: true,
+          socialAccountId: true,
+        },
+      });
+      if (!platformPost) throw AppError.notFound('platform post');
+
+      const operationUpdate =
+        input.action === 'CONFIRM_REMOTE_SUCCESS'
+          ? {
+              state: 'LOCAL_COMMITTED' as const,
+              fence: { increment: 1 },
+              remoteId: input.externalPostId,
+              remoteCheckpoint: {
+                ...(jsonObject(operation.remoteCheckpoint) ?? {}),
+                externalPostId: input.externalPostId,
+                externalUrl: input.externalUrl,
+                manuallyResolvedAt: now.toISOString(),
+                manuallyResolvedByUserId: actorUserId,
+              } as Prisma.InputJsonValue,
+              requiresManualReview: false,
+              remoteConfirmedAt: now,
+              completedAt: now,
+              lastErrorCode: null,
+              lastErrorMessage: null,
+            }
+          : {
+              state: 'CONFIRMED_ABSENT' as const,
+              fence: { increment: 1 },
+              requiresManualReview: false,
+              lastReconciledAt: now,
+              completedAt: now,
+              lastErrorCode: 'CONFIRMED_ABSENT',
+              lastErrorMessage: input.reason ?? 'Manual review confirmed no remote post exists.',
+            };
+
+      const updated = await tx.outboundOperation.updateMany({
+        where: { id: operation.id, state: 'MANUAL_REVIEW', fence: input.fence },
+        data: operationUpdate,
+      });
+      if (updated.count === 0) {
+        throw AppError.conflict('Manual review fence đã thay đổi. Tải lại trạng thái mới nhất.');
+      }
+
+      if (input.action === 'CONFIRM_REMOTE_SUCCESS') {
+        await tx.platformPost.update({
+          where: { id: platformPost.id },
+          data: {
+            status: 'PUBLISHED',
+            externalPostId: input.externalPostId,
+            externalUrl: input.externalUrl,
+            publishedAt: now,
+            requiresManualReview: false,
+            reconciliationError: null,
+            errorCode: null,
+            errorMessage: null,
+            platformState: {
+              ...(jsonObject(platformPost.platformState) ?? {}),
+              manualReview: {
+                action: input.action,
+                resolvedAt: now.toISOString(),
+                resolvedByUserId: actorUserId,
+              },
+            } as Prisma.InputJsonValue,
+          },
+        });
+      } else {
+        await tx.platformPost.update({
+          where: { id: platformPost.id },
+          data: {
+            status: 'FAILED',
+            requiresManualReview: false,
+            reconciliationError: null,
+            errorCode: 'CONFIRMED_ABSENT',
+            errorMessage: input.reason ?? 'Manual review confirmed no remote post exists.',
+            platformState: {
+              ...(jsonObject(platformPost.platformState) ?? {}),
+              manualReview: {
+                action: input.action,
+                resolvedAt: now.toISOString(),
+                resolvedByUserId: actorUserId,
+              },
+            } as Prisma.InputJsonValue,
+          },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          workspaceId,
+          actorUserId,
+          action: 'POST_UPDATED',
+          resourceType: 'PlatformPost',
+          resourceId: platformPost.id,
+          metadata: {
+            manualReviewAction: input.action,
+            operationId: operation.id,
+            fence: input.fence,
+            platform: platformPost.platform,
+            socialAccountId: platformPost.socialAccountId,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    });
+
+    await this.updateParentStatus(postId);
+    await this.audit.record({
+      ...auditContext,
+      actorUserId,
+      workspaceId,
+      action: 'POST_UPDATED',
+      resourceType: 'PlatformPost',
+      resourceId: platformPostId,
+      metadata: { manualReviewAction: input.action },
+    });
+
+    return this.get(workspaceId, postId);
   }
 
   async create(
@@ -638,19 +843,79 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     const failed = post.platformPosts.filter((item) => item.status === 'FAILED');
     if (failed.length === 0) throw AppError.validation('Không có platform post thất bại để retry.');
 
-    await this.prisma.$transaction([
-      this.prisma.contentPost.update({
+    const retryIntent = await this.prisma.$transaction(async (tx) => {
+      const outboxEventIds: string[] = [];
+      for (const item of failed) {
+        const latest = await tx.outboundOperation.findFirst({
+          where: {
+            operationType: 'PUBLISH_POST',
+            resourceType: 'PlatformPost',
+            resourceId: item.id,
+          },
+          orderBy: { operationGeneration: 'desc' },
+          select: { id: true, operationGeneration: true, state: true },
+        });
+        const decision = canCreateNextGeneration(latest);
+        if (decision.action === 'REJECT') throw AppError.conflict(decision.reason);
+      }
+
+      await tx.contentPost.update({
         where: { id: postId },
         data: { status: 'QUEUED' },
-      }),
-      this.prisma.platformPost.updateMany({
+      });
+      await tx.platformPost.updateMany({
         where: { id: { in: failed.map((item) => item.id) } },
         data: { status: 'QUEUED', errorCode: null, errorMessage: null },
-      }),
-    ]);
+      });
+
+      for (const item of failed) {
+        const latest = await tx.outboundOperation.findFirst({
+          where: {
+            operationType: 'PUBLISH_POST',
+            resourceType: 'PlatformPost',
+            resourceId: item.id,
+          },
+          orderBy: { operationGeneration: 'desc' },
+          select: { id: true, operationGeneration: true, state: true },
+        });
+        const decision = canCreateNextGeneration(latest);
+        if (decision.action === 'REJECT') throw AppError.conflict(decision.reason);
+        const operation =
+          decision.action === 'REUSE_ACTIVE'
+            ? await tx.outboundOperation.findUniqueOrThrow({ where: { id: decision.operationId } })
+            : await findOrCreateOutboundOperation(tx, {
+                workspaceId,
+                operationType: 'PUBLISH_POST',
+                resourceType: 'PlatformPost',
+                resourceId: item.id,
+                operationGeneration: decision.nextGeneration,
+              });
+        const payload: QueuePayload<'retry-failed-post'> = {
+          platformPostId: item.id,
+          workspaceId,
+          requestedByUserId: actorUserId,
+          operationId: operation.id,
+        };
+        const jobId = buildJobId('retry-failed-post', payload);
+        const event = await createQueueOutboxEvent(tx, {
+          workspaceId,
+          queueName: 'retry-failed-post',
+          jobId,
+          payload,
+          options: buildQueueJobOptions('retry-failed-post', jobId),
+          aggregateType: 'OutboundOperation',
+          aggregateId: operation.id,
+          dedupeKey: `retry-publish:${operation.id}`,
+        });
+        outboxEventIds.push(event.id);
+      }
+      return { outboxEventIds };
+    });
 
     await Promise.all(
-      failed.map((item) => this.enqueueRetryPlatformPost(item.id, workspaceId, actorUserId)),
+      retryIntent.outboxEventIds.map((outboxEventId) =>
+        this.dispatchPublishOutboxEvent(outboxEventId),
+      ),
     );
 
     await this.audit.record({
@@ -1003,54 +1268,6 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         jobId,
         payload,
         options,
-        aggregateType: 'OutboundOperation',
-        aggregateId: operation.id,
-      });
-    });
-
-    await this.dispatchPublishOutboxEvent(event.id);
-  }
-
-  private async enqueueRetryPlatformPost(
-    platformPostId: string,
-    workspaceId: string,
-    requestedByUserId: string,
-  ): Promise<void> {
-    const event = await this.prisma.$transaction(async (tx) => {
-      const latest = await tx.outboundOperation.findFirst({
-        where: {
-          operationType: 'PUBLISH_POST',
-          resourceType: 'PlatformPost',
-          resourceId: platformPostId,
-        },
-        orderBy: { operationGeneration: 'desc' },
-        select: { id: true, operationGeneration: true, state: true },
-      });
-      const decision = canCreateNextGeneration(latest);
-      if (decision.action === 'REJECT') throw AppError.conflict(decision.reason);
-      const operation =
-        decision.action === 'REUSE_ACTIVE'
-          ? await tx.outboundOperation.findUniqueOrThrow({ where: { id: decision.operationId } })
-          : await findOrCreateOutboundOperation(tx, {
-              workspaceId,
-              operationType: 'PUBLISH_POST',
-              resourceType: 'PlatformPost',
-              resourceId: platformPostId,
-              operationGeneration: decision.nextGeneration,
-            });
-      const payload: QueuePayload<'retry-failed-post'> = {
-        platformPostId,
-        workspaceId,
-        requestedByUserId,
-        operationId: operation.id,
-      };
-      const jobId = buildJobId('retry-failed-post', payload);
-      return await createQueueOutboxEvent(tx, {
-        workspaceId,
-        queueName: 'retry-failed-post',
-        jobId,
-        payload,
-        options: buildQueueJobOptions('retry-failed-post', jobId),
         aggregateType: 'OutboundOperation',
         aggregateId: operation.id,
       });
@@ -2088,6 +2305,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         prisma: this.prisma,
         keyring: this.keyring,
         adapterFactory: this.adapterFactory,
+        tokenRefreshLock: new RedisTokenRefreshLock(this.redis.getClient()),
         account,
       },
       adapter,

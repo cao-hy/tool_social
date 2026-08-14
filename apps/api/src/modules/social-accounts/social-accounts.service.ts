@@ -12,6 +12,7 @@ import {
 } from '@socialhub/platform-adapters';
 import type { Prisma } from '@socialhub/db';
 import type { Platform } from '@socialhub/shared';
+import { RedisTokenRefreshLock } from '@socialhub/social-runtime';
 import { buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import {
   decryptToken,
@@ -357,23 +358,33 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     });
 
-    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get(account.platform);
-      if (account.token && adapter.revokeToken) {
-        try {
-          const accessToken = decryptToken(account.token.accessToken, this.keyring);
-          await adapter.revokeToken(accessToken);
-        } catch (error) {
-          logger.warn(
-            {
-              socialAccountId,
-              error: error instanceof Error ? error.message : String(error),
-            },
-            'Failed to revoke token during disconnection. Proceeding to delete account anyway.',
-          );
+    try {
+      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+        const adapter = adapters.get(account.platform);
+        if (account.token && adapter.revokeToken) {
+          try {
+            const accessToken = decryptToken(account.token.accessToken, this.keyring);
+            await adapter.revokeToken(accessToken);
+          } catch (error) {
+            logger.warn(
+              {
+                socialAccountId,
+                error: error instanceof Error ? error.message : String(error),
+              },
+              'Failed to revoke token during disconnection. Proceeding to delete account anyway.',
+            );
+          }
         }
-      }
-    });
+      });
+    } catch (error) {
+      logger.warn(
+        {
+          socialAccountId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Failed to prepare revoke route during disconnection. Proceeding to delete account anyway.',
+      );
+    }
 
     await this.prisma.$transaction([
       this.prisma.socialToken.deleteMany({ where: { socialAccountId } }),
@@ -682,6 +693,7 @@ export class SocialAccountsService implements OnModuleDestroy {
         prisma: this.prisma,
         keyring: this.keyring,
         adapterFactory: this.adapterFactory,
+        tokenRefreshLock: new RedisTokenRefreshLock(this.redis.getClient()),
         account,
       },
       adapter,

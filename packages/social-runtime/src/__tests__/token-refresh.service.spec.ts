@@ -1,9 +1,43 @@
 import { describe, expect, it, vi } from 'vitest';
 import { encryptToken, Keyring } from '@socialhub/security';
-import { InMemoryTokenRefreshLock, TokenRefreshService } from '../token-refresh.service';
+import {
+  InMemoryTokenRefreshLock,
+  RedisTokenRefreshLock,
+  TokenRefreshService,
+} from '../token-refresh.service';
 
 function keyring() {
   return new Keyring([{ version: 'v1', key: Buffer.alloc(32, 7) }], 'v1');
+}
+
+class FakeRedisLockClient {
+  private readonly values = new Map<string, { value: string; expiresAt: number }>();
+
+  async set(key: string, value: string, _px: 'PX', ttlMs: number, _nx: 'NX'): Promise<'OK' | null> {
+    this.evict(key);
+    if (this.values.has(key)) return null;
+    this.values.set(key, { value, expiresAt: Date.now() + ttlMs });
+    return 'OK';
+  }
+
+  async eval(script: string, _keyCount: number, ...args: Array<string | number>): Promise<number> {
+    const [key, token, ttlMs] = args;
+    if (typeof key !== 'string' || typeof token !== 'string') return 0;
+    this.evict(key);
+    const current = this.values.get(key);
+    if (!current || current.value !== token) return 0;
+    if (script.includes('pexpire')) {
+      this.values.set(key, { value: token, expiresAt: Date.now() + Number(ttlMs) });
+      return 1;
+    }
+    this.values.delete(key);
+    return 1;
+  }
+
+  private evict(key: string): void {
+    const current = this.values.get(key);
+    if (current && current.expiresAt <= Date.now()) this.values.delete(key);
+  }
 }
 
 describe('TokenRefreshService', () => {
@@ -69,7 +103,7 @@ describe('TokenRefreshService', () => {
     expect(tx.socialToken.update).not.toHaveBeenCalled();
   });
 
-  it('T28 five concurrent refresh requests produce one durable winner and losers reuse it', async () => {
+  it('T28 five independent services sharing the Redis lock produce one durable winner and losers reuse it', async () => {
     const keys = keyring();
     const expiredAccess = encryptToken('expired-access', keys);
     const expiredRefresh = encryptToken('refresh-token', keys);
@@ -125,7 +159,8 @@ describe('TokenRefreshService', () => {
         }),
       ),
     };
-    const service = new TokenRefreshService(prisma as never, keys, new InMemoryTokenRefreshLock(), {
+    const redis = new FakeRedisLockClient();
+    const platformResolver = {
       withWorkspace: vi.fn(async (_workspaceId, fn) =>
         fn({
           adapters: new Map([['YOUTUBE', { refreshToken: adapterRefresh }]]),
@@ -133,10 +168,20 @@ describe('TokenRefreshService', () => {
           release: async () => undefined,
         } as never),
       ),
-    });
+    };
 
     await expect(
-      Promise.all(Array.from({ length: 5 }, () => service.getValidAccessToken('account_1'))),
+      Promise.all(
+        Array.from({ length: 5 }, () => {
+          const service = new TokenRefreshService(
+            prisma as never,
+            keys,
+            new RedisTokenRefreshLock(redis),
+            platformResolver,
+          );
+          return service.getValidAccessToken('account_1');
+        }),
+      ),
     ).resolves.toEqual([
       'winner-access',
       'winner-access',

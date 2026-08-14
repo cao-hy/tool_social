@@ -69,14 +69,9 @@ export function createReconciliationProcessor(input: {
       return { status: 'STALE_ATTEMPT' };
     }
 
-    if (post.reconciliationAttempts >= 5) {
-      await input.prisma.platformPost.update({
-        where: { id: post.id },
-        data: {
-          requiresManualReview: true,
-          reconciliationError: 'Đã vượt quá 5 lần đối soát tự động.',
-          lastReconciledAt: new Date(),
-        },
+    if (operation.reconciliationAttempts >= 5) {
+      await transitionPublishToManualReview(input.prisma, operation, post.id, {
+        reason: 'Đã vượt quá 5 lần đối soát tự động.',
       });
       return { status: 'MANUAL_REVIEW_REQUIRED' };
     }
@@ -84,15 +79,10 @@ export function createReconciliationProcessor(input: {
     return await input.platformResolver.withWorkspace(payload.workspaceId, async ({ adapters }) => {
       const adapter = adapters.get(post.platform);
       if (!adapter || !adapter.reconcilePublish) {
-        const attempts = post.reconciliationAttempts + 1;
-        await input.prisma.platformPost.update({
-          where: { id: post.id },
-          data: {
-            reconciliationAttempts: attempts,
-            lastReconciledAt: new Date(),
-            requiresManualReview: attempts >= 5,
-            reconciliationError: 'Platform adapter chưa hỗ trợ đối soát tự động.',
-          },
+        const attempts = operation.reconciliationAttempts + 1;
+        await recordIndeterminateReconciliation(input.prisma, operation, post.id, {
+          attempts,
+          reason: 'Platform adapter chưa hỗ trợ đối soát tự động.',
         });
         if (attempts < 5) {
           throw new ReconciliationIndeterminateError(
@@ -121,13 +111,21 @@ export function createReconciliationProcessor(input: {
         correlationId: `reconcile:${post.id}:${payload.publishAttemptId}`,
       };
 
-      const remoteCheckpoint = remoteCheckpointFromState(post.platformState);
-      const result = await adapter.reconcilePublish(ctx, {
-        platformPostId: post.id,
-        publishAttemptId: payload.publishAttemptId,
-        providerRequestId: remoteCheckpoint?.providerRequestId,
-        remoteCheckpoint,
-      });
+      const remoteCheckpoint = remoteCheckpointFromOperation(operation.remoteCheckpoint);
+      const result = await adapter
+        .reconcilePublish(ctx, {
+          platformPostId: post.id,
+          publishAttemptId: payload.publishAttemptId,
+          providerRequestId: remoteCheckpoint?.providerRequestId,
+          remoteCheckpoint,
+        })
+        .catch((error) => ({
+          result: 'INDETERMINATE' as const,
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Provider reconciliation failed with an unknown error.',
+        }));
 
       if (result.result === 'FOUND') {
         const committedAt = new Date();
@@ -222,35 +220,10 @@ export function createReconciliationProcessor(input: {
         return { status: 'RESOLVED_FAILED' };
       }
 
-      const nextAttempts = post.reconciliationAttempts + 1;
-      const reconciledAt = new Date();
-      const updated = await input.prisma.$transaction(async (tx) => {
-        const indeterminate = await tx.outboundOperation.updateMany({
-          where: {
-            id: operation.id,
-            state: 'REMOTE_UNKNOWN',
-            attemptId: operation.attemptId,
-            fence: operation.fence,
-          },
-          data: {
-            reconciliationAttempts: { increment: 1 },
-            lastReconciledAt: reconciledAt,
-            requiresManualReview: nextAttempts >= 5,
-            lastErrorCode: 'RECONCILIATION_INDETERMINATE',
-            lastErrorMessage: result.reason,
-          },
-        });
-        if (indeterminate.count !== 1) return false;
-        await tx.platformPost.update({
-          where: { id: post.id },
-          data: {
-            reconciliationAttempts: nextAttempts,
-            lastReconciledAt: reconciledAt,
-            requiresManualReview: nextAttempts >= 5,
-            reconciliationError: result.reason,
-          },
-        });
-        return true;
+      const nextAttempts = operation.reconciliationAttempts + 1;
+      const updated = await recordIndeterminateReconciliation(input.prisma, operation, post.id, {
+        attempts: nextAttempts,
+        reason: result.reason,
       });
       if (!updated) return { status: 'STALE_OPERATION' };
       if (nextAttempts < 5) {
@@ -282,14 +255,9 @@ async function resolveReconciliationOperation(
   });
 }
 
-function remoteCheckpointFromState(
-  platformState: Prisma.JsonValue | null,
+function remoteCheckpointFromOperation(
+  checkpoint: Prisma.JsonValue | null,
 ): RemotePublishCheckpoint | undefined {
-  if (!platformState || typeof platformState !== 'object' || Array.isArray(platformState)) {
-    return undefined;
-  }
-  const state = platformState as Record<string, unknown>;
-  const checkpoint = state.remoteCheckpoint;
   if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) {
     return undefined;
   }
@@ -310,6 +278,93 @@ function remoteCheckpointFromState(
         ? checkpointRecord.remoteMediaId
         : undefined,
   };
+}
+
+async function recordIndeterminateReconciliation(
+  prisma: PrismaClientInstance,
+  operation: {
+    id: string;
+    state: string;
+    attemptId: string | null;
+    fence: number;
+  },
+  platformPostId: string,
+  input: { attempts: number; reason: string },
+): Promise<boolean> {
+  const reconciledAt = new Date();
+  const manualReview = input.attempts >= 5;
+  return await prisma.$transaction(async (tx) => {
+    const indeterminate = await tx.outboundOperation.updateMany({
+      where: {
+        id: operation.id,
+        state: 'REMOTE_UNKNOWN',
+        attemptId: operation.attemptId,
+        fence: operation.fence,
+      },
+      data: {
+        state: manualReview ? 'MANUAL_REVIEW' : 'REMOTE_UNKNOWN',
+        fence: manualReview ? { increment: 1 } : undefined,
+        reconciliationAttempts: { increment: 1 },
+        lastReconciledAt: reconciledAt,
+        requiresManualReview: manualReview,
+        lastErrorCode: 'RECONCILIATION_INDETERMINATE',
+        lastErrorMessage: input.reason,
+      },
+    });
+    if (indeterminate.count !== 1) return false;
+    await tx.platformPost.update({
+      where: { id: platformPostId },
+      data: {
+        reconciliationAttempts: input.attempts,
+        lastReconciledAt: reconciledAt,
+        requiresManualReview: manualReview,
+        reconciliationError: input.reason,
+      },
+    });
+    return true;
+  });
+}
+
+async function transitionPublishToManualReview(
+  prisma: PrismaClientInstance,
+  operation: {
+    id: string;
+    state: string;
+    attemptId: string | null;
+    fence: number;
+  },
+  platformPostId: string,
+  input: { reason: string },
+): Promise<boolean> {
+  const reviewedAt = new Date();
+  return await prisma.$transaction(async (tx) => {
+    const updated = await tx.outboundOperation.updateMany({
+      where: {
+        id: operation.id,
+        state: 'REMOTE_UNKNOWN',
+        attemptId: operation.attemptId,
+        fence: operation.fence,
+      },
+      data: {
+        state: 'MANUAL_REVIEW',
+        fence: { increment: 1 },
+        requiresManualReview: true,
+        lastReconciledAt: reviewedAt,
+        lastErrorCode: 'MANUAL_REVIEW_REQUIRED',
+        lastErrorMessage: input.reason,
+      },
+    });
+    if (updated.count !== 1) return false;
+    await tx.platformPost.update({
+      where: { id: platformPostId },
+      data: {
+        requiresManualReview: true,
+        reconciliationError: input.reason,
+        lastReconciledAt: reviewedAt,
+      },
+    });
+    return true;
+  });
 }
 
 async function updateParentStatus(prisma: PrismaClientInstance, contentPostId: string) {

@@ -10,6 +10,7 @@ import {
 } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported } from '../core/platform-error';
+import { markRemoteMutationBoundary } from '../core/remote-mutation-boundary';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
@@ -416,11 +417,15 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
     externalCommentId: string,
     message: string,
   ): Promise<{ externalReplyId: string; sentAt: Date }> {
-    const result = await this.client.replyToComment({
-      accessToken: ctx.accessToken,
-      parentCommentId: externalCommentId,
-      message,
-    });
+    const result = await markRemoteMutationBoundary(
+      () =>
+        this.client.replyToComment({
+          accessToken: ctx.accessToken,
+          parentCommentId: externalCommentId,
+          message,
+        }),
+      { providerRequestId: externalCommentId },
+    );
 
     return {
       externalReplyId: result.id,
@@ -433,12 +438,16 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
     externalPostId: string,
     message: string,
   ): Promise<{ externalCommentId: string; postedAt: Date }> {
-    const result = await this.client.createTopLevelComment({
-      accessToken: ctx.accessToken,
-      channelId: ctx.externalAccountId,
-      videoId: externalPostId,
-      message,
-    });
+    const result = await markRemoteMutationBoundary(
+      () =>
+        this.client.createTopLevelComment({
+          accessToken: ctx.accessToken,
+          channelId: ctx.externalAccountId,
+          videoId: externalPostId,
+          message,
+        }),
+      { providerRequestId: externalPostId },
+    );
     const comment = result.snippet.topLevelComment;
 
     return {

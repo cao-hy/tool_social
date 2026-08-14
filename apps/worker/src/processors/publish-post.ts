@@ -13,6 +13,7 @@ import {
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
 import {
+  createQueueOutboxEvent,
   operationRequestKey,
   createPrismaClient,
   type Prisma,
@@ -24,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import {
   deriveContentPostStatus,
   buildJobId,
+  buildQueueJobOptions,
   PLATFORM_LABELS,
   RemoteRequestError,
   buildPublishNetworkProof,
@@ -44,8 +46,10 @@ import { getFreshAccessToken } from './token-refresh';
 import {
   beginOutboundAttempt,
   markLocalCommittedInTransaction,
+  markPreTargetFailed,
   markRemoteConfirmed,
   markRemoteUnknown,
+  recordRouteMetadata,
   rollbackBeforeConnect,
   type OutboundAttemptOwnership,
 } from './outbound-operation';
@@ -72,6 +76,58 @@ const adapterLogger: AdapterLogger = {
   error: (message, context) => logger.error(context ?? {}, message),
 };
 
+type PublishStageTimings = {
+  queueWaitMs: number;
+  loadStateMs: number;
+  tokenRefreshMs: number;
+  prepareRouteMs: number;
+  attestationMs: number;
+  mediaPrepareMs: number;
+  remotePublishMs: number;
+  postPublishFollowupMs: number;
+  localCommitMs: number;
+  totalMs: number;
+};
+
+function emptyPublishStageTimings(job: { timestamp?: number }): PublishStageTimings {
+  const now = Date.now();
+  return {
+    queueWaitMs: typeof job.timestamp === 'number' ? Math.max(0, now - job.timestamp) : 0,
+    loadStateMs: 0,
+    tokenRefreshMs: 0,
+    prepareRouteMs: 0,
+    attestationMs: 0,
+    mediaPrepareMs: 0,
+    remotePublishMs: 0,
+    postPublishFollowupMs: 0,
+    localCommitMs: 0,
+    totalMs: 0,
+  };
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, Date.now() - startedAt);
+}
+
+function logPublishStageTimings(input: {
+  timings: PublishStageTimings;
+  workspaceId: string;
+  platformPostId: string;
+  operationId?: string;
+  platform?: Platform;
+}): void {
+  logger.info(
+    {
+      workspaceId: input.workspaceId,
+      platformPostId: input.platformPostId,
+      operationId: input.operationId,
+      platform: input.platform,
+      ...input.timings,
+    },
+    'Publish processor stage timings',
+  );
+}
+
 export function createPublishPostProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
@@ -85,6 +141,7 @@ export function createPublishPostProcessor(input: {
     id?: string;
     name?: string;
     attemptsMade?: number;
+    timestamp?: number;
     opts?: { attempts?: number };
   }) => {
     const payload = publishPostPayloadSchema.parse(job.data);
@@ -156,6 +213,14 @@ export function createPublishPostProcessor(input: {
       });
 
       if (isDead) {
+        const recoveryScheduled = await ensurePublishLocalCommitRecovery(input.prisma, {
+          payload,
+          platformPostId: payload.platformPostId,
+          workspaceId: payload.workspaceId,
+        });
+        if (recoveryScheduled) {
+          return { published: false, reason: 'LOCAL_COMMIT_RECOVERY_SCHEDULED' };
+        }
         // Cập nhật post thành FAILED để người dùng biết
         const contentPostId = await markFailed(
           input.prisma,
@@ -182,281 +247,158 @@ async function publishPlatformPost(
     reconcileQueue?: Queue;
   },
   payload: z.infer<typeof publishPostPayloadSchema>,
-  job: { id?: string; attemptsMade?: number; opts?: { attempts?: number } },
+  job: { id?: string; attemptsMade?: number; timestamp?: number; opts?: { attempts?: number } },
 ) {
-  const platformPost = await input.prisma.platformPost.findFirst({
-    where: { id: payload.platformPostId, workspaceId: payload.workspaceId },
-    include: {
-      socialAccount: { include: { token: true } },
-      media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
-      contentPost: {
-        include: {
-          media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
-          platformPosts: true,
+  const totalStartedAt = Date.now();
+  const timings = emptyPublishStageTimings(job);
+  let timingPlatform: Platform | undefined;
+  let timingOperationId = payload.operationId;
+  try {
+    const loadStateStartedAt = Date.now();
+    const platformPost = await input.prisma.platformPost.findFirst({
+      where: { id: payload.platformPostId, workspaceId: payload.workspaceId },
+      include: {
+        socialAccount: { include: { token: true } },
+        media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
+        contentPost: {
+          include: {
+            media: { include: { mediaAsset: true }, orderBy: { position: 'asc' } },
+            platformPosts: true,
+          },
         },
       },
-    },
-  });
+    });
+    timings.loadStateMs = elapsedMs(loadStateStartedAt);
+    timingPlatform = platformPost?.platform as Platform | undefined;
 
-  if (!platformPost) {
-    logger.warn({ jobId: job.id, payload }, 'Không tìm thấy PlatformPost để publish');
-    return { published: false, reason: 'not_found' };
-  }
-
-  if (platformPost.externalPostId || platformPost.status === 'PUBLISHED') {
-    return { published: false, reason: 'already_published' };
-  }
-
-  if (platformPost.status === 'REMOTE_RESULT_UNKNOWN') {
-    logger.warn(
-      {
-        platformPostId: platformPost.id,
-        publishAttemptId: platformPost.publishAttemptId,
-      },
-      'Không publish lại khi remote result chưa được xác định',
-    );
-    return { published: false, reason: 'REMOTE_RESULT_UNKNOWN' };
-  }
-
-  if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
-    await markFailed(
-      input.prisma,
-      platformPost.id,
-      'ACCOUNT_DISCONNECTED',
-      'Social account chưa kết nối.',
-    );
-    await updateParentStatus(input.prisma, platformPost.contentPostId);
-    return { published: false, reason: 'account_disconnected' };
-  }
-
-  await input.prisma.platformPost.update({
-    where: { id: platformPost.id },
-    data: {
-      status: 'PROCESSING',
-      attemptCount: { increment: 1 },
-      lastAttemptAt: new Date(),
-    },
-  });
-
-  await input.prisma.contentPost.update({
-    where: { id: platformPost.contentPostId },
-    data: { status: 'PROCESSING' },
-  });
-
-  const adaptersContext = await input.adapterFactory.forWorkspace(payload.workspaceId);
-  try {
-    const adapters = adaptersContext.adapters;
-    const adapter = adapters.get(platformPost.platform);
-    if (
-      platformPost.socialAccount.scopes.includes('development-fixture') &&
-      !(adapter instanceof DevelopmentFixtureAdapter)
-    ) {
-      const message =
-        'Social account này được tạo bằng development fixture. Hãy disconnect và kết nối lại bằng OAuth thật trước khi publish.';
-      await markFailed(input.prisma, platformPost.id, 'ACCOUNT_RECONNECT_REQUIRED', message);
-      await input.prisma.socialAccount.update({
-        where: { id: platformPost.socialAccountId },
-        data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
-      });
-      await updateParentStatus(input.prisma, platformPost.contentPostId);
-      return { published: false, reason: 'fixture_account_with_real_adapter' };
+    if (!platformPost) {
+      logger.warn({ jobId: job.id, payload }, 'Không tìm thấy PlatformPost để publish');
+      return { published: false, reason: 'not_found' };
     }
 
-    let publishNetworkProof = buildPublishNetworkProof({
-      egressPolicy: adaptersContext.proxy?.egressPolicy ?? null,
-      proxyEnabled: adaptersContext.proxy?.config.enabled ?? null,
-      proxyActive: adaptersContext.proxy ? Boolean(adaptersContext.proxy.attestation) : null,
-      configVersion: adaptersContext.proxy?.configVersion ?? null,
-      proxyFingerprint: adaptersContext.proxy?.routeFingerprint ?? null,
-      countryLock: adaptersContext.proxy?.config.countryLock ?? null,
-      countryLockSatisfied: adaptersContext.proxy?.config.countryLock
-        ? adaptersContext.proxy.attestation?.countryCode ===
-          adaptersContext.proxy.config.countryLock
-        : null,
-      attestation: adaptersContext.proxy?.attestation ?? null,
-      checkOk: adaptersContext.proxy?.attestation ? true : null,
-    });
-    let publishAttemptId: string | null = null;
-    let operationOwnership: OutboundAttemptOwnership | null = null;
-    let remoteReturnedSuccess = false;
-    let remoteConfirmationPersisted = false;
+    if (platformPost.externalPostId || platformPost.status === 'PUBLISHED') {
+      return { published: false, reason: 'already_published' };
+    }
 
-    try {
-      const accessToken = await getFreshAccessToken({
-        prisma: input.prisma,
-        keyring: input.keyring,
-        locks: input.locks,
-        adapter,
-        account: {
-          id: platformPost.socialAccount.id,
-          workspaceId: platformPost.socialAccount.workspaceId,
-          platform: platformPost.socialAccount.platform,
-          token: platformPost.socialAccount.token,
-        },
-      });
-      const sourceMedia =
-        platformPost.media.length > 0 ? platformPost.media : platformPost.contentPost.media;
-      const options = jsonObject(platformPost.options);
-      const media = await Promise.all(
-        sourceMedia
-          .filter((item) => item.mediaAsset.status === 'READY')
-          .map((item) =>
-            mediaInputFromAsset(input.storage, item.mediaAsset, platformPost.platform),
-          ),
-      );
-      const thumbnail = await thumbnailInputFromOptions({
-        storage: input.storage,
-        prisma: input.prisma,
-        workspaceId: payload.workspaceId,
-        platform: platformPost.platform,
-        options,
-        sourceMedia,
-      });
-      logger.info(
+    if (platformPost.status === 'REMOTE_RESULT_UNKNOWN') {
+      logger.warn(
         {
-          correlationId: payload.correlationId,
           platformPostId: platformPost.id,
-          platform: platformPost.platform,
-          mediaCount: media.length,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          media: platformPost.contentPost.media.map((item: any, index: number) => ({
-            index,
-            type: item.type,
-            mimeType: item.mimeType,
-            sizeBytes: item.sizeBytes,
-            byteLength: item.bytes?.byteLength ?? 0,
-          })),
-          thumbnailSelection: {
-            mode:
-              options?.thumbnailMode ??
-              (platformPost.platform === 'FACEBOOK' && thumbnail
-                ? 'GENERATED_FALLBACK'
-                : undefined),
-            mediaAssetId: options?.thumbnailMediaAssetId,
-          },
-          thumbnail: thumbnail
-            ? {
-                type: thumbnail.type,
-                mimeType: thumbnail.mimeType,
-                sizeBytes: thumbnail.sizeBytes,
-                byteLength: thumbnail.bytes?.byteLength ?? 0,
-              }
-            : undefined,
+          publishAttemptId: platformPost.publishAttemptId,
         },
-        'Chuẩn bị media trước khi gọi platform publish',
+        'Không publish lại khi remote result chưa được xác định',
       );
+      return { published: false, reason: 'REMOTE_RESULT_UNKNOWN' };
+    }
 
-      const publishInput = {
-        caption: platformPost.caption ?? platformPost.contentPost.body ?? undefined,
-        title: platformPost.title ?? platformPost.contentPost.title ?? undefined,
-        description: platformPost.description ?? platformPost.contentPost.body ?? undefined,
-        linkUrl: platformPost.linkUrl ?? platformPost.contentPost.linkUrl ?? undefined,
-        hashtags: platformPost.contentPost.hashtags,
-        media,
-        thumbnail,
-        options,
-      };
-
-      const validation = adapter.validatePost(publishInput);
-      if (!validation.valid) {
-        await markFailed(
-          input.prisma,
-          platformPost.id,
-          'VALIDATION',
-          validation.issues
-            .map((issue: { field: string; message: string }) => `${issue.field}: ${issue.message}`)
-            .join('; '),
-        );
-        await updateParentStatus(input.prisma, platformPost.contentPostId);
-        return { published: false, reason: 'validation' };
-      }
-
-      const adapterContext = {
-        accessToken,
-        externalAccountId: platformPost.socialAccount.externalAccountId,
-        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-        correlationId: payload.correlationId,
-        logger: adapterLogger,
-        onRemoteCheckpoint: async (checkpoint: RemotePublishCheckpoint) => {
-          if (!operationOwnership) return;
-          await storeRemoteCheckpoint(input.prisma, operationOwnership, checkpoint);
-        },
-      } satisfies AdapterContext;
-
-      const operationId = await resolvePublishOperationId(
-        input.prisma,
-        platformPost,
-        payload.operationId,
-      );
-
-      const currentAccount = await input.prisma.socialAccount.findUnique({
-        where: { id: platformPost.socialAccountId },
-        select: { status: true, disconnectGeneration: true },
-      });
-      if (
-        !currentAccount ||
-        currentAccount.status !== 'CONNECTED' ||
-        currentAccount.disconnectGeneration !== platformPost.socialAccount.disconnectGeneration
-      ) {
-        await markFailed(
-          input.prisma,
-          platformPost.id,
-          'ACCOUNT_DISCONNECTED',
-          'Social account disconnected during preparation.',
-        );
-        await updateParentStatus(input.prisma, platformPost.contentPostId);
-        return { published: false, reason: 'account_disconnected' };
-      }
-
-      const startOperation = await beginOutboundAttempt(input.prisma, operationId);
-      if (startOperation.action === 'LOCAL_COMMIT') {
+    const operationId = await resolvePublishOperationId(
+      input.prisma,
+      platformPost,
+      payload.operationId,
+    );
+    timingOperationId = operationId;
+    const startOperation = await beginOutboundAttempt(input.prisma, operationId, {
+      expected: {
+        workspaceId: payload.workspaceId,
+        operationType: 'PUBLISH_POST',
+        resourceType: 'PlatformPost',
+        resourceId: platformPost.id,
+      },
+    });
+    if (startOperation.action === 'LOCAL_COMMIT') {
+      const localCommitStartedAt = Date.now();
+      try {
         return await commitPublishLocally(input.prisma, {
           platformPost,
           payload,
           jobId: job.id,
           ownership: startOperation.ownership,
         });
+      } finally {
+        timings.localCommitMs = elapsedMs(localCommitStartedAt);
       }
-      if (startOperation.action !== 'DISPATCH_REMOTE') {
-        return { published: false, reason: startOperation.reason };
-      }
-      operationOwnership = startOperation.ownership;
-
-      const accountStillEligible = await input.prisma.socialAccount.findUnique({
-        where: { id: platformPost.socialAccountId },
-        select: { status: true, disconnectGeneration: true },
+    }
+    if (startOperation.action === 'RECONCILE' && startOperation.reason === 'REMOTE_UNKNOWN') {
+      await ensurePublishReconciliationIntent(input.prisma, {
+        platformPost,
+        payload,
+        operationId,
       });
+      await updateParentStatus(input.prisma, platformPost.contentPostId);
+      return { published: false, reason: 'REMOTE_RESULT_UNKNOWN' };
+    }
+    if (startOperation.action !== 'DISPATCH_REMOTE') {
+      return { published: false, reason: startOperation.reason };
+    }
+    const operationOwnership: OutboundAttemptOwnership | null = startOperation.ownership;
+
+    if (!platformPost.socialAccount.token || platformPost.socialAccount.status !== 'CONNECTED') {
+      await rollbackBeforeConnect(input.prisma, operationOwnership, {
+        code: 'ACCOUNT_DISCONNECTED',
+        message: 'Social account is not connected before remote publish dispatch.',
+      });
+      await markFailed(
+        input.prisma,
+        platformPost.id,
+        'ACCOUNT_DISCONNECTED',
+        'Social account chưa kết nối.',
+      );
+      await updateParentStatus(input.prisma, platformPost.contentPostId);
+      return { published: false, reason: 'account_disconnected' };
+    }
+
+    await input.prisma.platformPost.update({
+      where: { id: platformPost.id },
+      data: {
+        status: 'PROCESSING',
+        attemptCount: { increment: 1 },
+        lastAttemptAt: new Date(),
+      },
+    });
+
+    await input.prisma.contentPost.update({
+      where: { id: platformPost.contentPostId },
+      data: { status: 'PROCESSING' },
+    });
+
+    const prepareRouteStartedAt = Date.now();
+    const adaptersContext = await input.adapterFactory
+      .forWorkspace(payload.workspaceId)
+      .catch(async (error) => {
+        if (operationOwnership) {
+          await rollbackBeforeConnect(input.prisma, operationOwnership, {
+            code: error instanceof Error ? error.name : 'ADAPTER_PREPARE_FAILED',
+            message: error instanceof Error ? error.message : 'Adapter preparation failed.',
+          });
+        }
+        throw error;
+      });
+    timings.prepareRouteMs = elapsedMs(prepareRouteStartedAt);
+    timings.attestationMs = adaptersContext.proxy?.attestation ? timings.prepareRouteMs : 0;
+    try {
+      await recordRouteMetadata(input.prisma, operationOwnership, {
+        routeConfigVersion: adaptersContext.proxy?.configVersion ?? null,
+        routeProxyFingerprint: adaptersContext.proxy?.routeFingerprint ?? null,
+        routeCountryCode: adaptersContext.proxy?.attestation?.countryCode ?? null,
+      });
+      const adapters = adaptersContext.adapters;
+      const adapter = adapters.get(platformPost.platform);
       if (
-        !accountStillEligible ||
-        accountStillEligible.status !== 'CONNECTED' ||
-        accountStillEligible.disconnectGeneration !==
-          platformPost.socialAccount.disconnectGeneration
+        platformPost.socialAccount.scopes.includes('development-fixture') &&
+        !(adapter instanceof DevelopmentFixtureAdapter)
       ) {
-        await rollbackBeforeConnect(input.prisma, operationOwnership, {
-          code: 'ACCOUNT_DISCONNECTED',
-          message: 'Social account disconnected before remote publish dispatch.',
+        const message =
+          'Social account này được tạo bằng development fixture. Hãy disconnect và kết nối lại bằng OAuth thật trước khi publish.';
+        await markFailed(input.prisma, platformPost.id, 'ACCOUNT_RECONNECT_REQUIRED', message);
+        await input.prisma.socialAccount.update({
+          where: { id: platformPost.socialAccountId },
+          data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
         });
-        await markFailed(
-          input.prisma,
-          platformPost.id,
-          'ACCOUNT_DISCONNECTED',
-          'Social account disconnected before remote publish dispatch.',
-        );
         await updateParentStatus(input.prisma, platformPost.contentPostId);
-        return { published: false, reason: 'account_disconnected' };
+        return { published: false, reason: 'fixture_account_with_real_adapter' };
       }
 
-      publishAttemptId = operationOwnership.attemptId || randomUUID();
-      await input.prisma.platformPost.update({
-        where: { id: platformPost.id },
-        data: {
-          publishAttemptId,
-          publishAttemptStartedAt: new Date(),
-          publishFence: { increment: 1 },
-        },
-      });
-
-      publishNetworkProof = buildPublishNetworkProof({
+      let publishNetworkProof = buildPublishNetworkProof({
         egressPolicy: adaptersContext.proxy?.egressPolicy ?? null,
         proxyEnabled: adaptersContext.proxy?.config.enabled ?? null,
         proxyActive: adaptersContext.proxy ? Boolean(adaptersContext.proxy.attestation) : null,
@@ -470,220 +412,451 @@ async function publishPlatformPost(
         attestation: adaptersContext.proxy?.attestation ?? null,
         checkOk: adaptersContext.proxy?.attestation ? true : null,
       });
+      let publishAttemptId: string | null = null;
+      let remoteReturnedSuccess = false;
+      let remoteConfirmationPersisted = false;
 
-      const result = await adapter.publishPost(adapterContext, publishInput);
-      remoteReturnedSuccess = true;
-      await markRemoteConfirmed(input.prisma, operationOwnership, {
-        remoteId: result.externalPostId,
-        checkpoint: {
-          externalPostId: result.externalPostId,
-          externalUrl: result.externalUrl,
-          publishedAt: result.publishedAt.toISOString(),
-          publishNetwork: publishNetworkProof,
-        },
-      });
-      remoteConfirmationPersisted = true;
-      const platformState = await platformStateAfterPublish(
-        adapter,
-        adapterContext,
-        result.externalPostId,
-      );
-      const platformStateWithNetwork = mergePlatformStateWithNetworkProof(
-        platformState,
-        publishNetworkProof,
-      );
+      try {
+        const tokenRefreshStartedAt = Date.now();
+        const accessToken = await getFreshAccessToken({
+          prisma: input.prisma,
+          keyring: input.keyring,
+          locks: input.locks,
+          adapter,
+          account: {
+            id: platformPost.socialAccount.id,
+            workspaceId: platformPost.socialAccount.workspaceId,
+            platform: platformPost.socialAccount.platform,
+            token: platformPost.socialAccount.token,
+          },
+        });
+        timings.tokenRefreshMs = elapsedMs(tokenRefreshStartedAt);
+        const sourceMedia =
+          platformPost.media.length > 0 ? platformPost.media : platformPost.contentPost.media;
+        const options = jsonObject(platformPost.options);
+        const mediaPrepareStartedAt = Date.now();
+        const media = await Promise.all(
+          sourceMedia
+            .filter((item) => item.mediaAsset.status === 'READY')
+            .map((item) =>
+              mediaInputFromAsset(input.storage, item.mediaAsset, platformPost.platform),
+            ),
+        );
+        const thumbnail = await thumbnailInputFromOptions({
+          storage: input.storage,
+          prisma: input.prisma,
+          workspaceId: payload.workspaceId,
+          platform: platformPost.platform,
+          options,
+          sourceMedia,
+        });
+        timings.mediaPrepareMs = elapsedMs(mediaPrepareStartedAt);
+        logger.info(
+          {
+            correlationId: payload.correlationId,
+            platformPostId: platformPost.id,
+            platform: platformPost.platform,
+            mediaCount: media.length,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            media: platformPost.contentPost.media.map((item: any, index: number) => ({
+              index,
+              type: item.type,
+              mimeType: item.mimeType,
+              sizeBytes: item.sizeBytes,
+              byteLength: item.bytes?.byteLength ?? 0,
+            })),
+            thumbnailSelection: {
+              mode:
+                options?.thumbnailMode ??
+                (platformPost.platform === 'FACEBOOK' && thumbnail
+                  ? 'GENERATED_FALLBACK'
+                  : undefined),
+              mediaAssetId: options?.thumbnailMediaAssetId,
+            },
+            thumbnail: thumbnail
+              ? {
+                  type: thumbnail.type,
+                  mimeType: thumbnail.mimeType,
+                  sizeBytes: thumbnail.sizeBytes,
+                  byteLength: thumbnail.bytes?.byteLength ?? 0,
+                }
+              : undefined,
+          },
+          'Chuẩn bị media trước khi gọi platform publish',
+        );
 
-      return await commitPublishLocally(input.prisma, {
-        platformPost,
-        payload,
-        jobId: job.id,
-        ownership: operationOwnership,
-        result: {
-          externalPostId: result.externalPostId,
-          externalUrl: result.externalUrl,
-          publishedAt: result.publishedAt,
-          platformState: platformStateWithNetwork,
-          publishNetworkProof,
-        },
-      });
-    } catch (error) {
-      const attempt = (job.attemptsMade ?? 0) + 1;
-      const maxAttempts = job.opts?.attempts ?? 1;
-      const code = isPlatformError(error) ? error.kind : 'UNKNOWN';
-      const message = error instanceof Error ? error.message : 'Lỗi không xác định khi publish.';
+        const publishInput = {
+          caption: platformPost.caption ?? platformPost.contentPost.body ?? undefined,
+          title: platformPost.title ?? platformPost.contentPost.title ?? undefined,
+          description: platformPost.description ?? platformPost.contentPost.body ?? undefined,
+          linkUrl: platformPost.linkUrl ?? platformPost.contentPost.linkUrl ?? undefined,
+          hashtags: platformPost.contentPost.hashtags,
+          media,
+          thumbnail,
+          options,
+        };
 
-      if (error instanceof RemoteRequestError && !error.requestMayHaveReachedRemote) {
-        if (operationOwnership) {
-          const rolledBack = await rollbackBeforeConnect(input.prisma, operationOwnership, {
-            code: error.phase,
-            message,
-          });
-          if (!rolledBack) throw error;
+        const validation = adapter.validatePost(publishInput);
+        if (!validation.valid) {
+          if (operationOwnership) {
+            await markPreTargetFailed(input.prisma, operationOwnership, {
+              code: 'VALIDATION',
+              message: validation.issues
+                .map(
+                  (issue: { field: string; message: string }) => `${issue.field}: ${issue.message}`,
+                )
+                .join('; '),
+            });
+          }
+          await markFailed(
+            input.prisma,
+            platformPost.id,
+            'VALIDATION',
+            validation.issues
+              .map(
+                (issue: { field: string; message: string }) => `${issue.field}: ${issue.message}`,
+              )
+              .join('; '),
+          );
+          await updateParentStatus(input.prisma, platformPost.contentPostId);
+          return { published: false, reason: 'validation' };
         }
+
+        const adapterContext = {
+          accessToken,
+          externalAccountId: platformPost.socialAccount.externalAccountId,
+          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+          correlationId: payload.correlationId,
+          logger: adapterLogger,
+          onRemoteCheckpoint: async (checkpoint: RemotePublishCheckpoint) => {
+            if (!operationOwnership) return;
+            await storeRemoteCheckpoint(input.prisma, operationOwnership, checkpoint);
+          },
+        } satisfies AdapterContext;
+
+        const currentAccount = await input.prisma.socialAccount.findUnique({
+          where: { id: platformPost.socialAccountId },
+          select: { status: true, disconnectGeneration: true },
+        });
+        if (
+          !currentAccount ||
+          currentAccount.status !== 'CONNECTED' ||
+          currentAccount.disconnectGeneration !== platformPost.socialAccount.disconnectGeneration
+        ) {
+          await markFailed(
+            input.prisma,
+            platformPost.id,
+            'ACCOUNT_DISCONNECTED',
+            'Social account disconnected during preparation.',
+          );
+          await updateParentStatus(input.prisma, platformPost.contentPostId);
+          return { published: false, reason: 'account_disconnected' };
+        }
+
+        const accountStillEligible = await input.prisma.socialAccount.findUnique({
+          where: { id: platformPost.socialAccountId },
+          select: { status: true, disconnectGeneration: true },
+        });
+        if (
+          !accountStillEligible ||
+          accountStillEligible.status !== 'CONNECTED' ||
+          accountStillEligible.disconnectGeneration !==
+            platformPost.socialAccount.disconnectGeneration
+        ) {
+          await rollbackBeforeConnect(input.prisma, operationOwnership, {
+            code: 'ACCOUNT_DISCONNECTED',
+            message: 'Social account disconnected before remote publish dispatch.',
+          });
+          await markFailed(
+            input.prisma,
+            platformPost.id,
+            'ACCOUNT_DISCONNECTED',
+            'Social account disconnected before remote publish dispatch.',
+          );
+          await updateParentStatus(input.prisma, platformPost.contentPostId);
+          return { published: false, reason: 'account_disconnected' };
+        }
+
+        publishAttemptId = operationOwnership.attemptId || randomUUID();
         await input.prisma.platformPost.update({
           where: { id: platformPost.id },
           data: {
-            status: 'QUEUED',
-            errorCode: error.phase,
-            errorMessage: message,
-            platformState: publishNetworkProof
-              ? (mergePlatformStateWithNetworkProof(
-                  jsonObject(platformPost.platformState),
-                  publishNetworkProof,
-                ) as Prisma.InputJsonValue)
-              : undefined,
-          },
-        });
-        await updateParentStatus(input.prisma, platformPost.contentPostId);
-        throw error;
-      }
-
-      if (remoteConfirmationPersisted) {
-        logger.error(
-          {
-            err: error,
-            platformPostId: platformPost.id,
-            operationId: operationOwnership?.operationId,
-          },
-          'Publish remote confirmation is durable; retrying local commit only',
-        );
-        throw error;
-      }
-
-      const decision = decideOnError(error, attempt, maxAttempts);
-      const isRemoteUnknown =
-        (remoteReturnedSuccess && !remoteConfirmationPersisted) ||
-        error instanceof RemoteCheckpointPersistenceError ||
-        (error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
-        (isPlatformError(error) && error.kind === 'NETWORK');
-
-      if (isRemoteUnknown && operationOwnership) {
-        await markRemoteUnknown(input.prisma, operationOwnership, {
-          code: 'REMOTE_RESULT_UNKNOWN',
-          message,
-          providerRequestId:
-            error instanceof RemoteRequestError ? error.providerRequestId : undefined,
-        });
-      }
-
-      const targetStatus: PlatformPostStatus = isRemoteUnknown
-        ? 'REMOTE_RESULT_UNKNOWN'
-        : decision.action === 'RETRY'
-          ? 'QUEUED'
-          : 'FAILED';
-
-      const targetCode = isRemoteUnknown ? 'REMOTE_RESULT_UNKNOWN' : code;
-      const currentPostState = publishNetworkProof
-        ? await input.prisma.platformPost.findUnique({
-            where: { id: platformPost.id },
-            select: { platformState: true },
-          })
-        : null;
-
-      await input.prisma.platformPost.update({
-        where: { id: platformPost.id },
-        data: {
-          status: targetStatus,
-          errorCode: targetCode,
-          errorMessage: message,
-          platformState: publishNetworkProof
-            ? (mergePlatformStateWithNetworkProof(
-                jsonObject(currentPostState?.platformState) ??
-                  jsonObject(platformPost.platformState),
-                publishNetworkProof,
-              ) as Prisma.InputJsonValue)
-            : undefined,
-        },
-      });
-
-      if (isRemoteUnknown) {
-        if (input.reconcileQueue && publishAttemptId) {
-          const reconcilePayload = {
-            platformPostId: platformPost.id,
-            workspaceId: payload.workspaceId,
             publishAttemptId,
-            operationId: operationOwnership?.operationId,
-          };
-          const reconcileJobId = buildJobId('reconcile-platform-post', reconcilePayload);
-          try {
-            await input.reconcileQueue.add('reconcile-platform-post', reconcilePayload, {
-              jobId: reconcileJobId,
-              delay: 60_000,
-              attempts: 5,
-              backoff: { type: 'exponential', delay: 60_000 },
+            publishAttemptStartedAt: new Date(),
+            publishFence: { increment: 1 },
+          },
+        });
+
+        publishNetworkProof = buildPublishNetworkProof({
+          egressPolicy: adaptersContext.proxy?.egressPolicy ?? null,
+          proxyEnabled: adaptersContext.proxy?.config.enabled ?? null,
+          proxyActive: adaptersContext.proxy ? Boolean(adaptersContext.proxy.attestation) : null,
+          configVersion: adaptersContext.proxy?.configVersion ?? null,
+          proxyFingerprint: adaptersContext.proxy?.routeFingerprint ?? null,
+          countryLock: adaptersContext.proxy?.config.countryLock ?? null,
+          countryLockSatisfied: adaptersContext.proxy?.config.countryLock
+            ? adaptersContext.proxy.attestation?.countryCode ===
+              adaptersContext.proxy.config.countryLock
+            : null,
+          attestation: adaptersContext.proxy?.attestation ?? null,
+          checkOk: adaptersContext.proxy?.attestation ? true : null,
+        });
+
+        const remotePublishStartedAt = Date.now();
+        const result = await adapter.publishPost(adapterContext, publishInput);
+        timings.remotePublishMs = elapsedMs(remotePublishStartedAt);
+        remoteReturnedSuccess = true;
+        if ((result as { pending?: boolean }).pending) {
+          await markRemoteUnknown(input.prisma, operationOwnership, {
+            code: 'REMOTE_PROCESSING_PENDING',
+            message: 'Provider accepted publish request but final public post id is pending.',
+            providerRequestId: result.externalPostId,
+            requiresManualReview: false,
+            checkpoint: {
+              remotePublishId: result.externalPostId,
+              externalUrl: result.externalUrl,
+              acceptedAt: result.publishedAt.toISOString(),
+              publishNetwork: publishNetworkProof,
+              pending: true,
+            },
+          });
+          remoteConfirmationPersisted = true;
+          publishAttemptId = operationOwnership.attemptId;
+          await persistRemoteUnknownPublishState(input.prisma, {
+            platformPost,
+            payload,
+            publishAttemptId,
+            operationId: operationOwnership.operationId,
+            code: 'REMOTE_PROCESSING_PENDING',
+            message: 'Provider accepted publish request but final public post id is pending.',
+            platformState: mergePlatformStateWithNetworkProof(
+              jsonObject(platformPost.platformState),
+              publishNetworkProof,
+            ),
+          });
+          await updateParentStatus(input.prisma, platformPost.contentPostId);
+          return { published: false, reason: 'REMOTE_PROCESSING_PENDING' };
+        }
+        await markRemoteConfirmed(input.prisma, operationOwnership, {
+          remoteId: result.externalPostId,
+          checkpoint: {
+            externalPostId: result.externalPostId,
+            externalUrl: result.externalUrl,
+            publishedAt: result.publishedAt.toISOString(),
+            publishNetwork: publishNetworkProof,
+          },
+        });
+        remoteConfirmationPersisted = true;
+        const postPublishFollowupStartedAt = Date.now();
+        const platformState = await platformStateAfterPublish(
+          adapter,
+          adapterContext,
+          result.externalPostId,
+        );
+        timings.postPublishFollowupMs = elapsedMs(postPublishFollowupStartedAt);
+        const platformStateWithNetwork = mergePlatformStateWithNetworkProof(
+          platformState,
+          publishNetworkProof,
+        );
+
+        const localCommitStartedAt = Date.now();
+        try {
+          return await commitPublishLocally(input.prisma, {
+            platformPost,
+            payload,
+            jobId: job.id,
+            ownership: operationOwnership,
+            result: {
+              externalPostId: result.externalPostId,
+              externalUrl: result.externalUrl,
+              publishedAt: result.publishedAt,
+              platformState: platformStateWithNetwork,
+              publishNetworkProof,
+            },
+          });
+        } finally {
+          timings.localCommitMs = elapsedMs(localCommitStartedAt);
+        }
+      } catch (error) {
+        const attempt = (job.attemptsMade ?? 0) + 1;
+        const maxAttempts = job.opts?.attempts ?? 1;
+        const code = isPlatformError(error) ? error.kind : 'UNKNOWN';
+        const message = error instanceof Error ? error.message : 'Lỗi không xác định khi publish.';
+
+        if (error instanceof RemoteRequestError && !error.requestMayHaveReachedRemote) {
+          if (operationOwnership) {
+            const rolledBack = await rollbackBeforeConnect(input.prisma, operationOwnership, {
+              code: error.phase,
+              message,
             });
-          } catch (enqueueError) {
+            if (!rolledBack) throw error;
+          }
+          await input.prisma.platformPost.update({
+            where: { id: platformPost.id },
+            data: {
+              status: 'QUEUED',
+              errorCode: error.phase,
+              errorMessage: message,
+              platformState: publishNetworkProof
+                ? (mergePlatformStateWithNetworkProof(
+                    jsonObject(platformPost.platformState),
+                    publishNetworkProof,
+                  ) as Prisma.InputJsonValue)
+                : undefined,
+            },
+          });
+          await updateParentStatus(input.prisma, platformPost.contentPostId);
+          throw error;
+        }
+
+        if (remoteConfirmationPersisted) {
+          logger.error(
+            {
+              err: error,
+              platformPostId: platformPost.id,
+              operationId: operationOwnership?.operationId,
+            },
+            'Publish remote confirmation is durable; retrying local commit only',
+          );
+          throw error;
+        }
+
+        const decision = decideOnError(error, attempt, maxAttempts);
+        const isRemoteUnknown =
+          (remoteReturnedSuccess && !remoteConfirmationPersisted) ||
+          error instanceof RemoteCheckpointPersistenceError ||
+          (error instanceof RemoteRequestError && error.requestMayHaveReachedRemote) ||
+          (isPlatformError(error) && error.kind === 'NETWORK');
+
+        if (isRemoteUnknown && operationOwnership) {
+          await markRemoteUnknown(input.prisma, operationOwnership, {
+            code: 'REMOTE_RESULT_UNKNOWN',
+            message,
+            providerRequestId:
+              error instanceof RemoteRequestError ? error.providerRequestId : undefined,
+          });
+        } else if (operationOwnership && !remoteReturnedSuccess) {
+          await rollbackBeforeConnect(input.prisma, operationOwnership, {
+            code,
+            message,
+          });
+        }
+
+        const targetStatus: PlatformPostStatus = isRemoteUnknown
+          ? 'REMOTE_RESULT_UNKNOWN'
+          : decision.action === 'RETRY'
+            ? 'QUEUED'
+            : 'FAILED';
+
+        const targetCode = isRemoteUnknown ? 'REMOTE_RESULT_UNKNOWN' : code;
+        const currentPostState = publishNetworkProof
+          ? await input.prisma.platformPost.findUnique({
+              where: { id: platformPost.id },
+              select: { platformState: true },
+            })
+          : null;
+
+        const nextPlatformState = publishNetworkProof
+          ? mergePlatformStateWithNetworkProof(
+              jsonObject(currentPostState?.platformState) ?? jsonObject(platformPost.platformState),
+              publishNetworkProof,
+            )
+          : undefined;
+
+        if (isRemoteUnknown) {
+          if (publishAttemptId && operationOwnership) {
+            await persistRemoteUnknownPublishState(input.prisma, {
+              platformPost,
+              payload,
+              publishAttemptId,
+              operationId: operationOwnership.operationId,
+              code: targetCode,
+              message,
+              platformState: nextPlatformState,
+            });
+          } else {
             logger.error(
               {
-                err: enqueueError,
                 platformPostId: platformPost.id,
                 publishAttemptId,
+                hasReconcileQueue: Boolean(input.reconcileQueue),
               },
-              'Không thể enqueue reconciliation',
+              'Không thể lên lịch reconciliation cho remote result unknown',
             );
             await input.prisma.platformPost.update({
               where: { id: platformPost.id },
               data: {
+                status: targetStatus,
+                errorCode: targetCode,
+                errorMessage: message,
+                platformState: nextPlatformState
+                  ? (nextPlatformState as Prisma.InputJsonValue)
+                  : undefined,
                 requiresManualReview: true,
                 reconciliationError: 'Không thể lên lịch đối soát tự động.',
               },
             });
           }
         } else {
-          logger.error(
-            {
-              platformPostId: platformPost.id,
-              publishAttemptId,
-              hasReconcileQueue: Boolean(input.reconcileQueue),
-            },
-            'Không thể lên lịch reconciliation cho remote result unknown',
-          );
           await input.prisma.platformPost.update({
             where: { id: platformPost.id },
             data: {
-              requiresManualReview: true,
-              reconciliationError: 'Không thể lên lịch đối soát tự động.',
+              status: targetStatus,
+              errorCode: targetCode,
+              errorMessage: message,
+              platformState: nextPlatformState
+                ? (nextPlatformState as Prisma.InputJsonValue)
+                : undefined,
             },
           });
         }
-      }
 
-      if (decision.markAccountDisconnected) {
-        await input.prisma.socialAccount.update({
-          where: { id: platformPost.socialAccountId },
-          data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
-        });
-      }
+        if (decision.markAccountDisconnected) {
+          await input.prisma.socialAccount.update({
+            where: { id: platformPost.socialAccountId },
+            data: { status: 'DISCONNECTED', lastErrorAt: new Date(), lastErrorMessage: message },
+          });
+        }
 
-      if (decision.notifyUser) {
-        await input.prisma.notification.create({
-          data: {
-            workspaceId: payload.workspaceId,
-            userId: platformPost.contentPost.createdById,
-            type: 'POST_FAILED',
-            title: 'Publish thất bại',
-            body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name}: ${message}`,
-            linkUrl: `/posts/${platformPost.contentPostId}`,
+        if (decision.notifyUser) {
+          await input.prisma.notification.create({
             data: {
-              platformPostId: platformPost.id,
-              platform: platformPost.platform,
-              accountName: platformPost.socialAccount.name,
-              socialAccountId: platformPost.socialAccountId,
-              code,
-              postTitle: platformPost.contentPost.title,
+              workspaceId: payload.workspaceId,
+              userId: platformPost.contentPost.createdById,
+              type: 'POST_FAILED',
+              title: 'Publish thất bại',
+              body: `${PLATFORM_LABELS[platformPost.platform]} · ${platformPost.socialAccount.name}: ${message}`,
+              linkUrl: `/posts/${platformPost.contentPostId}`,
+              data: {
+                platformPostId: platformPost.id,
+                platform: platformPost.platform,
+                accountName: platformPost.socialAccount.name,
+                socialAccountId: platformPost.socialAccountId,
+                code,
+                postTitle: platformPost.contentPost.title,
+              },
             },
-          },
-        });
+          });
+        }
+
+        await updateParentStatus(input.prisma, platformPost.contentPostId);
+
+        if (isRemoteUnknown) return { published: false, reason: 'REMOTE_RESULT_UNKNOWN' };
+        if (decision.action === 'RETRY') throw error;
+        return { published: false, reason: decision.reason };
       }
-
-      await updateParentStatus(input.prisma, platformPost.contentPostId);
-
-      if (isRemoteUnknown) return { published: false, reason: 'REMOTE_RESULT_UNKNOWN' };
-      if (decision.action === 'RETRY') throw error;
-      return { published: false, reason: decision.reason };
+    } finally {
+      await adaptersContext.release();
     }
   } finally {
-    await adaptersContext.release();
+    timings.totalMs = elapsedMs(totalStartedAt);
+    logPublishStageTimings({
+      timings,
+      workspaceId: payload.workspaceId,
+      platformPostId: payload.platformPostId,
+      operationId: timingOperationId,
+      platform: timingPlatform,
+    });
   }
 }
 
@@ -852,6 +1025,148 @@ async function commitPublishLocally(
 
   await updateParentStatus(prisma, input.platformPost.contentPostId);
   return { published: true, externalPostId: result.externalPostId };
+}
+
+async function persistRemoteUnknownPublishState(
+  prisma: PrismaClientInstance,
+  input: {
+    platformPost: {
+      id: string;
+      workspaceId: string;
+      contentPostId: string;
+    };
+    payload: z.infer<typeof publishPostPayloadSchema>;
+    publishAttemptId: string;
+    operationId: string;
+    code: string;
+    message: string;
+    platformState?: Record<string, unknown>;
+  },
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.platformPost.update({
+      where: { id: input.platformPost.id },
+      data: {
+        status: 'REMOTE_RESULT_UNKNOWN',
+        errorCode: input.code,
+        errorMessage: input.message,
+        requiresManualReview: false,
+        reconciliationError: null,
+        platformState: input.platformState
+          ? (input.platformState as Prisma.InputJsonValue)
+          : undefined,
+      },
+    });
+    const reconcilePayload = {
+      platformPostId: input.platformPost.id,
+      workspaceId: input.payload.workspaceId,
+      publishAttemptId: input.publishAttemptId,
+      operationId: input.operationId,
+    };
+    const reconcileJobId = buildJobId('reconcile-platform-post', reconcilePayload);
+    await createQueueOutboxEvent(tx, {
+      workspaceId: input.payload.workspaceId,
+      queueName: 'reconcile-platform-post',
+      jobId: reconcileJobId,
+      payload: reconcilePayload,
+      options: buildQueueJobOptions('reconcile-platform-post', reconcileJobId, {
+        delay: 60_000,
+      }),
+      aggregateType: 'OutboundOperation',
+      aggregateId: input.operationId,
+      dedupeKey: `reconcile-publish:${input.operationId}:${input.publishAttemptId}`,
+    });
+  });
+}
+
+async function ensurePublishReconciliationIntent(
+  prisma: PrismaClientInstance,
+  input: {
+    platformPost: {
+      id: string;
+      workspaceId: string;
+      contentPostId: string;
+      status: PlatformPostStatus;
+      platformState: Prisma.JsonValue | null;
+    };
+    payload: z.infer<typeof publishPostPayloadSchema>;
+    operationId: string;
+  },
+): Promise<boolean> {
+  const operation = await prisma.outboundOperation.findUnique({
+    where: { id: input.operationId },
+    select: { id: true, state: true, attemptId: true },
+  });
+  if (operation?.state !== 'REMOTE_UNKNOWN' || !operation.attemptId) return false;
+
+  await persistRemoteUnknownPublishState(prisma, {
+    platformPost: input.platformPost,
+    payload: input.payload,
+    publishAttemptId: operation.attemptId,
+    operationId: operation.id,
+    code: 'REMOTE_RESULT_UNKNOWN',
+    message: 'Remote publish outcome is unknown and requires reconciliation.',
+    platformState: jsonObject(input.platformPost.platformState),
+  });
+  return true;
+}
+
+async function ensurePublishLocalCommitRecovery(
+  prisma: PrismaClientInstance,
+  input: {
+    payload: z.infer<typeof publishPostPayloadSchema>;
+    platformPostId: string;
+    workspaceId: string;
+  },
+): Promise<boolean> {
+  const operation = await findPublishOperationForPayload(prisma, input);
+  if (operation?.state !== 'REMOTE_CONFIRMED' || !operation.attemptId) return false;
+
+  const recoveryPayload = {
+    ...input.payload,
+    operationId: operation.id,
+    workspaceId: input.workspaceId,
+    platformPostId: input.platformPostId,
+  };
+  const recoveryJobId = buildJobId('publish-post', recoveryPayload);
+  await createQueueOutboxEvent(prisma, {
+    workspaceId: input.workspaceId,
+    queueName: 'publish-post',
+    jobId: recoveryJobId,
+    payload: recoveryPayload,
+    options: buildQueueJobOptions('publish-post', recoveryJobId),
+    aggregateType: 'OutboundOperation',
+    aggregateId: operation.id,
+    dedupeKey: `local-commit-publish:${operation.id}:${operation.attemptId}`,
+  });
+  return true;
+}
+
+async function findPublishOperationForPayload(
+  prisma: PrismaClientInstance,
+  input: {
+    payload: z.infer<typeof publishPostPayloadSchema>;
+    platformPostId: string;
+    workspaceId: string;
+  },
+): Promise<{ id: string; state: string; attemptId: string | null } | null> {
+  if (input.payload.operationId) {
+    return await prisma.outboundOperation.findUnique({
+      where: { id: input.payload.operationId },
+      select: { id: true, state: true, attemptId: true },
+    });
+  }
+
+  return await prisma.outboundOperation.findFirst({
+    where: {
+      workspaceId: input.workspaceId,
+      operationType: 'PUBLISH_POST',
+      resourceType: 'PlatformPost',
+      resourceId: input.platformPostId,
+    },
+    orderBy: { operationGeneration: 'desc' },
+    select: { id: true, state: true, attemptId: true },
+  });
 }
 
 async function loadPublishCheckpoint(
@@ -1174,7 +1489,13 @@ export async function mediaInputFromAsset(
     durationSec: mediaAsset.durationSec ?? undefined,
   };
 
-  if ((platform === 'TIKTOK' || platform === 'YOUTUBE') && mediaAsset.type === 'VIDEO') {
+  if (
+    (platform === 'TIKTOK' ||
+      platform === 'YOUTUBE' ||
+      platform === 'PINTEREST' ||
+      platform === 'FACEBOOK') &&
+    mediaAsset.type === 'VIDEO'
+  ) {
     return {
       ...base,
       readRange: (start, endInclusive) =>

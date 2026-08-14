@@ -37,6 +37,7 @@ export async function scanScheduledPostsOnce(input: {
   const schedules = await input.prisma.postSchedule.findMany({
     where: {
       cancelledAt: null,
+      enqueuedAt: null,
       scheduledAt: { lte: upperBound },
       contentPost: {
         deletedAt: null,
@@ -93,6 +94,7 @@ export async function scanScheduledPostsOnce(input: {
           options,
           aggregateType: 'OutboundOperation',
           aggregateId: operation.id,
+          dedupeKey: `scheduled-publish:${schedule.id}:${operation.id}`,
         });
         return { payload, options, outboxEventId: outboxEvent.id };
       });

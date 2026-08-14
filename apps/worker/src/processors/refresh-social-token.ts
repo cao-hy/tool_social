@@ -1,7 +1,11 @@
 import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import { type Keyring } from '@socialhub/security';
-import { InMemoryTokenRefreshLock, TokenRefreshService } from '@socialhub/social-runtime';
+import {
+  InMemoryTokenRefreshLock,
+  TokenRefreshService,
+  type TokenRefreshLock,
+} from '@socialhub/social-runtime';
 import { z } from 'zod';
 
 import { logger } from '../logger';
@@ -19,6 +23,7 @@ export function createRefreshSocialTokenProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+  tokenRefreshLock?: TokenRefreshLock;
   locks?: JobLockService;
 }) {
   return async (job: { data: unknown; id?: string }) => {
@@ -57,16 +62,21 @@ export function createRefreshSocialTokenProcessor(input: {
     });
 
     try {
-      const service = new TokenRefreshService(input.prisma, input.keyring, localTokenRefreshLock, {
-        withWorkspace: async (workspaceId, fn) => {
-          const adapterCtx = await input.adapterFactory.forWorkspace(workspaceId);
-          try {
-            return await fn(adapterCtx);
-          } finally {
-            await adapterCtx.release();
-          }
+      const service = new TokenRefreshService(
+        input.prisma,
+        input.keyring,
+        input.tokenRefreshLock ?? localTokenRefreshLock,
+        {
+          withWorkspace: async (workspaceId, fn) => {
+            const adapterCtx = await input.adapterFactory.forWorkspace(workspaceId);
+            try {
+              return await fn(adapterCtx);
+            } finally {
+              await adapterCtx.release();
+            }
+          },
         },
-      });
+      );
       await service.getValidAccessToken(token.socialAccountId);
       await input.prisma.auditLog.create({
         data: {

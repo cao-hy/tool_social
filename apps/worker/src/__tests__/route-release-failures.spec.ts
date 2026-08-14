@@ -103,12 +103,20 @@ describe('T37 route release on publish failure boundaries', () => {
           outboundOperation: {
             findFirst: vi.fn(async () => ({
               id: 'operation_1',
+              workspaceId: 'workspace_1',
+              operationType: 'PUBLISH_POST',
+              resourceType: 'PlatformPost',
+              resourceId: 'post_1',
               state: 'PREPARED',
               attemptId: null,
               fence: 0,
             })),
             findUnique: vi.fn(async () => ({
               id: 'operation_1',
+              workspaceId: 'workspace_1',
+              operationType: 'PUBLISH_POST',
+              resourceType: 'PlatformPost',
+              resourceId: 'post_1',
               state: 'PREPARED',
               attemptId: null,
               fence: 0,
@@ -147,7 +155,7 @@ describe('T37 route release on publish failure boundaries', () => {
     },
   );
 
-  it('stale owner before provider dispatch releases prepared route exactly once', async () => {
+  it('stale owner before route preparation does not prepare or release a route', async () => {
     const keyring = Keyring.fromEnv(`v1:${Keyring.generateKey()}`, 'v1');
     const release = vi.fn();
     const publishPost = vi.fn();
@@ -167,12 +175,20 @@ describe('T37 route release on publish failure boundaries', () => {
         outboundOperation: {
           findFirst: vi.fn(async () => ({
             id: 'operation_1',
+            workspaceId: 'workspace_1',
+            operationType: 'PUBLISH_POST',
+            resourceType: 'PlatformPost',
+            resourceId: 'post_1',
             state: 'PREPARED',
             attemptId: null,
             fence: 0,
           })),
           findUnique: vi.fn(async () => ({
             id: 'operation_1',
+            workspaceId: 'workspace_1',
+            operationType: 'PUBLISH_POST',
+            resourceType: 'PlatformPost',
+            resourceId: 'post_1',
             state: 'PREPARED',
             attemptId: null,
             fence: 0,
@@ -201,6 +217,6 @@ describe('T37 route release on publish failure boundaries', () => {
     }).catch(() => undefined);
 
     expect(publishPost).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
   });
 });

@@ -80,6 +80,20 @@ export const bulkDeletePostsSchema = z.object({
   deleteFromPlatforms: z.boolean().default(false),
 });
 
+export const manualReviewResolutionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('CONFIRM_REMOTE_SUCCESS'),
+    fence: z.coerce.number().int().min(0),
+    externalPostId: z.string().trim().min(1),
+    externalUrl: optionalUrl,
+  }),
+  z.object({
+    action: z.literal('CONFIRM_REMOTE_ABSENCE'),
+    fence: z.coerce.number().int().min(0),
+    reason: optionalText,
+  }),
+]);
+
 export const listPostsQuerySchema = z.object({
   status: z
     .enum([
@@ -111,3 +125,4 @@ export type SchedulePostInput = z.infer<typeof schedulePostSchema>;
 export type ListPostsQuery = z.infer<typeof listPostsQuerySchema>;
 export type DeletePostQuery = z.infer<typeof deletePostQuerySchema>;
 export type BulkDeletePostsInput = z.infer<typeof bulkDeletePostsSchema>;
+export type ManualReviewResolutionInput = z.infer<typeof manualReviewResolutionSchema>;

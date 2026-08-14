@@ -46,6 +46,11 @@ function createOperation(overrides: Record<string, unknown> = {}) {
     state: 'REMOTE_UNKNOWN',
     attemptId: 'attempt-1',
     fence: 3,
+    reconciliationAttempts: 0,
+    remoteCheckpoint: {
+      phase: 'PUBLISH_INITIALIZED',
+      remotePublishId: 'remote-publish-1',
+    },
     ...overrides,
   };
 }
@@ -147,7 +152,7 @@ describe('createReconciliationProcessor', () => {
 
   it('INDETERMINATE lần thứ 5 chuyển sang manual review và không throw', async () => {
     const { processor, prisma } = createHarness({
-      post: createPost({ reconciliationAttempts: 4 }),
+      operation: createOperation({ reconciliationAttempts: 4 }),
     });
 
     await expect(

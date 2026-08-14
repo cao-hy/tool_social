@@ -25,7 +25,9 @@ export function validateFacebookPost(input: PublishPostInput): ValidationResult 
   }
 
   input.media.forEach((item, index) => {
-    if (!item.bytes || item.bytes.byteLength === 0) {
+    const hasBytes = Boolean(item.bytes && item.bytes.byteLength > 0);
+    const hasReadableVideo = item.type === 'VIDEO' && Boolean(item.readRange);
+    if (!hasBytes && !hasReadableVideo) {
       issues.push({
         field: `media[${index}]`,
         message: 'Media chưa có dữ liệu binary để upload sang Facebook.',

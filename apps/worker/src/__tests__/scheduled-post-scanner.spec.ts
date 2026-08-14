@@ -13,6 +13,7 @@ describe('scheduled post scanner', () => {
       },
       outboxEvent: {
         create: vi.fn(async ({ data }) => ({ ...data, id: `outbox_${data.aggregateId}` })),
+        upsert: vi.fn(async ({ create }) => ({ ...create, id: `outbox_${create.aggregateId}` })),
         update: vi.fn(async () => ({})),
       },
       postSchedule: {
@@ -41,7 +42,19 @@ describe('scheduled post scanner', () => {
       expect.objectContaining({
         where: expect.objectContaining({
           cancelledAt: null,
+          enqueuedAt: null,
           scheduledAt: { lte: new Date('2026-07-28T03:01:00.000Z') },
+        }),
+      }),
+    );
+    expect(prisma.outboxEvent.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { dedupeKey: 'scheduled-publish:schedule_1:op_platform_post_1' },
+        create: expect.objectContaining({
+          topic: 'publish-post',
+          aggregateType: 'OutboundOperation',
+          aggregateId: 'op_platform_post_1',
+          dedupeKey: 'scheduled-publish:schedule_1:op_platform_post_1',
         }),
       }),
     );

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RemoteRequestError } from '@socialhub/shared';
 import { DevelopmentFixtureAdapter } from '../dev/development-fixture.adapter';
 import { FacebookPagesAdapter } from '../facebook/facebook.adapter';
 import { createRuntimeAdapterRegistry } from '../registry-factory';
@@ -13,6 +14,21 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 
 const testFetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
   fetch(input, init)) as typeof fetch;
+
+async function collectAsyncBody(body: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of body) {
+    chunks.push(chunk);
+  }
+  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
 
 describe('FacebookPagesAdapter', () => {
   afterEach(() => {
@@ -196,6 +212,33 @@ describe('FacebookPagesAdapter', () => {
     });
   });
 
+  it('classifies Facebook feed publish 5xx as remote outcome unknown', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      expect(String(input)).toBe('https://graph.facebook.com/v24.0/page-1/feed');
+      expect(init?.method).toBe('POST');
+      return jsonResponse({ error: { message: 'temporary server error' } }, { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+    });
+
+    await expect(
+      adapter.publishPost(
+        { accessToken: 'page-access-token', externalAccountId: 'page-1', correlationId: 'test' },
+        { caption: 'hello', linkUrl: 'https://example.test/launch', media: [] },
+      ),
+    ).rejects.toMatchObject({
+      name: 'RemoteRequestError',
+      phase: 'AWAITING_RESPONSE',
+      requestMayHaveReachedRemote: true,
+    } satisfies Partial<RemoteRequestError>);
+  });
+
   it('publish post có một ảnh bằng Page photos endpoint', async () => {
     const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
       const url = String(input);
@@ -335,6 +378,69 @@ describe('FacebookPagesAdapter', () => {
       externalUrl: 'https://www.facebook.com/video-1',
     });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('streams Facebook video upload from readRange chunks instead of full-buffer bytes', async () => {
+    const chunkSize = 8 * 1024 * 1024;
+    const totalBytes = chunkSize + 5;
+    const ranges: Array<[number, number]> = [];
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      expect(String(input)).toBe(
+        'https://graph-video.facebook.com/v24.0/page-1/videos?access_token=page-access-token',
+      );
+      expect(init?.method).toBe('POST');
+      expect(init?.headers).toMatchObject({
+        'content-type': expect.stringContaining('multipart/form-data; boundary='),
+      });
+      expect(init?.headers).not.toHaveProperty('content-length');
+      expect(init?.body).not.toBeInstanceOf(Uint8Array);
+      const body = await collectAsyncBody(init?.body as AsyncIterable<Uint8Array>);
+      const text = new TextDecoder().decode(body);
+      expect(text).toContain('name="source"; filename="video.mp4"');
+      expect(text).toContain('Content-Type: video/mp4');
+      return jsonResponse({ id: 'video-1' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new FacebookPagesAdapter({
+      fetch: testFetch,
+      appId: 'app-id',
+      appSecret: 'app-secret',
+      apiVersion: 'v24.0',
+    });
+    const publishInput = {
+      title: 'video title',
+      media: [
+        {
+          type: 'VIDEO' as const,
+          url: 'workspaces/ws/media/video.mp4',
+          readRange: async (start: number, endInclusive: number) => {
+            ranges.push([start, endInclusive]);
+            return new Uint8Array([1, 2, 3]);
+          },
+          mimeType: 'video/mp4',
+          sizeBytes: totalBytes,
+        },
+      ],
+    };
+
+    expect(adapter.validatePost(publishInput)).toMatchObject({ valid: true });
+
+    await expect(
+      adapter.publishPost(
+        { accessToken: 'page-access-token', externalAccountId: 'page-1', correlationId: 'test' },
+        publishInput,
+      ),
+    ).resolves.toMatchObject({
+      externalPostId: 'video-1',
+      externalUrl: 'https://www.facebook.com/video-1',
+    });
+
+    expect(ranges).toEqual([
+      [0, chunkSize - 1],
+      [chunkSize, totalBytes - 1],
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('đọc comments của một Page post qua Graph API comments edge', async () => {

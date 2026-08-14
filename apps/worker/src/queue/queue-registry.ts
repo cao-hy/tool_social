@@ -1,4 +1,5 @@
 import { QUEUE_NAMES, type QueueName } from '@socialhub/shared';
+import { scrubSecretsFromText } from '@socialhub/security';
 import { Queue, Worker, type Job, type Processor } from 'bullmq';
 import type Redis from 'ioredis';
 import { buildWorkerOptions } from './queue-options';
@@ -53,7 +54,7 @@ export class QueueRegistry {
           jobId: job?.id,
           attempt: job?.attemptsMade,
           maxAttempts: job?.opts.attempts,
-          err: { name: error.name, message: error.message },
+          err: { name: error.name, message: scrubSecretsFromText(error.message) },
         },
         'Job thất bại',
       );

@@ -9,6 +9,46 @@ export interface TokenRefreshLock {
   release(key: string, token: string): Promise<boolean>;
 }
 
+type RedisTokenRefreshClient = {
+  set(key: string, value: string, px: 'PX', ttlMs: number, nx: 'NX'): Promise<'OK' | null>;
+  eval(script: string, keyCount: number, ...args: Array<string | number>): Promise<unknown>;
+};
+
+const REDIS_RELEASE_SCRIPT = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+else
+  return 0
+end
+`;
+
+const REDIS_EXTEND_SCRIPT = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("pexpire", KEYS[1], ARGV[2])
+else
+  return 0
+end
+`;
+
+export class RedisTokenRefreshLock implements TokenRefreshLock {
+  constructor(private readonly redis: RedisTokenRefreshClient) {}
+
+  async acquire(key: string, token: string, ttlMs: number): Promise<boolean> {
+    const result = await this.redis.set(key, token, 'PX', ttlMs, 'NX');
+    return result === 'OK';
+  }
+
+  async extend(key: string, token: string, ttlMs: number): Promise<boolean> {
+    const result = await this.redis.eval(REDIS_EXTEND_SCRIPT, 1, key, token, ttlMs);
+    return result === 1;
+  }
+
+  async release(key: string, token: string): Promise<boolean> {
+    const result = await this.redis.eval(REDIS_RELEASE_SCRIPT, 1, key, token);
+    return result === 1;
+  }
+}
+
 export class InMemoryTokenRefreshLock implements TokenRefreshLock {
   private readonly locks = new Map<string, { token: string; expiresAt: number }>();
 

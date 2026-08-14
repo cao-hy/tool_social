@@ -94,6 +94,7 @@ export class WebhooksService implements OnModuleDestroy {
           options,
           aggregateType: 'WebhookEvent',
           aggregateId: webhookEvent.id,
+          dedupeKey: processWebhookOutboxDedupeKey(webhookEvent.id),
         });
         return { webhookEvent, payload, jobId, options, outboxEventId: outboxEvent.id };
       });
@@ -135,34 +136,16 @@ export class WebhooksService implements OnModuleDestroy {
   }
 
   private async ensureWebhookProcessingIntent(webhookEventId: string): Promise<void> {
-    const existingIntent = await this.prisma.outboxEvent.findFirst({
-      where: {
-        topic: 'process-webhook',
-        aggregateType: 'WebhookEvent',
-        aggregateId: webhookEventId,
-        dispatchedAt: null,
-      },
-      select: { id: true },
-    });
-    if (existingIntent) return;
-
     const payload = { webhookEventId };
     const jobId = buildJobId('process-webhook', payload);
-    const outboxPayload = {
+    await createQueueOutboxEvent(this.prisma, {
       queueName: 'process-webhook',
-      jobName: 'process-webhook',
       jobId,
       payload,
       options: buildQueueJobOptions('process-webhook', jobId),
-    } as unknown as Prisma.InputJsonValue;
-
-    await this.prisma.outboxEvent.create({
-      data: {
-        topic: 'process-webhook',
-        aggregateType: 'WebhookEvent',
-        aggregateId: webhookEventId,
-        payload: outboxPayload,
-      },
+      aggregateType: 'WebhookEvent',
+      aggregateId: webhookEventId,
+      dedupeKey: processWebhookOutboxDedupeKey(webhookEventId),
     });
   }
 
@@ -171,6 +154,10 @@ export class WebhooksService implements OnModuleDestroy {
       return this.env.FACEBOOK_WEBHOOK_SECRET;
     return undefined;
   }
+}
+
+function processWebhookOutboxDedupeKey(webhookEventId: string): string {
+  return `process-webhook:${webhookEventId}`;
 }
 
 function normalizeHeaders(headers: FastifyRequest['headers']): Record<string, string | undefined> {

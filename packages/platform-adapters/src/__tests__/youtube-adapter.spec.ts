@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RemoteRequestError } from '@socialhub/shared';
 import { DevelopmentFixtureAdapter } from '../dev/development-fixture.adapter';
 import { createRuntimeAdapterRegistry } from '../registry-factory';
 import { YouTubeAdapter } from '../youtube/youtube.adapter';
@@ -264,6 +265,56 @@ describe('YouTubeAdapter', () => {
     });
     expect(readRange).toHaveBeenCalledTimes(expectedRanges.length);
     expect(readRange.mock.calls).toEqual(expectedRanges);
+  });
+
+  it('classifies YouTube final upload response 5xx as remote outcome unknown', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/upload/youtube/v3/videos' && init?.method === 'POST') {
+        return new Response(null, {
+          status: 200,
+          headers: { location: 'https://upload.youtube.test/session-timeout' },
+        });
+      }
+      if (url.href === 'https://upload.youtube.test/session-timeout') {
+        expect(init?.method).toBe('PUT');
+        return jsonResponse({ error: { message: 'backend timeout' } }, { status: 500 });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new YouTubeAdapter({
+      fetch: testFetch,
+      clientId: 'youtube-client',
+      clientSecret: 'youtube-secret',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'youtube-access',
+          externalAccountId: 'channel-1',
+          correlationId: 'test',
+        },
+        {
+          title: 'Demo video',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              bytes: new Uint8Array([1, 2, 3]),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: 'RemoteRequestError',
+      phase: 'AWAITING_RESPONSE',
+      requestMayHaveReachedRemote: true,
+    } satisfies Partial<RemoteRequestError>);
   });
 
   it('chặn YouTube resumable upload session không dùng HTTPS', async () => {

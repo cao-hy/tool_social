@@ -1,12 +1,20 @@
 import { type SocialPlatformAdapter } from '@socialhub/platform-adapters';
 import type { PrismaClientInstance } from '@socialhub/db';
 import { decryptToken, type Keyring } from '@socialhub/security';
-import { InMemoryTokenRefreshLock, TokenRefreshService } from '@socialhub/social-runtime';
+import {
+  InMemoryTokenRefreshLock,
+  TokenRefreshService,
+  type TokenRefreshLock,
+} from '@socialhub/social-runtime';
 import type { Platform } from '@socialhub/shared';
 import type { JobLockService } from '../queue/job-lock';
 
 const REFRESH_THRESHOLD_MS = 2 * 60 * 1000;
-const localTokenRefreshLock = new InMemoryTokenRefreshLock();
+let tokenRefreshLock: TokenRefreshLock = new InMemoryTokenRefreshLock();
+
+export function setWorkerTokenRefreshLock(lock: TokenRefreshLock): void {
+  tokenRefreshLock = lock;
+}
 
 export async function getFreshAccessToken(input: {
   prisma: PrismaClientInstance;
@@ -45,7 +53,7 @@ export async function getFreshAccessToken(input: {
     throw new Error('Token đã hết hạn. Hãy kết nối lại tài khoản.');
   }
 
-  const service = new TokenRefreshService(prisma, keyring, localTokenRefreshLock, {
+  const service = new TokenRefreshService(prisma, keyring, tokenRefreshLock, {
     withWorkspace: async (_workspaceId, fn) =>
       fn({
         adapters: {

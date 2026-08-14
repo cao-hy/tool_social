@@ -1,6 +1,11 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
 import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
-import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
+import {
+  createPrismaClient,
+  operationRequestKey,
+  type Prisma,
+  type PrismaClientInstance,
+} from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import {
   PLATFORM_LABELS,
@@ -15,9 +20,12 @@ import { getFreshAccessToken } from './token-refresh';
 import {
   beginOutboundAttempt,
   markLocalCommittedInTransaction,
+  markPreTargetFailed,
   markRemoteConfirmed,
   markRemoteUnknown,
+  recordRouteMetadata,
   rollbackBeforeConnect,
+  transitionRemoteUnknownToManualReview,
   type OutboundAttemptOwnership,
 } from './outbound-operation';
 
@@ -138,16 +146,66 @@ async function createPlatformComment(
   if (!command) return { created: false, reason: 'comment_command_not_found' };
 
   const account = platformPost.socialAccount;
+
+  const operationId = await resolveCreateCommentOperationId(input.prisma, payload, command.id);
+  const start = await beginOutboundAttempt(input.prisma, operationId, {
+    expected: {
+      workspaceId: payload.workspaceId,
+      operationType: 'CREATE_COMMENT',
+      resourceType: 'CommentCreateCommand',
+      resourceId: command.id,
+    },
+  });
+  if (start.action === 'LOCAL_COMMIT') {
+    return await commitCreateCommentLocally(input.prisma, {
+      payload,
+      account,
+      platformPostId: platformPost.id,
+      ownership: start.ownership,
+    });
+  }
+  if (start.action === 'RECONCILE' && start.reason === 'REMOTE_UNKNOWN') {
+    await transitionCreateCommentUnknownToManualReview(input.prisma, command.id, operationId);
+    return { created: false, reason: 'MANUAL_REVIEW' };
+  }
+  if (start.action !== 'DISPATCH_REMOTE') {
+    return { created: false, reason: start.reason };
+  }
+  const ownership = start.ownership;
+
   if (!account.token || account.status !== 'CONNECTED') {
+    await rollbackBeforeConnect(input.prisma, ownership, {
+      code: 'ACCOUNT_DISCONNECTED',
+      message: 'Social account is not connected before remote comment dispatch.',
+    });
     return { created: false, reason: 'account_disconnected' };
   }
 
-  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const adapterCtx = await input.adapterFactory
+    .forWorkspace(payload.workspaceId)
+    .catch(async (error) => {
+      await rollbackBeforeConnect(input.prisma, ownership, {
+        code: error instanceof Error ? error.name : 'ADAPTER_PREPARE_FAILED',
+        message: error instanceof Error ? error.message : 'Adapter preparation failed.',
+      });
+      throw error;
+    });
   try {
+    await recordRouteMetadata(input.prisma, ownership, {
+      routeConfigVersion: adapterCtx.proxy?.configVersion ?? null,
+      routeProxyFingerprint: adapterCtx.proxy?.routeFingerprint ?? null,
+      routeCountryCode: adapterCtx.proxy?.attestation?.countryCode ?? null,
+    });
     const { adapters } = adapterCtx;
     const adapter = adapters.requireCapability(account.platform, 'createComment');
     const createComment = adapter.createComment?.bind(adapter);
-    if (!createComment) return { created: false, reason: 'capability_unsupported' };
+    if (!createComment) {
+      await markPreTargetFailed(input.prisma, ownership, {
+        code: 'CAPABILITY_UNSUPPORTED',
+        message: 'Platform adapter does not support createComment.',
+      });
+      return { created: false, reason: 'capability_unsupported' };
+    }
 
     const accessToken = await getFreshAccessToken({
       prisma: input.prisma,
@@ -159,9 +217,14 @@ async function createPlatformComment(
         platform: account.platform,
         token: account.token,
       },
+    }).catch(async (error) => {
+      await rollbackBeforeConnect(input.prisma, ownership, {
+        code: error instanceof Error ? error.name : 'TOKEN_PREPARE_FAILED',
+        message: error instanceof Error ? error.message : 'Token preparation failed.',
+      });
+      throw error;
     });
 
-    let ownership: OutboundAttemptOwnership | null = null;
     let result: Awaited<ReturnType<typeof createComment>>;
     try {
       const currentAccount = await input.prisma.socialAccount.findUnique({
@@ -175,20 +238,6 @@ async function createPlatformComment(
       ) {
         throw new Error('ACCOUNT_DISCONNECTED');
       }
-
-      const start = await beginOutboundAttempt(input.prisma, payload.operationId);
-      if (start.action === 'LOCAL_COMMIT') {
-        return await commitCreateCommentLocally(input.prisma, {
-          payload,
-          account,
-          platformPostId: platformPost.id,
-          ownership: start.ownership,
-        });
-      }
-      if (start.action !== 'DISPATCH_REMOTE') {
-        return { created: false, reason: start.reason };
-      }
-      ownership = start.ownership;
       const accountStillEligible = await input.prisma.socialAccount.findUnique({
         where: { id: account.id },
         select: { status: true, disconnectGeneration: true },
@@ -360,6 +409,75 @@ async function loadCreateCommentCheckpoint(
     throw new Error('REMOTE_CONFIRMED create-comment operation is missing durable checkpoint');
   }
   return { externalCommentId, postedAt };
+}
+
+async function resolveCreateCommentOperationId(
+  prisma: PrismaClientInstance,
+  payload: CreatePlatformCommentPayload,
+  commandId: string,
+): Promise<string> {
+  if (payload.operationId) return payload.operationId;
+
+  const latest = await prisma.outboundOperation.findFirst({
+    where: {
+      operationType: 'CREATE_COMMENT',
+      resourceType: 'CommentCreateCommand',
+      resourceId: commandId,
+    },
+    orderBy: { operationGeneration: 'desc' },
+  });
+  if (latest) return latest.id;
+
+  const operationGeneration = 1;
+  const requestKey = operationRequestKey({
+    operationType: 'CREATE_COMMENT',
+    resourceType: 'CommentCreateCommand',
+    resourceId: commandId,
+    operationGeneration,
+  });
+  const operation = await prisma.outboundOperation.upsert({
+    where: {
+      operationType_resourceType_resourceId_operationGeneration: {
+        operationType: 'CREATE_COMMENT',
+        resourceType: 'CommentCreateCommand',
+        resourceId: commandId,
+        operationGeneration,
+      },
+    },
+    create: {
+      workspaceId: payload.workspaceId,
+      operationType: 'CREATE_COMMENT',
+      resourceType: 'CommentCreateCommand',
+      resourceId: commandId,
+      operationGeneration,
+      requestKey,
+      state: 'PREPARED',
+    },
+    update: {},
+  });
+  return operation.id;
+}
+
+async function transitionCreateCommentUnknownToManualReview(
+  prisma: PrismaClientInstance,
+  commandId: string,
+  operationId: string,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await transitionRemoteUnknownToManualReview(tx, operationId, {
+      code: 'REMOTE_RESULT_UNKNOWN',
+      message:
+        'Comment creation remote outcome is unknown and this provider has no automatic reconciliation path.',
+    });
+    await tx.commentCreateCommand.update({
+      where: { id: commandId },
+      data: {
+        status: 'MANUAL_REVIEW',
+        errorCode: 'REMOTE_RESULT_UNKNOWN',
+        errorMessage: 'Kết quả tạo bình luận trên nền tảng chưa xác định. Cần kiểm tra thủ công.',
+      },
+    });
+  });
 }
 
 function jsonObject(value: Prisma.JsonValue | null | undefined): Record<string, unknown> | null {

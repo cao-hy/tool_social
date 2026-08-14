@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { RemoteRequestError } from '@socialhub/shared';
 import { DevelopmentFixtureAdapter } from '../dev/development-fixture.adapter';
 import { PinterestAdapter } from '../pinterest/pinterest.adapter';
 import { createRuntimeAdapterRegistry } from '../registry-factory';
@@ -418,7 +419,9 @@ describe('PinterestAdapter', () => {
     });
   });
 
-  it('publish video lên Pinterest qua media upload flow', async () => {
+  it('publish video lên Pinterest qua media upload flow using bounded readRange chunks', async () => {
+    const totalBytes = 8 * 1024 * 1024 + 5;
+    const readRange = vi.fn(async () => new Uint8Array([1, 2, 3]));
     const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
       const url = new URL(String(input));
       if (url.pathname === '/v5/media') {
@@ -432,7 +435,12 @@ describe('PinterestAdapter', () => {
       }
       if (url.origin === 'https://upload.pinterest.test') {
         expect(init?.method).toBe('POST');
-        expect(init?.body).toBeInstanceOf(Uint8Array);
+        const headers = init?.headers as Record<string, string>;
+        expect(Number(headers['Content-Length'])).toBeGreaterThan(totalBytes);
+        expect(init?.body).not.toBeInstanceOf(Uint8Array);
+        for await (const _part of init?.body as AsyncIterable<Uint8Array>) {
+          // Consume the streamed multipart body so the test observes readRange calls.
+        }
         return new Response(null, { status: 204 });
       }
       if (url.pathname === '/v5/media/media-1') {
@@ -471,14 +479,13 @@ describe('PinterestAdapter', () => {
             {
               type: 'VIDEO',
               url: 'workspaces/ws/media/video.mp4',
-              bytes: new Uint8Array([1, 2, 3]),
+              readRange,
               mimeType: 'video/mp4',
-              sizeBytes: 3,
+              sizeBytes: totalBytes,
             },
             {
               type: 'IMAGE',
               url: 'https://cdn.test/cover.jpg',
-              bytes: new Uint8Array([4, 5, 6]),
               mimeType: 'image/jpeg',
               sizeBytes: 3,
             },
@@ -490,6 +497,81 @@ describe('PinterestAdapter', () => {
       externalUrl: 'https://www.pinterest.com/pin/pin-video-1/',
     });
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(readRange.mock.calls).toEqual([
+      [0, 8 * 1024 * 1024 - 1],
+      [8 * 1024 * 1024, totalBytes - 1],
+    ]);
+  });
+
+  it('classifies Pinterest create Pin 5xx after media upload as remote outcome unknown', async () => {
+    const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v5/media') {
+        return jsonResponse({
+          media_id: 'media-1',
+          upload_url: 'https://upload.pinterest.test/video',
+          upload_parameters: { key: 'uploads/video.mp4', policy: 'policy-1' },
+        });
+      }
+      if (url.origin === 'https://upload.pinterest.test') {
+        for await (const _part of init?.body as AsyncIterable<Uint8Array>) {
+          // Consume streamed body.
+        }
+        return new Response(null, { status: 204 });
+      }
+      if (url.pathname === '/v5/media/media-1') {
+        return jsonResponse({ media_id: 'media-1', status: 'succeeded' });
+      }
+      if (url.pathname === '/v5/pins') {
+        return jsonResponse(
+          { code: 'PIN_CREATE_TIMEOUT', message: "/v5/pins didn't finish after 7 seconds" },
+          { status: 500 },
+        );
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new PinterestAdapter({
+      fetch: testFetch,
+      appId: 'pin-app',
+      appSecret: 'pin-secret',
+      environment: 'production',
+    });
+
+    await expect(
+      adapter.publishPost(
+        {
+          accessToken: 'pin-access',
+          externalAccountId: 'user-1',
+          externalPageId: 'board-1',
+          correlationId: 'test',
+        },
+        {
+          title: 'Video Pin',
+          media: [
+            {
+              type: 'VIDEO',
+              url: 'workspaces/ws/media/video.mp4',
+              readRange: vi.fn(async () => new Uint8Array([1, 2, 3])),
+              mimeType: 'video/mp4',
+              sizeBytes: 3,
+            },
+            {
+              type: 'IMAGE',
+              url: 'https://cdn.test/cover.jpg',
+              mimeType: 'image/jpeg',
+              sizeBytes: 3,
+            },
+          ],
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: 'RemoteRequestError',
+      phase: 'AWAITING_RESPONSE',
+      requestMayHaveReachedRemote: true,
+      providerRequestId: 'media-1',
+    } satisfies Partial<RemoteRequestError>);
   });
 
   it('chặn Pinterest upload_url không dùng HTTPS', async () => {

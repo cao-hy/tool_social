@@ -60,6 +60,10 @@ describe('Comment/reply REMOTE_CONFIRMED recovery (D1/E/G)', () => {
           .fn()
           .mockResolvedValueOnce({
             id: 'operation_1',
+            workspaceId: 'workspace_1',
+            operationType: 'CREATE_COMMENT',
+            resourceType: 'CommentCreateCommand',
+            resourceId: 'command_1',
             state: 'REMOTE_CONFIRMED',
             attemptId: 'attempt_1',
             fence: 2,
@@ -179,6 +183,10 @@ describe('Comment/reply REMOTE_CONFIRMED recovery (D1/E/G)', () => {
           .fn()
           .mockResolvedValueOnce({
             id: 'operation_1',
+            workspaceId: 'workspace_1',
+            operationType: 'REPLY_COMMENT',
+            resourceType: 'CommentReply',
+            resourceId: 'reply_1',
             state: 'REMOTE_CONFIRMED',
             attemptId: 'attempt_1',
             fence: 2,
@@ -299,6 +307,10 @@ describe('Comment/reply REMOTE_CONFIRMED recovery (D1/E/G)', () => {
           .fn()
           .mockResolvedValueOnce({
             id: 'operation_1',
+            workspaceId: 'workspace_1',
+            operationType: 'REPLY_COMMENT',
+            resourceType: 'CommentReply',
+            resourceId: 'reply_1',
             state: 'REMOTE_CONFIRMED',
             attemptId: 'attempt_1',
             fence: 2,

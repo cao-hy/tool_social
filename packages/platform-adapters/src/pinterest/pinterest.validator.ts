@@ -42,10 +42,11 @@ export function validatePinterestPost(input: PublishPostInput): ValidationResult
     });
   }
 
-  if (video && !video.bytes?.length) {
+  if (video && !video.bytes?.length && !video.readRange) {
     issues.push({
       field: 'media.video',
-      message: 'Pinterest video cần bytes từ storage để upload lên Pinterest media bucket.',
+      message:
+        'Pinterest video cần bytes hoặc readRange từ storage để upload lên Pinterest media bucket.',
     });
   }
 

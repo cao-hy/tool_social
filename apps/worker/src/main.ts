@@ -8,6 +8,7 @@ import {
   TIKTOK_OAUTH_SCOPES,
 } from '@socialhub/platform-adapters';
 import { Keyring } from '@socialhub/security';
+import { RedisTokenRefreshLock } from '@socialhub/social-runtime';
 
 import Redis from 'ioredis';
 import { logger } from './logger';
@@ -27,6 +28,7 @@ import { createSyncExternalPostsProcessor } from './processors/sync-external-pos
 import { createSyncPostMetricsProcessor } from './processors/sync-post-metrics';
 import { createCleanupUnusedMediaProcessor } from './processors/cleanup-unused-media';
 import { createReconciliationProcessor } from './processors/reconciliation.processor';
+import { setWorkerTokenRefreshLock } from './processors/token-refresh';
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
 import { startScheduledPostScanner } from './schedulers/scheduled-post-scanner';
@@ -63,6 +65,8 @@ async function main(): Promise<void> {
   const adapterFactory = new WorkerAdapterFactory(prisma, keyring, env, connection);
   const defaultAdapters = createWebhookAdapterRegistry(env);
   const locks = new JobLockService(connection);
+  const tokenRefreshLock = new RedisTokenRefreshLock(connection);
+  setWorkerTokenRefreshLock(tokenRefreshLock);
   const storage = createStorageClient(env);
 
   const reconcileQueue = registry.getQueue('reconcile-platform-post');
@@ -85,6 +89,7 @@ async function main(): Promise<void> {
       prisma,
       keyring,
       adapterFactory,
+      tokenRefreshLock,
       locks,
     }),
   );

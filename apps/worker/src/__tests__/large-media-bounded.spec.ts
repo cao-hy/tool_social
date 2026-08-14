@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mediaInputFromAsset } from '../processors/publish-post';
 
 describe('Large media bounded reads (W1)', () => {
-  it.each(['TIKTOK', 'YOUTUBE'] as const)(
+  it.each(['TIKTOK', 'YOUTUBE', 'PINTEREST', 'FACEBOOK'] as const)(
     'prepares %s videos with an S3 range reader instead of eager full-object bytes',
     async (platform) => {
       const send = vi.fn(async (command: GetObjectCommand) => {

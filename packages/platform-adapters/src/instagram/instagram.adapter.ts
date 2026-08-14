@@ -9,6 +9,7 @@ import {
 } from '@socialhub/shared';
 import { getCapabilityTable } from '../capabilities/matrix';
 import { capabilityUnsupported, createPlatformError } from '../core/platform-error';
+import { markRemoteMutationBoundary } from '../core/remote-mutation-boundary';
 import type { SocialPlatformAdapter } from '../core/adapter.interface';
 import type {
   AdapterContext,
@@ -177,11 +178,15 @@ export class InstagramAdapter implements SocialPlatformAdapter {
         await this.waitUntilContainerReady(ctx, creationId, 'video');
       }
 
-      const postId = await this.client.publishMedia({
-        igAccountId: ctx.externalAccountId,
-        accessToken: ctx.accessToken,
-        creationId,
-      });
+      const postId = await markRemoteMutationBoundary(
+        () =>
+          this.client.publishMedia({
+            igAccountId: ctx.externalAccountId,
+            accessToken: ctx.accessToken,
+            creationId,
+          }),
+        { providerRequestId: creationId },
+      );
 
       const permalink = await this.lookupPermalinkBestEffort(ctx, postId);
 
@@ -226,11 +231,15 @@ export class InstagramAdapter implements SocialPlatformAdapter {
       await this.waitUntilContainerReady(ctx, carouselCreationId, 'carousel');
 
       // B3: Publish carousel container
-      const postId = await this.client.publishMedia({
-        igAccountId: ctx.externalAccountId,
-        accessToken: ctx.accessToken,
-        creationId: carouselCreationId,
-      });
+      const postId = await markRemoteMutationBoundary(
+        () =>
+          this.client.publishMedia({
+            igAccountId: ctx.externalAccountId,
+            accessToken: ctx.accessToken,
+            creationId: carouselCreationId,
+          }),
+        { providerRequestId: carouselCreationId },
+      );
 
       const permalink = await this.lookupPermalinkBestEffort(ctx, postId);
 
@@ -472,11 +481,15 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     externalCommentId: string,
     message: string,
   ): Promise<{ externalReplyId: string; sentAt: Date }> {
-    const id = await this.client.replyToComment({
-      commentId: externalCommentId,
-      accessToken: ctx.accessToken,
-      message,
-    });
+    const id = await markRemoteMutationBoundary(
+      () =>
+        this.client.replyToComment({
+          commentId: externalCommentId,
+          accessToken: ctx.accessToken,
+          message,
+        }),
+      { providerRequestId: externalCommentId },
+    );
 
     return {
       externalReplyId: id,
@@ -489,11 +502,15 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     externalPostId: string,
     message: string,
   ): Promise<{ externalCommentId: string; postedAt: Date }> {
-    const id = await this.client.createMediaComment({
-      mediaId: externalPostId,
-      accessToken: ctx.accessToken,
-      message,
-    });
+    const id = await markRemoteMutationBoundary(
+      () =>
+        this.client.createMediaComment({
+          mediaId: externalPostId,
+          accessToken: ctx.accessToken,
+          message,
+        }),
+      { providerRequestId: externalPostId },
+    );
 
     return {
       externalCommentId: id,

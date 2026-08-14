@@ -71,12 +71,20 @@ describe('Optional post-publish follow-up success protection', () => {
       outboundOperation: {
         findFirst: vi.fn(async () => ({
           id: 'operation_1',
+          workspaceId: 'workspace_1',
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: 'post_1',
           state: 'PREPARED',
           attemptId: null,
           fence: 0,
         })),
         findUnique: vi.fn(async () => ({
           id: 'operation_1',
+          workspaceId: 'workspace_1',
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: 'post_1',
           state: 'PREPARED',
           attemptId: null,
           fence: 0,

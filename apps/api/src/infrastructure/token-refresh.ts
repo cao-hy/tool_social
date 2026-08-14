@@ -1,7 +1,11 @@
 import type { SocialPlatformAdapter } from '@socialhub/platform-adapters';
 import type { Keyring } from '@socialhub/security';
 import { decryptToken } from '@socialhub/security';
-import { InMemoryTokenRefreshLock, TokenRefreshService } from '@socialhub/social-runtime';
+import {
+  InMemoryTokenRefreshLock,
+  TokenRefreshService,
+  type TokenRefreshLock,
+} from '@socialhub/social-runtime';
 import type { Platform } from '@socialhub/shared';
 import { AppError } from '../common/errors/app-error';
 import type { AdapterRegistryFactory } from './adapter-registry.factory';
@@ -15,6 +19,7 @@ export async function getFreshAccessTokenViaCentralService(
     prisma: PrismaService;
     keyring: Keyring;
     adapterFactory: AdapterRegistryFactory;
+    tokenRefreshLock?: TokenRefreshLock;
     account: {
       id: string;
       workspaceId: string;
@@ -46,7 +51,7 @@ export async function getFreshAccessTokenViaCentralService(
   const service = new TokenRefreshService(
     input.prisma,
     input.keyring,
-    tokenRefreshLock,
+    input.tokenRefreshLock ?? tokenRefreshLock,
     input.adapterFactory,
   );
   return await service.getValidAccessToken(input.account.id);

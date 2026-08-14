@@ -14,6 +14,7 @@ describe('Remote Success + Confirmation DB Failure (P0-05)', () => {
           state: 'DISPATCHING',
           attemptId: 'attempt_1',
           fence: 1,
+          remoteStartedAt: new Date(Date.now() - 16 * 60 * 1000),
         }),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -23,7 +24,7 @@ describe('Remote Success + Confirmation DB Failure (P0-05)', () => {
 
     // Expected: Latest DISPATCHING must not permit next generation.
     // Recovery must conservatively fence/take over into REMOTE_UNKNOWN.
-    expect(startOperation).toEqual({ action: 'NOOP', reason: 'REMOTE_UNKNOWN' });
+    expect(startOperation).toEqual({ action: 'RECONCILE', reason: 'REMOTE_UNKNOWN' });
 
     expect(prisma.outboundOperation.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({

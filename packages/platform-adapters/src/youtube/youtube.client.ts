@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { AdapterFetch } from '../core/types';
+import { markRemoteMutationBoundary } from '../core/remote-mutation-boundary';
 import { discardResponseBody, requireHttpsUrl, throwIfRemoteRequestError } from '../core/utils';
 import {
   normalizeYouTubeError,
@@ -612,7 +613,9 @@ export class YouTubeClient {
         continue;
       }
 
-      return parseResponse(response, youtubeVideoResponseSchema);
+      return await markRemoteMutationBoundary(() =>
+        parseResponse(response, youtubeVideoResponseSchema),
+      );
     }
 
     throw new Error('YouTube upload missing media bytes/readRange.');
@@ -625,7 +628,10 @@ export class YouTubeClient {
     mimeType: string;
     contentRange: string | null;
   }): Promise<YouTubeVideoResponse> {
-    return parseResponse(await this.putUploadChunkResponse(input), youtubeVideoResponseSchema);
+    const response = await this.putUploadChunkResponse(input);
+    return await markRemoteMutationBoundary(() =>
+      parseResponse(response, youtubeVideoResponseSchema),
+    );
   }
 
   private async putUploadChunkResponse(input: {

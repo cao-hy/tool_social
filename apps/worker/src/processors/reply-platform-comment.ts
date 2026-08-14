@@ -1,6 +1,11 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
 import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
-import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
+import {
+  createPrismaClient,
+  operationRequestKey,
+  type Prisma,
+  type PrismaClientInstance,
+} from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import { PLATFORM_LABELS, RemoteRequestError, type QueuePayload } from '@socialhub/shared';
 import { z } from 'zod';
@@ -10,9 +15,12 @@ import { getFreshAccessToken } from './token-refresh';
 import {
   beginOutboundAttempt,
   markLocalCommittedInTransaction,
+  markPreTargetFailed,
   markRemoteConfirmed,
   markRemoteUnknown,
+  recordRouteMetadata,
   rollbackBeforeConnect,
+  transitionRemoteUnknownToManualReview,
   type OutboundAttemptOwnership,
 } from './outbound-operation';
 
@@ -118,30 +126,81 @@ async function replyPlatformComment(
   if (!comment) return { replied: false, reason: 'comment_not_found' };
 
   const account = comment.socialAccount;
+
+  const reply = payload.replyRecordId
+    ? await input.prisma.commentReply.findFirst({
+        where: { id: payload.replyRecordId, workspaceId: payload.workspaceId },
+      })
+    : await input.prisma.commentReply.create({
+        data: {
+          workspaceId: payload.workspaceId,
+          commentId: comment.id,
+          message: payload.message,
+          sentById: payload.requestedByUserId,
+        },
+      });
+  if (!reply) return { replied: false, reason: 'reply_record_not_found' };
+
+  const operationId = await resolveReplyOperationId(input.prisma, payload, reply.id);
+  const start = await beginOutboundAttempt(input.prisma, operationId, {
+    expected: {
+      workspaceId: payload.workspaceId,
+      operationType: 'REPLY_COMMENT',
+      resourceType: 'CommentReply',
+      resourceId: reply.id,
+    },
+  });
+  if (start.action === 'LOCAL_COMMIT') {
+    return await commitReplyLocally(input.prisma, {
+      payload,
+      comment,
+      reply,
+      account,
+      ownership: start.ownership,
+    });
+  }
+  if (start.action === 'RECONCILE' && start.reason === 'REMOTE_UNKNOWN') {
+    await transitionReplyUnknownToManualReview(input.prisma, reply.id, operationId);
+    return { replied: false, reason: 'MANUAL_REVIEW' };
+  }
+  if (start.action !== 'DISPATCH_REMOTE') {
+    return { replied: false, reason: start.reason };
+  }
+  const ownership = start.ownership;
+
   if (!account.token || account.status !== 'CONNECTED') {
+    await rollbackBeforeConnect(input.prisma, ownership, {
+      code: 'ACCOUNT_DISCONNECTED',
+      message: 'Social account is not connected before remote reply dispatch.',
+    });
     return { replied: false, reason: 'account_disconnected' };
   }
 
-  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const adapterCtx = await input.adapterFactory
+    .forWorkspace(payload.workspaceId)
+    .catch(async (error) => {
+      await rollbackBeforeConnect(input.prisma, ownership, {
+        code: error instanceof Error ? error.name : 'ADAPTER_PREPARE_FAILED',
+        message: error instanceof Error ? error.message : 'Adapter preparation failed.',
+      });
+      throw error;
+    });
   try {
+    await recordRouteMetadata(input.prisma, ownership, {
+      routeConfigVersion: adapterCtx.proxy?.configVersion ?? null,
+      routeProxyFingerprint: adapterCtx.proxy?.routeFingerprint ?? null,
+      routeCountryCode: adapterCtx.proxy?.attestation?.countryCode ?? null,
+    });
     const { adapters } = adapterCtx;
     const adapter = adapters.requireCapability(account.platform, 'replyToComment');
     const replyToComment = adapter.replyToComment?.bind(adapter);
-    if (!replyToComment) return { replied: false, reason: 'capability_unsupported' };
-
-    const reply = payload.replyRecordId
-      ? await input.prisma.commentReply.findFirst({
-          where: { id: payload.replyRecordId, workspaceId: payload.workspaceId },
-        })
-      : await input.prisma.commentReply.create({
-          data: {
-            workspaceId: payload.workspaceId,
-            commentId: comment.id,
-            message: payload.message,
-            sentById: payload.requestedByUserId,
-          },
-        });
-    if (!reply) return { replied: false, reason: 'reply_record_not_found' };
+    if (!replyToComment) {
+      await markPreTargetFailed(input.prisma, ownership, {
+        code: 'CAPABILITY_UNSUPPORTED',
+        message: 'Platform adapter does not support replyToComment.',
+      });
+      return { replied: false, reason: 'capability_unsupported' };
+    }
 
     const targetExternalCommentId =
       account.platform === 'YOUTUBE' && comment.parent?.externalCommentId
@@ -157,8 +216,13 @@ async function replyPlatformComment(
         platform: account.platform,
         token: account.token,
       },
+    }).catch(async (error) => {
+      await rollbackBeforeConnect(input.prisma, ownership, {
+        code: error instanceof Error ? error.name : 'TOKEN_PREPARE_FAILED',
+        message: error instanceof Error ? error.message : 'Token preparation failed.',
+      });
+      throw error;
     });
-    let ownership: OutboundAttemptOwnership | null = null;
     let result: Awaited<ReturnType<typeof replyToComment>>;
     try {
       const currentAccount = await input.prisma.socialAccount.findUnique({
@@ -172,21 +236,6 @@ async function replyPlatformComment(
       ) {
         throw new Error('ACCOUNT_DISCONNECTED');
       }
-
-      const start = await beginOutboundAttempt(input.prisma, payload.operationId);
-      if (start.action === 'LOCAL_COMMIT') {
-        return await commitReplyLocally(input.prisma, {
-          payload,
-          comment,
-          reply,
-          account,
-          ownership: start.ownership,
-        });
-      }
-      if (start.action !== 'DISPATCH_REMOTE') {
-        return { replied: false, reason: start.reason };
-      }
-      ownership = start.ownership;
       const accountStillEligible = await input.prisma.socialAccount.findUnique({
         where: { id: account.id },
         select: { status: true, disconnectGeneration: true },
@@ -362,6 +411,75 @@ async function loadReplyCheckpoint(
     throw new Error('REMOTE_CONFIRMED reply operation is missing durable checkpoint');
   }
   return { externalReplyId, sentAt };
+}
+
+async function resolveReplyOperationId(
+  prisma: PrismaClientInstance,
+  payload: ReplyPlatformCommentPayload,
+  replyRecordId: string,
+): Promise<string> {
+  if (payload.operationId) return payload.operationId;
+
+  const latest = await prisma.outboundOperation.findFirst({
+    where: {
+      operationType: 'REPLY_COMMENT',
+      resourceType: 'CommentReply',
+      resourceId: replyRecordId,
+    },
+    orderBy: { operationGeneration: 'desc' },
+  });
+  if (latest) return latest.id;
+
+  const operationGeneration = 1;
+  const requestKey = operationRequestKey({
+    operationType: 'REPLY_COMMENT',
+    resourceType: 'CommentReply',
+    resourceId: replyRecordId,
+    operationGeneration,
+  });
+  const operation = await prisma.outboundOperation.upsert({
+    where: {
+      operationType_resourceType_resourceId_operationGeneration: {
+        operationType: 'REPLY_COMMENT',
+        resourceType: 'CommentReply',
+        resourceId: replyRecordId,
+        operationGeneration,
+      },
+    },
+    create: {
+      workspaceId: payload.workspaceId,
+      operationType: 'REPLY_COMMENT',
+      resourceType: 'CommentReply',
+      resourceId: replyRecordId,
+      operationGeneration,
+      requestKey,
+      state: 'PREPARED',
+    },
+    update: {},
+  });
+  return operation.id;
+}
+
+async function transitionReplyUnknownToManualReview(
+  prisma: PrismaClientInstance,
+  replyId: string,
+  operationId: string,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await transitionRemoteUnknownToManualReview(tx, operationId, {
+      code: 'REMOTE_RESULT_UNKNOWN',
+      message:
+        'Reply remote outcome is unknown and this provider has no automatic reconciliation path.',
+    });
+    await tx.commentReply.update({
+      where: { id: replyId },
+      data: {
+        status: 'MANUAL_REVIEW',
+        errorCode: 'REMOTE_RESULT_UNKNOWN',
+        errorMessage: 'Kết quả gửi phản hồi trên nền tảng chưa xác định. Cần kiểm tra thủ công.',
+      },
+    });
+  });
 }
 
 function jsonObject(value: Prisma.JsonValue | null | undefined): Record<string, unknown> | null {

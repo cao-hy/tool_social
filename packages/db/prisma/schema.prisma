@@ -95,6 +95,7 @@ enum ReplyStatus {
   PENDING
   SENT
   FAILED
+  MANUAL_REVIEW
 }
 
 enum CommentCommandStatus {
@@ -1174,6 +1175,7 @@ model OutboxEvent {
 
   aggregateType String
   aggregateId   String
+  dedupeKey     String?
 
   payload Json
 
@@ -1191,6 +1193,7 @@ model OutboxEvent {
   @@index([workspaceId])
   @@index([topic, createdAt])
   @@index([aggregateType, aggregateId])
+  @@unique([dedupeKey], map: "OutboxEvent_dedupeKey_key")
 }
 
 /// Log mọi lời gọi ra platform API — phục vụ phân tích quota và điều tra sự cố

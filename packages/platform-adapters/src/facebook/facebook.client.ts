@@ -203,6 +203,8 @@ export class FacebookGraphClient {
     pageId: string;
     pageAccessToken: string;
     bytes: Uint8Array;
+    readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
+    sizeBytes?: number;
     fileName: string;
     mimeType: string;
     title?: string;
@@ -214,6 +216,18 @@ export class FacebookGraphClient {
       mimeType: string;
     };
   }): Promise<FacebookPublishPostResponse> {
+    const readRange = input.readRange;
+    if (readRange) {
+      const boundary = `socialhub-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      return this.postMultipartStream(
+        `/${input.pageId}/videos?access_token=${encodeURIComponent(input.pageAccessToken)}`,
+        `multipart/form-data; boundary=${boundary}`,
+        facebookVideoMultipartBody({ ...input, readRange }, boundary),
+        facebookPublishPostResponseSchema,
+        this.videoBaseUrl,
+      );
+    }
+
     const form = encodeMultipartForm([
       ...(input.title ? [{ name: 'title', value: input.title }] : []),
       ...(input.description ? [{ name: 'description', value: input.description }] : []),
@@ -527,6 +541,42 @@ export class FacebookGraphClient {
     return parsed.data;
   }
 
+  private async postMultipartStream<T>(
+    path: string,
+    contentType: string,
+    body: AsyncGenerator<Uint8Array>,
+    schema: z.ZodType<T>,
+    baseUrl = this.graphBaseUrl,
+  ): Promise<T> {
+    let response: Response;
+    try {
+      const request: RequestInit & { duplex?: 'half' } = {
+        method: 'POST',
+        headers: { 'content-type': contentType },
+        body: body as unknown as RequestInit['body'],
+        duplex: 'half',
+        signal: AbortSignal.timeout(120000),
+      };
+      response = await this.fetch(`${baseUrl}${path}`, request);
+    } catch (error) {
+      throwIfRemoteRequestError(error);
+      throw facebookNetworkError(error);
+    }
+
+    const payload = await parseJson(response);
+    if (!response.ok) {
+      throw normalizeFacebookError({
+        status: response.status,
+        payload,
+        retryAfterMs: retryAfterMs(response.headers.get('retry-after')),
+      });
+    }
+
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) throw facebookUnexpectedPayloadError(parsed.error, payload);
+    return parsed.data;
+  }
+
   private async delete<T>(
     path: string,
     params: Record<string, string>,
@@ -610,6 +660,63 @@ function encodeMultipartForm(parts: MultipartPart[]): EncodedMultipartForm {
     contentType: `multipart/form-data; boundary=${boundary}`,
     body: concatUint8Arrays(chunks),
   };
+}
+
+async function* facebookVideoMultipartBody(
+  input: {
+    title?: string;
+    description?: string;
+    placeId?: string;
+    readRange: (start: number, endInclusive: number) => Promise<Uint8Array>;
+    sizeBytes?: number;
+    fileName: string;
+    mimeType: string;
+    thumbnail?: {
+      bytes: Uint8Array;
+      fileName: string;
+      mimeType: string;
+    };
+  },
+  boundary: string,
+): AsyncGenerator<Uint8Array> {
+  const encoder = new TextEncoder();
+  const textParts = [
+    ...(input.title ? [{ name: 'title', value: input.title }] : []),
+    ...(input.description ? [{ name: 'description', value: input.description }] : []),
+    ...(input.placeId ? [{ name: 'place', value: input.placeId }] : []),
+    { name: 'published', value: '1' },
+  ];
+
+  for (const part of textParts) {
+    yield encoder.encode(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(part.name)}"\r\n\r\n${part.value}\r\n`,
+    );
+  }
+
+  if (input.thumbnail) {
+    yield encoder.encode(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="thumb"; filename="${escapeMultipartValue(input.thumbnail.fileName)}"\r\n` +
+        `Content-Type: ${sanitizeHeaderValue(input.thumbnail.mimeType)}\r\n\r\n`,
+    );
+    yield input.thumbnail.bytes;
+    yield encoder.encode('\r\n');
+  }
+
+  yield encoder.encode(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="source"; filename="${escapeMultipartValue(input.fileName)}"\r\n` +
+      `Content-Type: ${sanitizeHeaderValue(input.mimeType)}\r\n\r\n`,
+  );
+
+  const sizeBytes = input.sizeBytes ?? 0;
+  const chunkSize = 8 * 1024 * 1024;
+  for (let start = 0; start < sizeBytes; start += chunkSize) {
+    const endInclusive = Math.min(sizeBytes - 1, start + chunkSize - 1);
+    yield await input.readRange(start, endInclusive);
+  }
+
+  yield encoder.encode(`\r\n--${boundary}--\r\n`);
 }
 
 function concatUint8Arrays(chunks: Uint8Array[]): Uint8Array {

@@ -62,6 +62,17 @@ describe('Worker disconnect safety (P1-13)', () => {
       outboundOperation: {
         findFirst: vi.fn().mockResolvedValue(null),
         upsert: vi.fn().mockResolvedValue({ id: 'op_1' }),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'op_1',
+          workspaceId: 'workspace_1',
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: 'post_1',
+          state: 'PREPARED',
+          attemptId: null,
+          fence: 0,
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       backgroundJob: {
         upsert: vi.fn().mockResolvedValue({}),
@@ -156,12 +167,20 @@ describe('Worker disconnect safety (P1-13)', () => {
       outboundOperation: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'op_1',
+          workspaceId: 'workspace_1',
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: 'post_1',
           state: 'PREPARED',
           attemptId: null,
           fence: 0,
         }),
         findUnique: vi.fn().mockResolvedValue({
           id: 'op_1',
+          workspaceId: 'workspace_1',
+          operationType: 'PUBLISH_POST',
+          resourceType: 'PlatformPost',
+          resourceId: 'post_1',
           state: 'PREPARED',
           attemptId: null,
           fence: 0,
@@ -243,6 +262,19 @@ describe('Worker disconnect safety (P1-13)', () => {
           disconnectGeneration: 2,
         }),
       },
+      outboundOperation: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'operation_1',
+          workspaceId: 'workspace_1',
+          operationType: 'CREATE_COMMENT',
+          resourceType: 'CommentCreateCommand',
+          resourceId: 'command_1',
+          state: 'PREPARED',
+          attemptId: null,
+          fence: 0,
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       backgroundJob: {
         upsert: vi.fn().mockResolvedValue({}),
         update: vi.fn().mockResolvedValue({}),
@@ -321,7 +353,17 @@ describe('Worker disconnect safety (P1-13)', () => {
         }),
       },
       outboundOperation: {
-        findUnique: vi.fn().mockResolvedValue(null),
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'operation_1',
+          workspaceId: 'workspace_1',
+          operationType: 'REPLY_COMMENT',
+          resourceType: 'CommentReply',
+          resourceId: 'reply_1',
+          state: 'PREPARED',
+          attemptId: null,
+          fence: 0,
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       backgroundJob: {
         upsert: vi.fn().mockResolvedValue({}),

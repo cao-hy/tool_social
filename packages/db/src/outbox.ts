@@ -129,6 +129,7 @@ export async function createQueueOutboxEvent<Q extends QueueName>(
     options: QueueJobOptions;
     aggregateType: string;
     aggregateId: string;
+    dedupeKey?: string | null;
   },
 ) {
   const payload: QueueOutboxPayload<Q> = {
@@ -139,13 +140,25 @@ export async function createQueueOutboxEvent<Q extends QueueName>(
     options: input.options,
   };
 
-  return await tx.outboxEvent.create({
-    data: {
-      workspaceId: input.workspaceId ?? undefined,
-      topic: input.queueName,
-      aggregateType: input.aggregateType,
-      aggregateId: input.aggregateId,
+  const data = {
+    workspaceId: input.workspaceId ?? undefined,
+    topic: input.queueName,
+    aggregateType: input.aggregateType,
+    aggregateId: input.aggregateId,
+    dedupeKey: input.dedupeKey ?? undefined,
+    payload: payload as unknown as Prisma.InputJsonValue,
+  };
+
+  if (!input.dedupeKey) {
+    return await tx.outboxEvent.create({ data });
+  }
+
+  return await tx.outboxEvent.upsert({
+    where: { dedupeKey: input.dedupeKey },
+    create: data,
+    update: {
       payload: payload as unknown as Prisma.InputJsonValue,
+      lastError: null,
     },
   });
 }

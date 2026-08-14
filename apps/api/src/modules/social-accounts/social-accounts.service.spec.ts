@@ -81,4 +81,50 @@ describe('SocialAccountsService disconnect safety', () => {
       data: { status: 'DISCONNECTED', deletedAt: expect.any(Date) },
     });
   });
+
+  it('P1-F finalizes local disconnect when best-effort revoke route preparation fails', async () => {
+    const keyring = Keyring.fromEnv(`v1:${Keyring.generateKey()}`, 'v1');
+    const access = encryptToken('access-token', keyring);
+    const socialAccountUpdate = vi.fn(async () => ({}));
+    const prisma = {
+      socialAccount: {
+        findFirst: vi.fn(async () => ({
+          id: 'account_1',
+          workspaceId: 'workspace_1',
+          platform: 'YOUTUBE',
+          token: { accessToken: access.ciphertext },
+        })),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+        update: socialAccountUpdate,
+      },
+      platformPost: {
+        findMany: vi.fn(async () => []),
+      },
+      socialToken: {
+        deleteMany: vi.fn(async () => ({})),
+      },
+      $transaction: vi.fn(async (items) => Promise.all(items)),
+    };
+    const service = new SocialAccountsService(
+      prisma as never,
+      { getClient: vi.fn(() => ({})) } as never,
+      {} as never,
+      keyring,
+      {
+        withWorkspace: vi.fn(async () => {
+          throw new Error('proxy route unavailable');
+        }),
+      } as never,
+      { record: vi.fn() } as never,
+    );
+
+    await expect(
+      service.disconnect('workspace_1', 'account_1', 'user_1', { requestId: 'req_1' }),
+    ).resolves.toEqual({ disconnected: true });
+
+    expect(socialAccountUpdate).toHaveBeenCalledWith({
+      where: { id: 'account_1' },
+      data: { status: 'DISCONNECTED', deletedAt: expect.any(Date) },
+    });
+  });
 });

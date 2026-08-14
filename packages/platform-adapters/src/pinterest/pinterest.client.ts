@@ -399,37 +399,13 @@ export class PinterestClient {
   async uploadVideoToPinterestStorage(input: {
     uploadUrl: string;
     uploadParameters: Record<string, string>;
-    bytes: Uint8Array;
+    bytes?: Uint8Array;
+    readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
+    sizeBytes: number;
     fileName: string;
     mimeType: string;
   }): Promise<void> {
     const boundary = '----SocialHubFormBoundary' + Date.now().toString(16);
-    const parts: Uint8Array[] = [];
-    const encoder = new TextEncoder();
-
-    for (const [key, value] of Object.entries(input.uploadParameters)) {
-      parts.push(
-        encoder.encode(
-          `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`,
-        ),
-      );
-    }
-
-    parts.push(
-      encoder.encode(
-        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${input.fileName}"\r\nContent-Type: ${input.mimeType}\r\n\r\n`,
-      ),
-    );
-    parts.push(input.bytes);
-    parts.push(encoder.encode(`\r\n--${boundary}--\r\n`));
-
-    const totalLength = parts.reduce((acc, part) => acc + part.byteLength, 0);
-    const body = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const part of parts) {
-      body.set(part, offset);
-      offset += part.byteLength;
-    }
 
     let uploadUrl: string;
     try {
@@ -439,14 +415,17 @@ export class PinterestClient {
     }
     let response: Response;
     try {
-      response = await this.fetch(uploadUrl, {
+      const request: RequestInit & { duplex?: 'half' } = {
         method: 'POST',
         headers: {
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': String(multipartVideoUploadContentLength(input, boundary)),
         },
-        body,
+        body: multipartVideoUploadBody(input, boundary) as unknown as RequestInit['body'],
+        duplex: 'half',
         signal: AbortSignal.timeout(180000),
-      });
+      };
+      response = await this.fetch(uploadUrl, request);
     } catch (error) {
       throwIfRemoteRequestError(error);
       throw pinterestNetworkError(error);
@@ -649,6 +628,86 @@ export class PinterestClient {
       accessToken,
     );
   }
+}
+
+async function* multipartVideoUploadBody(
+  input: {
+    uploadParameters: Record<string, string>;
+    bytes?: Uint8Array;
+    readRange?: (start: number, endInclusive: number) => Promise<Uint8Array>;
+    sizeBytes: number;
+    fileName: string;
+    mimeType: string;
+  },
+  boundary: string,
+): AsyncGenerator<Uint8Array> {
+  for (const [key, value] of Object.entries(input.uploadParameters)) {
+    yield multipartFieldHeaderBytes(boundary, key, value);
+  }
+
+  yield multipartFileHeaderBytes(boundary, input.fileName, input.mimeType);
+
+  if (input.readRange) {
+    const chunkSize = 8 * 1024 * 1024;
+    for (let start = 0; start < input.sizeBytes; start += chunkSize) {
+      const endInclusive = Math.min(input.sizeBytes - 1, start + chunkSize - 1);
+      yield await input.readRange(start, endInclusive);
+    }
+  } else if (input.bytes?.length) {
+    yield input.bytes;
+  } else {
+    throw new Error('Pinterest upload missing media bytes/readRange.');
+  }
+
+  yield multipartClosingBoundaryBytes(boundary);
+}
+
+function multipartVideoUploadContentLength(
+  input: {
+    uploadParameters: Record<string, string>;
+    bytes?: Uint8Array;
+    sizeBytes: number;
+    fileName: string;
+    mimeType: string;
+  },
+  boundary: string,
+): number {
+  const mediaBytes = input.bytes?.length ? input.bytes.byteLength : input.sizeBytes;
+  if (mediaBytes <= 0) throw new Error('Pinterest upload missing media size.');
+
+  let length = 0;
+  for (const [key, value] of Object.entries(input.uploadParameters)) {
+    length += multipartFieldHeaderBytes(boundary, key, value).byteLength;
+  }
+
+  length += multipartFileHeaderBytes(boundary, input.fileName, input.mimeType).byteLength;
+  length += mediaBytes;
+  length += multipartClosingBoundaryBytes(boundary).byteLength;
+  return length;
+}
+
+function multipartFieldHeaderBytes(boundary: string, key: string, value: string): Uint8Array {
+  return multipartEncode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`,
+  );
+}
+
+function multipartFileHeaderBytes(
+  boundary: string,
+  fileName: string,
+  mimeType: string,
+): Uint8Array {
+  return multipartEncode(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${fileName}"\r\nContent-Type: ${mimeType}\r\n\r\n`,
+  );
+}
+
+function multipartClosingBoundaryBytes(boundary: string): Uint8Array {
+  return multipartEncode(`\r\n--${boundary}--\r\n`);
+}
+
+function multipartEncode(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
 }
 
 async function parseResponse<T>(
