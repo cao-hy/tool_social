@@ -53,7 +53,7 @@ export default function LoginPage() {
 
   return (
     <AuthPanel
-      eyebrow="SocialHub Manager"
+      eyebrow="SocialHub_B6"
       title="Đăng nhập"
       subtitle="Phiên đăng nhập được giữ trong HTTP-only cookie."
       footer={

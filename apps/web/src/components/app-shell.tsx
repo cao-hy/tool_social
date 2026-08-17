@@ -49,6 +49,7 @@ const ICONS: Record<string, React.ElementType> = {
   '/network': Globe,
   '/settings': Settings,
 };
+const LOGO_PATH = '/logo_b6.png';
 import { NotificationToasts } from './notification-toasts';
 import { JobActivityPanel } from './job-activity-panel';
 import { RoleBadge } from './role-badge';
@@ -206,14 +207,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           }`}
         >
           {!isCollapsed && (
-            <div>
-              <p className="text-sm font-semibold text-brand-600">SocialHub</p>
+            <div className="min-w-0">
+              <img
+                src={LOGO_PATH}
+                alt="b6-teams logo"
+                className="h-9 w-36 object-cover object-center"
+              />
+              <p className="mt-2 text-sm font-semibold text-brand-600">SocialHub_B6</p>
               <p className="mt-1 text-xs text-slate-500">Phase {CURRENT_PHASE}</p>
             </div>
           )}
           {isCollapsed && (
-            <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-brand-600 font-bold text-white shadow-sm">
-              SH
+            <div className="mx-auto flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
+              <img src={LOGO_PATH} alt="b6-teams logo" className="h-10 w-10 object-cover" />
             </div>
           )}
         </div>

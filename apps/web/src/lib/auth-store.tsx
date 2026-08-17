@@ -29,6 +29,15 @@ const AuthContext = createContext<AuthState | null>(null);
 
 const STORAGE_KEY = 'socialhub.activeWorkspaceId';
 const AUTH_ROUTES = ['/login', '/register', '/forgot-password', '/reset-password'] as const;
+const PUBLIC_ROUTES = [
+  '/',
+  '/features',
+  '/how-it-works',
+  '/about',
+  '/contact',
+  '/privacy',
+  '/terms',
+] as const;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -68,7 +77,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyAuthPayload]);
 
   useEffect(() => {
-    if (AUTH_ROUTES.some((route) => pathname.startsWith(route))) {
+    if (
+      AUTH_ROUTES.some((route) => pathname.startsWith(route)) ||
+      PUBLIC_ROUTES.some((route) => pathname === route)
+    ) {
       setLoading(false);
       return;
     }

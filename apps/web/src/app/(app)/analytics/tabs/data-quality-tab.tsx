@@ -48,9 +48,9 @@ export function DataQualityTab({
       <section className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
         <p className="font-semibold">Luồng dữ liệu Analytics</p>
         <p className="mt-1">
-          Bài đăng tạo ngoài SocialHub phải chạy <strong>Kéo bài ngoài tool</strong> trước để nhập
-          vào DB. Sau khi có bài trong danh sách, bấm <strong>Sync metrics</strong> để lấy số liệu
-          view, reach, comment và các chỉ số nền tảng hỗ trợ.
+          Bài đăng tạo ngoài SocialHub_B6 phải chạy <strong>Kéo bài ngoài tool</strong> trước để
+          nhập vào DB. Sau khi có bài trong danh sách, bấm <strong>Sync metrics</strong> để lấy số
+          liệu view, reach, comment và các chỉ số nền tảng hỗ trợ.
         </p>
       </section>
     </div>

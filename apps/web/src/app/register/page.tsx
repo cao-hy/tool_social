@@ -101,7 +101,7 @@ export default function RegisterPage() {
 
   return (
     <AuthPanel
-      eyebrow="Phase 2"
+      eyebrow="SocialHub_B6"
       title="Tạo tài khoản"
       subtitle="Tài khoản mới sẽ có workspace mặc định với vai trò Owner."
       footer={

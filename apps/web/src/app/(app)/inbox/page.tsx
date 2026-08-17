@@ -403,7 +403,7 @@ export default function InboxPage() {
         externalCommentId: `fake-${Date.now()}`,
         parentId: null,
         authorExternalId: null,
-        authorName: account?.name ?? 'SocialHub',
+        authorName: account?.name ?? 'SocialHub_B6',
         authorAvatarUrl: account?.profileUrl ?? null,
         message: message.trim(),
         likeCount: 0,
@@ -558,7 +558,7 @@ export default function InboxPage() {
           externalCommentId: `fake-${Date.now()}`,
           parentId: parentId,
           authorExternalId: null,
-          authorName: account?.name ?? 'SocialHub',
+          authorName: account?.name ?? 'SocialHub_B6',
           authorAvatarUrl: account?.profileUrl ?? null,
           message: message.trim(),
           likeCount: 0,
@@ -834,7 +834,7 @@ export default function InboxPage() {
                 ))}
                 {activeThread && activeThread.rootComments.length === 0 ? (
                   <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-600">
-                    Bài này chưa có comment nào trong SocialHub.
+                    Bài này chưa có comment nào trong SocialHub_B6.
                   </p>
                 ) : null}
                 {!activeThread ? (

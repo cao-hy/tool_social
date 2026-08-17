@@ -1,0 +1,9 @@
+{
+  "date": "2026-08-17",
+  "framework": "Next.js 15 App Router",
+  "styling": "Tailwind CSS 4 via apps/web/src/app/globals.css",
+  "palette": "Existing brand and slate theme tokens",
+  "icons": "lucide-react already installed in apps/web/package.json",
+  "motion": "No public-page motion added",
+  "preserved": ["font stack", "Tailwind theme tokens", "authenticated app layout"]
+}

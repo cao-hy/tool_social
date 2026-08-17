@@ -5,14 +5,14 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: {
-    default: 'SocialHub',
-    template: '%s | SocialHub',
+    default: 'SocialHub_B6 | Social Media Management & Publishing',
+    template: '%s | SocialHub_B6',
   },
   description:
-    'SocialHub is a social media management and publishing platform for creators and teams.',
-  applicationName: 'SocialHub',
+    'SocialHub_B6 is a social media management and publishing platform for creators and teams.',
+  applicationName: 'SocialHub_B6',
   keywords: [
-    'SocialHub',
+    'SocialHub_B6',
     'social media management',
     'social media publishing',
     'content scheduling',
