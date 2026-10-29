@@ -19,6 +19,12 @@ export interface ScheduledPostScannerInput {
   enabled: boolean;
   intervalMs?: number;
   lookaheadMs?: number;
+  onJobQueued?: (info: {
+    workspaceId: string;
+    contentPostId: string;
+    platformPostId: string;
+    jobId: string;
+  }) => void;
 }
 
 export interface ScheduledPostScannerHandle {
@@ -30,6 +36,12 @@ export async function scanScheduledPostsOnce(input: {
   publishQueue: Queue;
   now?: Date;
   lookaheadMs?: number;
+  onJobQueued?: (info: {
+    workspaceId: string;
+    contentPostId: string;
+    platformPostId: string;
+    jobId: string;
+  }) => void;
 }): Promise<{ schedulesScanned: number; jobsQueued: number }> {
   const now = input.now ?? new Date();
   const upperBound = new Date(now.getTime() + (input.lookaheadMs ?? DEFAULT_LOOKAHEAD_MS));
@@ -105,6 +117,12 @@ export async function scanScheduledPostsOnce(input: {
           where: { id: queued.outboxEventId },
           data: { dispatchedAt: new Date(), lastError: null },
         });
+        input.onJobQueued?.({
+          workspaceId: schedule.contentPost.workspaceId,
+          contentPostId: schedule.contentPost.id,
+          platformPostId: platformPost.id,
+          jobId: queued.options.jobId ?? `publish-post:${platformPost.id}`,
+        });
       } catch (error) {
         await input.prisma.outboxEvent.update({
           where: { id: queued.outboxEventId },
@@ -168,6 +186,7 @@ export function startScheduledPostScanner(
         prisma: input.prisma,
         publishQueue: input.publishQueue,
         lookaheadMs,
+        onJobQueued: input.onJobQueued,
       });
 
       if (result.jobsQueued > 0) {

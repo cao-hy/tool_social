@@ -12,6 +12,7 @@ export const analyticsQuerySchema = z.object({
     .optional(),
   platform: platformSchema.optional(),
   socialAccountId: z.string().min(1).optional(),
+  storeId: z.string().trim().min(1).optional(),
 });
 
 export const syncAnalyticsSchema = z
@@ -19,6 +20,7 @@ export const syncAnalyticsSchema = z
     platformPostIds: z.array(z.string().min(1)).max(50).optional(),
     platform: platformSchema.optional(),
     socialAccountId: z.string().min(1).optional(),
+    storeId: z.string().trim().min(1).optional(),
   })
   .strict();
 

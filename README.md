@@ -114,14 +114,16 @@ docs/         Kế hoạch, kiến trúc, capability matrix, bảo mật, roadma
 
 ## Tài liệu
 
-| File                                                                 | Nội dung                                                                          |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md)                       | Phân tích yêu cầu, MVP, chọn tech stack (kèm lý do), API list, rủi ro, câu hỏi mở |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)                       | Kiến trúc, luồng dữ liệu, thiết kế adapter, RBAC, test, monitoring                |
-| [`docs/SOCIAL_API_CAPABILITIES.md`](docs/SOCIAL_API_CAPABILITIES.md) | **Capability matrix + checklist xác minh cho từng nền tảng**                      |
-| [`docs/SECURITY.md`](docs/SECURITY.md)                               | Mã hóa token, cách ly tenant, OAuth, webhook, upload, audit log                   |
-| [`docs/ROADMAP.md`](docs/ROADMAP.md)                                 | 11 phase kèm acceptance criteria, và Track B (xin quyền API)                      |
-| [`docs/PROGRESS.md`](docs/PROGRESS.md)                               | Nhật ký tiến độ                                                                   |
+| File                                                                 | Nội dung                                                                                                  |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [`docs/PROJECT_PLAN.md`](docs/PROJECT_PLAN.md)                       | Phân tích yêu cầu, MVP, chọn tech stack (kèm lý do), API list, rủi ro, câu hỏi mở                         |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)                       | Kiến trúc, luồng dữ liệu, thiết kế adapter, RBAC, test, monitoring                                        |
+| [`docs/SOCIAL_API_CAPABILITIES.md`](docs/SOCIAL_API_CAPABILITIES.md) | **Capability matrix + checklist xác minh cho từng nền tảng**                                              |
+| [`docs/SOCIAL_READ_API_CATALOG.md`](docs/SOCIAL_READ_API_CATALOG.md) | API đọc dữ liệu 5 nền tảng: endpoint, scope, giới hạn và đối chiếu với backend hiện tại                   |
+| [`docs/SOCIAL_API_KEYS.md`](docs/SOCIAL_API_KEYS.md)                 | Biến cấu hình social, giá trị cần điền, mẫu env và OAuth callback; Facebook/Instagram dùng chung Meta app |
+| [`docs/SECURITY.md`](docs/SECURITY.md)                               | Mã hóa token, cách ly tenant, OAuth, webhook, upload, audit log                                           |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md)                                 | 11 phase kèm acceptance criteria, và Track B (xin quyền API)                                              |
+| [`docs/PROGRESS.md`](docs/PROGRESS.md)                               | Nhật ký tiến độ                                                                                           |
 
 ---
 

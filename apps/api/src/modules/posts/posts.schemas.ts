@@ -35,6 +35,7 @@ const platformOverrideSchema = z.object({
 });
 
 export const postComposerSchema = z.object({
+  storeId: z.string().trim().min(1).nullable().optional(),
   title: optionalText,
   body: optionalText,
   linkUrl: optionalUrl,
@@ -109,6 +110,8 @@ export const listPostsQuerySchema = z.object({
     .optional(),
   platform: platformSchema.optional(),
   socialAccountId: z.string().min(1).optional(),
+  storeId: z.string().trim().min(1).optional(),
+  mediaType: z.enum(['IMAGE', 'VIDEO', 'NONE']).optional(),
   q: optionalText,
   dateFrom: z.coerce.date().optional(),
   dateTo: z.coerce.date().optional(),

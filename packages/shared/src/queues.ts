@@ -6,10 +6,13 @@
 
 export const QUEUE_NAMES = [
   'publish-post',
+  'update-platform-post',
+  'delete-platform-post',
   'sync-posts',
   'sync-comments',
   'create-platform-comment',
   'reply-platform-comment',
+  'moderate-platform-comment',
   'sync-post-metrics',
   'sync-account-metrics',
   'refresh-social-token',
@@ -34,10 +37,13 @@ export interface QueueSettings {
 
 export const QUEUE_SETTINGS: Record<QueueName, QueueSettings> = {
   'publish-post': { concurrency: 2, attempts: 5, backoffDelayMs: 5_000 },
+  'update-platform-post': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
+  'delete-platform-post': { concurrency: 3, attempts: 3, backoffDelayMs: 5_000 },
   'sync-posts': { concurrency: 3, attempts: 3, backoffDelayMs: 10_000 },
   'sync-comments': { concurrency: 1, attempts: 3, backoffDelayMs: 10_000 },
   'create-platform-comment': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
   'reply-platform-comment': { concurrency: 2, attempts: 3, backoffDelayMs: 5_000 },
+  'moderate-platform-comment': { concurrency: 3, attempts: 3, backoffDelayMs: 5_000 },
   'sync-post-metrics': { concurrency: 1, attempts: 3, backoffDelayMs: 15_000 },
   'sync-account-metrics': { concurrency: 1, attempts: 3, backoffDelayMs: 15_000 },
   'refresh-social-token': { concurrency: 3, attempts: 3, backoffDelayMs: 30_000 },
@@ -63,6 +69,37 @@ export interface QueuePayloads {
     workspaceId: string;
     correlationId: string;
     operationId?: string;
+  };
+  'update-platform-post': {
+    platformPostId: string;
+    contentPostId: string;
+    workspaceId: string;
+    requestedByUserId: string;
+    correlationId: string;
+    operationId?: string;
+    desired: {
+      title?: string | null;
+      caption?: string | null;
+      description?: string | null;
+      linkUrl?: string | null;
+      hashtags?: string[];
+      options?: Record<string, unknown> | null;
+    };
+    updateContentPostFields?: {
+      title?: string | null;
+      body?: string | null;
+      linkUrl?: string | null;
+      hashtags?: string[];
+    };
+  };
+  'delete-platform-post': {
+    platformPostId: string;
+    contentPostId: string;
+    workspaceId: string;
+    requestedByUserId: string;
+    correlationId: string;
+    operationId?: string;
+    deleteContentPostWhenDone: boolean;
   };
   'sync-posts': { socialAccountId: string; workspaceId: string; cursor?: string };
   'sync-comments': {
@@ -90,6 +127,20 @@ export interface QueuePayloads {
     replyRecordId?: string;
     operationId?: string;
   };
+  'moderate-platform-comment': {
+    commentId: string;
+    platformPostId: string;
+    socialAccountId: string;
+    workspaceId: string;
+    requestedByUserId: string;
+    correlationId: string;
+    operationId?: string;
+    action: 'EDIT_MESSAGE' | 'SET_VISIBILITY' | 'DELETE_COMMENT';
+    message?: string;
+    previousMessage?: string | null;
+    hidden?: boolean;
+    previousHidden?: boolean;
+  };
   'sync-post-metrics': { platformPostId: string; workspaceId: string; syncRunId?: string };
   'sync-account-metrics': { socialAccountId: string; workspaceId: string; syncRunId?: string };
   'refresh-social-token': { socialAccountId: string; workspaceId: string };
@@ -101,7 +152,7 @@ export interface QueuePayloads {
     operationId?: string;
   };
   'generate-thumbnail': { mediaAssetId: string; workspaceId: string };
-  'cleanup-unused-media': { olderThanDays: number };
+  'cleanup-unused-media': { olderThanDays: number; triggerKey?: string };
   'sync-external-posts': {
     workspaceId: string;
     socialAccountId: string;
@@ -137,6 +188,10 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
   switch (queue) {
     case 'publish-post':
       return mutationJobId(queue, (payload as QueuePayloads['publish-post']).operationId);
+    case 'update-platform-post':
+      return mutationJobId(queue, (payload as QueuePayloads['update-platform-post']).operationId);
+    case 'delete-platform-post':
+      return mutationJobId(queue, (payload as QueuePayloads['delete-platform-post']).operationId);
     case 'sync-posts': {
       const p = payload as QueuePayloads['sync-posts'];
       return jobId(queue, p.socialAccountId, p.cursor ?? 'start');
@@ -151,6 +206,10 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
     }
     case 'reply-platform-comment': {
       const p = payload as QueuePayloads['reply-platform-comment'];
+      return mutationJobId(queue, p.operationId);
+    }
+    case 'moderate-platform-comment': {
+      const p = payload as QueuePayloads['moderate-platform-comment'];
       return mutationJobId(queue, p.operationId);
     }
     case 'sync-post-metrics': {
@@ -169,8 +228,12 @@ export function buildJobId<Q extends QueueName>(queue: Q, payload: QueuePayload<
       return mutationJobId(queue, (payload as QueuePayloads['retry-failed-post']).operationId);
     case 'generate-thumbnail':
       return jobId(queue, (payload as QueuePayloads['generate-thumbnail']).mediaAssetId);
-    case 'cleanup-unused-media':
-      return jobId(queue, String((payload as QueuePayloads['cleanup-unused-media']).olderThanDays));
+    case 'cleanup-unused-media': {
+      const p = payload as QueuePayloads['cleanup-unused-media'];
+      return p.triggerKey
+        ? jobId(queue, String(p.olderThanDays), p.triggerKey)
+        : jobId(queue, String(p.olderThanDays));
+    }
     case 'sync-external-posts': {
       const p = payload as QueuePayloads['sync-external-posts'];
       return jobId(queue, p.socialAccountId, p.resumeFromJobId ?? 'start');

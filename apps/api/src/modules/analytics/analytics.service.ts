@@ -1,4 +1,4 @@
-import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, Optional, type OnModuleDestroy } from '@nestjs/common';
 import type { Prisma } from '@socialhub/db';
 import {
   buildJobId,
@@ -15,6 +15,7 @@ import { Queue } from 'bullmq';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { EventsService } from '../events/events.service';
 import type { AnalyticsQuery, SyncAnalyticsInput } from './analytics.schemas';
 
 type MetricKey =
@@ -56,6 +57,7 @@ export class AnalyticsService implements OnModuleDestroy {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RedisService) private readonly redis: RedisService,
+    @Optional() @Inject(EventsService) private readonly events?: EventsService,
   ) {
     this.postMetricsQueue = new Queue('sync-post-metrics', { connection: this.redis.getClient() });
     this.accountMetricsQueue = new Queue('sync-account-metrics', {
@@ -174,6 +176,12 @@ export class AnalyticsService implements OnModuleDestroy {
       const record = await this.ensureQueuedBackgroundJob('sync-post-metrics', jobId, payload);
       const opts = buildQueueJobOptions('sync-post-metrics', jobId);
       await this.postMetricsQueue.add('sync-post-metrics', payload, opts);
+      this.events?.publish(workspaceId, {
+        type: 'job.queued',
+        queueName: 'sync-post-metrics',
+        jobId,
+        platformPostId,
+      });
       jobs.push({
         id: record.id,
         queueName: 'sync-post-metrics',
@@ -205,6 +213,12 @@ export class AnalyticsService implements OnModuleDestroy {
       const record = await this.ensureQueuedBackgroundJob('sync-account-metrics', jobId, payload);
       const opts = buildQueueJobOptions('sync-account-metrics', jobId);
       await this.accountMetricsQueue.add('sync-account-metrics', payload, opts);
+      this.events?.publish(workspaceId, {
+        type: 'job.queued',
+        queueName: 'sync-account-metrics',
+        jobId,
+        socialAccountId,
+      });
       jobs.push({
         id: record.id,
         queueName: 'sync-account-metrics',
@@ -261,23 +275,33 @@ export class AnalyticsService implements OnModuleDestroy {
 
 function platformPostFilter(
   workspaceId: string,
-  query: { platform?: Platform; socialAccountId?: string },
+  query: { platform?: Platform; socialAccountId?: string; storeId?: string },
 ): Prisma.PlatformPostWhereInput {
   return {
     workspaceId,
     platform: query.platform,
     socialAccountId: query.socialAccountId,
+    ...(query.storeId === 'UNASSIGNED'
+      ? { socialAccount: { storeId: null } }
+      : query.storeId
+        ? { socialAccount: { storeId: query.storeId } }
+        : {}),
   };
 }
 
 function socialAccountFilter(
   workspaceId: string,
-  query: { platform?: Platform; socialAccountId?: string },
+  query: { platform?: Platform; socialAccountId?: string; storeId?: string },
 ): Prisma.SocialAccountWhereInput {
   return {
     workspaceId,
     platform: query.platform,
     id: query.socialAccountId,
+    ...(query.storeId === 'UNASSIGNED'
+      ? { storeId: null }
+      : query.storeId
+        ? { storeId: query.storeId }
+        : {}),
     deletedAt: null,
   };
 }

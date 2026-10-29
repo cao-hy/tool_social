@@ -57,9 +57,41 @@ export interface AuditLogItem {
   createdAt: string;
 }
 
+export interface StoreSummary {
+  id: string;
+  name: string;
+  slug: string;
+  color: string | null;
+  isDefault?: boolean;
+}
+
+export interface StoreView extends StoreSummary {
+  workspaceId: string;
+  description: string | null;
+  avatarUrl: string | null;
+  isDefault: boolean;
+  accountCount: number;
+  accounts: Array<{
+    id: string;
+    platform: Platform;
+    name: string;
+    username: string | null;
+    avatarUrl: string | null;
+    status: SocialAccountStatus;
+    externalAccountId: string;
+    externalPageId: string | null;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SocialAccountView {
   id: string;
+  storeId?: string | null;
+  store?: StoreSummary | null;
   platform: Platform;
+  externalAccountId?: string;
+  externalPageId?: string | null;
   name: string;
   username: string | null;
   avatarUrl: string | null;
@@ -217,12 +249,15 @@ export interface DeletePlatformResult {
   socialAccountName: string;
   externalPostId: string;
   deleted: boolean;
+  queued?: boolean;
   errorCode?: string;
   errorMessage?: string;
 }
 
 export interface DeletePostResult {
   deleted: boolean;
+  queued?: boolean;
+  queuedCount?: number;
   contentDeleted?: boolean;
   platformOnlyDelete?: boolean;
   remoteDeleteResults?: DeletePlatformResult[];
@@ -300,6 +335,8 @@ export interface PlatformPostView {
   status: PlatformPostStatus;
   socialAccountId: string;
   socialAccountName: string;
+  storeId?: string | null;
+  store?: StoreSummary | null;
   caption: string | null;
   title: string | null;
   description: string | null;
@@ -314,6 +351,7 @@ export interface PlatformPostView {
   errorCode: string | null;
   errorMessage: string | null;
   platformState: PlatformPostState | null;
+  commentCount?: number;
 }
 
 export interface YouTubePlatformState {
@@ -347,6 +385,8 @@ export type PlatformPostState =
 
 export interface ContentPostView {
   id: string;
+  storeId?: string | null;
+  store?: StoreSummary | null;
   status: PostStatus;
   title: string | null;
   body: string | null;
@@ -444,6 +484,8 @@ export interface CommentView {
   contentPostTitle: string | null;
   socialAccountId: string;
   socialAccountName: string;
+  storeId?: string | null;
+  store?: StoreSummary | null;
   externalCommentId: string;
   parentId: string | null;
   authorExternalId: string | null;

@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import {
   hasPermission,
   normalizeOptionalSocialText,
@@ -20,7 +21,8 @@ import {
 import { MediaPreview } from '@/components/media-preview';
 import { PlatformComposerPanels } from '@/components/platform-composer-panels';
 import { useToast } from '@/components/toast-provider';
-import { mediaApi, postsApi, socialAccountsApi } from '@/lib/api-client';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
+import { mediaApi, postsApi, socialAccountsApi, storesApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
@@ -41,7 +43,9 @@ import type {
   MediaLibraryItem,
   SocialAccountView,
   StorageUsageView,
+  StoreView,
 } from '@/lib/types';
+import { SHARED_META_STALE_TIME, workspaceQueryKeys } from '@/lib/workspace-queries';
 
 const MAX_MEDIA_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MULTIPART_UPLOAD_THRESHOLD_BYTES = 16 * 1024 * 1024;
@@ -59,10 +63,26 @@ interface UploadProgressItem {
 
 export default function NewPostPage() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const toast = useToast();
   const router = useRouter();
   const workspace = auth.activeWorkspace;
-  const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
+  const cachedAccounts = workspace
+    ? queryClient.getQueryData<{ items: SocialAccountView[] }>(
+        workspaceQueryKeys.socialAccounts(workspace.id),
+      )?.items
+    : undefined;
+  const cachedStores = workspace
+    ? queryClient.getQueryData<{ items: StoreView[] }>(workspaceQueryKeys.stores(workspace.id))
+        ?.items
+    : undefined;
+  const [accounts, setAccounts] = useState<SocialAccountView[]>(() =>
+    cachedAccounts ? cachedAccounts.filter((item) => item.status === 'CONNECTED') : [],
+  );
+  const [stores, setStores] = useState<StoreView[]>(() => cachedStores ?? []);
+  const [selectedStoreId, setSelectedStoreId] = useState<string>(
+    () => cachedStores?.find((item) => item.isDefault)?.id ?? '',
+  );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -86,7 +106,12 @@ export default function NewPostPage() {
   const [libraryType, setLibraryType] = useState('');
   const [libraryLoading, setLibraryLoading] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
-  const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(null);
+  const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(() =>
+    workspace
+      ? (queryClient.getQueryData<StorageUsageView>(workspaceQueryKeys.mediaUsage(workspace.id)) ??
+        null)
+      : null,
+  );
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressItem[]>([]);
   const [busy, setBusy] = useState<'draft' | 'publish' | 'schedule' | null>(null);
@@ -95,27 +120,86 @@ export default function NewPostPage() {
 
   useEffect(() => {
     if (!workspace) return;
-    socialAccountsApi
-      .list(workspace.id)
-      .then((result) => setAccounts(result.items.filter((item) => item.status === 'CONNECTED')))
+    Promise.all([
+      queryClient.fetchQuery({
+        queryKey: workspaceQueryKeys.socialAccounts(workspace.id),
+        queryFn: () => socialAccountsApi.list(workspace.id),
+        staleTime: SHARED_META_STALE_TIME,
+      }),
+      queryClient.fetchQuery({
+        queryKey: workspaceQueryKeys.stores(workspace.id),
+        queryFn: () => storesApi.list(workspace.id),
+        staleTime: SHARED_META_STALE_TIME,
+      }),
+    ])
+      .then(([accountsResult, storesResult]) => {
+        setAccounts(accountsResult.items.filter((item) => item.status === 'CONNECTED'));
+        setStores(storesResult.items);
+        const defaultStore = storesResult.items.find((item) => item.isDefault);
+        if (defaultStore) {
+          setSelectedStoreId((current) => current || defaultStore.id);
+        }
+      })
       .catch((loadError) => setError(getErrorMessage(loadError)));
 
-    mediaApi
-      .usage(workspace.id)
+    queryClient
+      .fetchQuery({
+        queryKey: workspaceQueryKeys.mediaUsage(workspace.id),
+        queryFn: () => mediaApi.usage(workspace.id),
+      })
       .then((usage) => setStorageUsage(usage))
       .catch(() => setStorageUsage(null));
-    void loadMediaLibrary();
-  }, [workspace]);
+  }, [queryClient, workspace]);
+
+  useWorkspaceEventSubscription((event) => {
+    if (!workspace) return;
+    if (event.type === 'media.updated') {
+      const targetId = event.mediaAssetId;
+      if (targetId && mediaAssets.some((item) => item.id === targetId)) {
+        mediaApi
+          .get(workspace.id, targetId)
+          .then((refreshed) => {
+            setMediaAssets((current) =>
+              current.map((item) =>
+                item.id === targetId ? { ...refreshed, previewUrl: item.previewUrl } : item,
+              ),
+            );
+            if (refreshed.status === 'READY') {
+              setUploadProgress((current) =>
+                current.map((item) =>
+                  item.fileName === refreshed.originalFileName ? { ...item, stage: 'done' } : item,
+                ),
+              );
+            }
+          })
+          .catch(() => undefined);
+      }
+      void refreshStorageUsage();
+      void loadMediaLibrary(libraryCursorStack.at(-1));
+    } else if (event.type === 'accounts.changed' || event.type === 'stream.reconnected') {
+      socialAccountsApi
+        .list(workspace.id)
+        .then((accountsResult) => {
+          setAccounts(accountsResult.items.filter((item) => item.status === 'CONNECTED'));
+        })
+        .catch(() => undefined);
+    }
+  });
+
+  const visibleAccounts = useMemo(() => {
+    if (!selectedStoreId) return accounts;
+    return accounts.filter((account) => account.storeId === selectedStoreId);
+  }, [accounts, selectedStoreId]);
 
   const groupedAccounts = useMemo(() => {
     const groups = new Map<Platform, SocialAccountView[]>();
-    for (const account of accounts) {
+    for (const account of visibleAccounts) {
       const items = groups.get(account.platform) ?? [];
       items.push(account);
       groups.set(account.platform, items);
     }
     return [...groups.entries()];
-  }, [accounts]);
+  }, [visibleAccounts]);
 
   const selectedAccounts = useMemo(
     () => accounts.filter((account) => selectedIds.includes(account.id)),
@@ -250,6 +334,7 @@ export default function NewPostPage() {
   function payload() {
     const platformOverridePayload = buildPlatformOverridePayload();
     return {
+      storeId: selectedStoreId || undefined,
       title: normalizeOptionalSocialText(title),
       body: normalizeOptionalSocialText(body),
       linkUrl: linkUrl.trim() || undefined,
@@ -258,6 +343,24 @@ export default function NewPostPage() {
       mediaAssetIds: mediaAssets.map((item) => item.id),
       platformOverrides: platformOverridePayload,
     };
+  }
+
+  function handleSelectStore(nextStoreId: string) {
+    setSelectedStoreId(nextStoreId);
+    if (nextStoreId) {
+      const validIds = new Set(accounts.filter((a) => a.storeId === nextStoreId).map((a) => a.id));
+      setSelectedIds((current) => current.filter((id) => validIds.has(id)));
+    }
+  }
+
+  function selectAllVisibleAccounts() {
+    const visibleIds = visibleAccounts.map((a) => a.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+    if (allSelected) {
+      setSelectedIds((current) => current.filter((id) => !visibleIds.includes(id)));
+    } else {
+      setSelectedIds((current) => [...new Set([...current, ...visibleIds])]);
+    }
   }
 
   function validateForm(requireTargets: boolean, requirePublishableContent: boolean) {
@@ -848,9 +951,41 @@ export default function NewPostPage() {
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-slate-950">Kênh publish</h2>
             <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
-              {selectedIds.length}/{accounts.length}
+              {selectedIds.length}/{visibleAccounts.length}
             </span>
           </div>
+
+          {stores.length > 0 ? (
+            <div className="mt-3 space-y-2 border-b border-slate-100 pb-3">
+              <label className="block text-xs font-semibold text-slate-600">
+                Chọn Store / Brand
+              </label>
+              <select
+                className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                onChange={(e) => handleSelectStore(e.target.value)}
+                value={selectedStoreId}
+              >
+                <option value="">Tất cả Stores ({accounts.length} kênh)</option>
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name} ({accounts.filter((a) => a.storeId === store.id).length} kênh)
+                  </option>
+                ))}
+              </select>
+              {visibleAccounts.length > 0 ? (
+                <button
+                  className="text-xs font-medium text-brand-700 hover:underline"
+                  onClick={selectAllVisibleAccounts}
+                  type="button"
+                >
+                  {visibleAccounts.every((a) => selectedIds.includes(a.id))
+                    ? 'Bỏ chọn tất cả kênh trong danh sách'
+                    : `Chọn tất cả ${visibleAccounts.length} kênh${selectedStoreId ? ' của Store này' : ''}`}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="mt-3 space-y-3">
             {groupedAccounts.map(([platform, items]) => (
               <div key={platform}>
@@ -873,9 +1008,19 @@ export default function NewPostPage() {
                         type="checkbox"
                         onChange={() => toggleAccount(account.id)}
                       />
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium text-slate-900">
-                          {account.name}
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-1.5">
+                          <span className="truncate font-medium text-slate-900">
+                            {account.name}
+                          </span>
+                          {account.store ? (
+                            <span
+                              className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium text-white"
+                              style={{ backgroundColor: account.store.color ?? '#2563eb' }}
+                            >
+                              {account.store.name}
+                            </span>
+                          ) : null}
                         </span>
                         <span className="block truncate text-xs text-slate-500">
                           {account.username ?? account.id}
@@ -886,8 +1031,12 @@ export default function NewPostPage() {
                 </div>
               </div>
             ))}
-            {accounts.length === 0 ? (
-              <p className="text-sm text-slate-600">Chưa có social account nào đã kết nối.</p>
+            {visibleAccounts.length === 0 ? (
+              <p className="text-sm text-slate-600">
+                {selectedStoreId
+                  ? 'Store này chưa có kênh nào đã kết nối.'
+                  : 'Chưa có social account nào đã kết nối.'}
+              </p>
             ) : null}
           </div>
         </section>

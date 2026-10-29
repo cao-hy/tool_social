@@ -13,7 +13,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { NodeHttpHandler } from '@smithy/node-http-handler';
-import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, Optional, type OnModuleDestroy } from '@nestjs/common';
 import {
   buildJobId,
   buildQueueJobOptions,
@@ -27,6 +27,7 @@ import { AppError } from '../../common/errors/app-error';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { EventsService } from '../events/events.service';
 import type {
   AbortMultipartUploadInput,
   CompleteMultipartUploadInput,
@@ -47,13 +48,16 @@ export class MediaService implements OnModuleDestroy {
   private readonly s3: S3Client;
   private readonly publicS3: S3Client;
   private readonly thumbnailQueue: Queue;
+  private readonly cleanupQueue: Queue;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RedisService) private readonly redis: RedisService,
     @Inject(ENV) private readonly env: ApiEnv,
+    @Optional() @Inject(EventsService) private readonly events?: EventsService,
   ) {
     this.thumbnailQueue = new Queue('generate-thumbnail', { connection: this.redis.getClient() });
+    this.cleanupQueue = new Queue('cleanup-unused-media', { connection: this.redis.getClient() });
     this.s3 = new S3Client({
       endpoint: env.S3_ENDPOINT,
       region: env.S3_REGION,
@@ -83,7 +87,7 @@ export class MediaService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.thumbnailQueue.close();
+    await Promise.all([this.thumbnailQueue.close(), this.cleanupQueue.close()]);
   }
 
   async usage(workspaceId: string) {
@@ -533,18 +537,17 @@ export class MediaService implements OnModuleDestroy {
       throw AppError.conflict('Media đang được bài viết sử dụng. Gỡ khỏi bài viết trước khi xóa.');
     }
 
-    await Promise.all([
-      this.s3.send(new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.storageKey })),
-      media.thumbnailKey
-        ? this.s3.send(
-            new DeleteObjectCommand({ Bucket: this.env.S3_BUCKET, Key: media.thumbnailKey }),
-          )
-        : Promise.resolve(),
-    ]);
+    await this.prisma.mediaAsset.update({
+      where: { id: media.id },
+      data: {
+        status: 'DELETE_PENDING',
+        deletedAt: new Date(),
+      },
+    });
 
-    await this.prisma.mediaAsset.delete({ where: { id: media.id } });
+    await this.enqueueCleanupMedia(workspaceId, `delete-${media.id}`, media.id);
 
-    return { deleted: true };
+    return { deleted: true, queued: true };
   }
 
   async deleteUnused(workspaceId: string, mediaAssetIds: string[]) {
@@ -587,15 +590,43 @@ export class MediaService implements OnModuleDestroy {
     if (deletableMedia.length > 0) {
       await this.prisma.mediaAsset.updateMany({
         where: { id: { in: deletableMedia.map((media) => media.id) }, workspaceId },
-        data: { status: 'DELETE_PENDING' },
+        data: { status: 'DELETE_PENDING', deletedAt: new Date() },
       });
-      // Cleanup is handled asynchronously by the worker state machine.
+      await this.enqueueCleanupMedia(workspaceId, `unused-${Date.now()}`);
     }
 
     return {
       deleted: deletableMedia.length,
       skipped: uniqueIds.length - deletableMedia.length,
     };
+  }
+
+  private async enqueueCleanupMedia(
+    workspaceId: string,
+    triggerKey: string,
+    mediaAssetId?: string,
+  ): Promise<void> {
+    const payload: QueuePayload<'cleanup-unused-media'> = {
+      olderThanDays: 1,
+      triggerKey,
+    };
+    const jobId = buildJobId('cleanup-unused-media', payload);
+    await this.cleanupQueue
+      .add('cleanup-unused-media', payload, buildQueueJobOptions('cleanup-unused-media', jobId))
+      .then(() => {
+        this.events?.publish(workspaceId, {
+          type: 'job.queued',
+          queueName: 'cleanup-unused-media',
+          jobId,
+          mediaAssetId,
+        });
+      })
+      .catch(() => undefined);
+
+    this.events?.publish(workspaceId, {
+      type: 'media.updated',
+      mediaAssetId,
+    });
   }
 
   async archive(workspaceId: string, mediaAssetId: string) {
@@ -762,6 +793,16 @@ export class MediaService implements OnModuleDestroy {
       payload,
       buildQueueJobOptions('generate-thumbnail', jobId),
     );
+    this.events?.publish(workspaceId, {
+      type: 'job.queued',
+      queueName: 'generate-thumbnail',
+      jobId,
+      mediaAssetId,
+    });
+    this.events?.publish(workspaceId, {
+      type: 'media.updated',
+      mediaAssetId,
+    });
   }
 
   private async diskUsage() {

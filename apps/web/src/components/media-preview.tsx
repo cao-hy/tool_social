@@ -39,7 +39,20 @@ export function MediaPreview({
     );
   }
 
-  if (asset.type === 'IMAGE' && source) {
+  const youtubeEmbed = extractYouTubeEmbedUrl(asset.displayUrl ?? asset.readUrl ?? source);
+  if (youtubeEmbed) {
+    return (
+      <iframe
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowFullScreen
+        className={`aspect-video w-full rounded bg-slate-950 ${className}`}
+        src={youtubeEmbed}
+        title={asset.originalFileName ?? 'YouTube video'}
+      />
+    );
+  }
+
+  if ((asset.type === 'IMAGE' || asset.mimeType === 'image/jpeg') && source) {
     return (
       <FallbackImage
         alt={asset.originalFileName ?? 'media'}
@@ -54,6 +67,7 @@ export function MediaPreview({
       <video
         className={`aspect-video w-full rounded bg-slate-950 object-cover ${className}`}
         controls
+        poster={asset.thumbnailUrl ?? undefined}
         src={source}
       />
     );
@@ -156,4 +170,28 @@ function uniqueUrls(values: Array<string | null | undefined>): string[] {
     seen.add(value);
     return true;
   });
+}
+
+export function extractYouTubeEmbedUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.hostname === 'www.youtube.com' ||
+      parsed.hostname === 'youtube.com' ||
+      parsed.hostname === 'm.youtube.com'
+    ) {
+      const videoId = parsed.searchParams.get('v');
+      if (videoId) return `https://www.youtube.com/embed/${videoId}`;
+      const shortsMatch = parsed.pathname.match(/^\/shorts\/([a-zA-Z0-9_-]+)/);
+      if (shortsMatch?.[1]) return `https://www.youtube.com/embed/${shortsMatch[1]}`;
+    }
+    if (parsed.hostname === 'youtu.be') {
+      const id = parsed.pathname.replace(/^\//, '').split('/')[0];
+      if (id) return `https://www.youtube.com/embed/${id}`;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }

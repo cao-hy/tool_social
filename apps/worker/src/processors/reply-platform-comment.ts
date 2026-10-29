@@ -98,7 +98,13 @@ export function createReplyPlatformCommentProcessor(input: {
           },
           'Bỏ retry reply comment vì lỗi platform không thể tự khắc phục',
         );
-        return { replied: false, reason: platformError.kind };
+        return {
+          replied: false,
+          reason: platformError.kind,
+          errorMessage,
+          commentId: payload.commentId,
+          replyRecordId: payload.replyRecordId,
+        };
       }
       throw error;
     }
@@ -225,17 +231,6 @@ async function replyPlatformComment(
     });
     let result: Awaited<ReturnType<typeof replyToComment>>;
     try {
-      const currentAccount = await input.prisma.socialAccount.findUnique({
-        where: { id: account.id },
-        select: { status: true, disconnectGeneration: true },
-      });
-      if (
-        !currentAccount ||
-        currentAccount.status !== 'CONNECTED' ||
-        currentAccount.disconnectGeneration !== account.disconnectGeneration
-      ) {
-        throw new Error('ACCOUNT_DISCONNECTED');
-      }
       const accountStillEligible = await input.prisma.socialAccount.findUnique({
         where: { id: account.id },
         select: { status: true, disconnectGeneration: true },
@@ -308,12 +303,7 @@ async function replyPlatformComment(
       'Đã reply comment trên platform',
     );
 
-    return {
-      replied: true,
-      commentId: comment.id,
-      externalReplyId: committed.externalReplyId,
-      platform: PLATFORM_LABELS[account.platform],
-    };
+    return committed;
   } finally {
     await adapterCtx.release();
   }
@@ -327,6 +317,7 @@ async function commitReplyLocally(
       id: string;
       platformPostId: string;
       workspaceId: string;
+      platformPost?: { contentPostId: string } | null;
     };
     reply: { id: string };
     account: {
@@ -340,7 +331,16 @@ async function commitReplyLocally(
     ownership: OutboundAttemptOwnership | null;
     result?: { externalReplyId: string; sentAt: Date };
   },
-): Promise<{ replied: true; commentId: string; externalReplyId: string; platform: string }> {
+): Promise<{
+  replied: true;
+  commentId: string;
+  replyRecordId: string;
+  externalReplyId: string;
+  platform: string;
+  platformCode: keyof typeof PLATFORM_LABELS;
+  platformPostId: string;
+  contentPostId?: string;
+}> {
   const result = input.result ?? (await loadReplyCheckpoint(prisma, input.ownership));
   await prisma.$transaction(async (tx) => {
     await tx.commentReply.update({
@@ -389,8 +389,12 @@ async function commitReplyLocally(
   return {
     replied: true,
     commentId: input.comment.id,
+    replyRecordId: input.reply.id,
     externalReplyId: result.externalReplyId,
     platform: PLATFORM_LABELS[input.account.platform],
+    platformCode: input.account.platform,
+    platformPostId: input.comment.platformPostId,
+    contentPostId: input.comment.platformPost?.contentPostId,
   };
 }
 

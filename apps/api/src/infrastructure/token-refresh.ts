@@ -5,6 +5,7 @@ import {
   InMemoryTokenRefreshLock,
   TokenRefreshService,
   type TokenRefreshLock,
+  type WorkspaceAdapterContext,
 } from '@socialhub/social-runtime';
 import type { Platform } from '@socialhub/shared';
 import { AppError } from '../common/errors/app-error';
@@ -31,7 +32,7 @@ export async function getFreshAccessTokenViaCentralService(
       } | null;
     };
   },
-  _adapter?: SocialPlatformAdapter,
+  adapter?: SocialPlatformAdapter,
 ): Promise<string> {
   if (!input.account.token) {
     throw AppError.conflict('Social account chưa có token để kiểm tra.');
@@ -48,11 +49,28 @@ export async function getFreshAccessTokenViaCentralService(
     throw AppError.conflict('Token đã hết hạn. Hãy ngắt kết nối rồi kết nối lại tài khoản.');
   }
 
+  const platformResolver = adapter
+    ? {
+        withWorkspace: async <T>(
+          _workspaceId: string,
+          fn: (ctx: WorkspaceAdapterContext) => Promise<T>,
+        ) =>
+          fn({
+            adapters: {
+              get: (platform: Platform) =>
+                platform === input.account.platform ? adapter : undefined,
+            } as never,
+            proxy: undefined as never,
+            release: async () => undefined,
+          }),
+      }
+    : input.adapterFactory;
+
   const service = new TokenRefreshService(
     input.prisma,
     input.keyring,
     input.tokenRefreshLock ?? tokenRefreshLock,
-    input.adapterFactory,
+    platformResolver,
   );
   return await service.getValidAccessToken(input.account.id);
 }

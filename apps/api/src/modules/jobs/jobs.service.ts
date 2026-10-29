@@ -187,6 +187,12 @@ function detailsForJob(
   if (job.queueName === 'publish-post' || job.queueName === 'retry-failed-post') {
     return `Target ${stringField(payload, 'platformPostId') ?? ''}`.trim();
   }
+  if (job.queueName === 'update-platform-post' || job.queueName === 'delete-platform-post') {
+    return `Target ${stringField(payload, 'platformPostId') ?? ''}`.trim();
+  }
+  if (job.queueName === 'moderate-platform-comment') {
+    return `Comment ${stringField(payload, 'commentId') ?? ''}`.trim();
+  }
   if (job.queueName === 'generate-thumbnail') {
     return `Media ${stringField(payload, 'mediaAssetId') ?? ''}`.trim();
   }
@@ -278,12 +284,18 @@ function labelJob(queueName: string): string {
     case 'publish-post':
     case 'retry-failed-post':
       return 'Đăng bài';
+    case 'update-platform-post':
+      return 'Cập nhật bài đã đăng';
+    case 'delete-platform-post':
+      return 'Xóa bài trên MXH';
     case 'sync-comments':
       return 'Đồng bộ comment';
     case 'create-platform-comment':
       return 'Gửi comment công khai';
     case 'reply-platform-comment':
       return 'Gửi reply comment';
+    case 'moderate-platform-comment':
+      return 'Quản lý bình luận';
     case 'sync-post-metrics':
       return 'Đồng bộ metric bài';
     case 'sync-account-metrics':

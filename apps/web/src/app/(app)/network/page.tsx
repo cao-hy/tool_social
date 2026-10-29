@@ -5,6 +5,7 @@ import { ChevronDown, Globe2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { InlineError, SecondaryButton } from '@/components/form-controls';
 import { useToast } from '@/components/toast-provider';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
 import { systemApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -38,25 +39,31 @@ export default function NetworkPolicyPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadPolicy(showToast = false) {
+  async function loadPolicy(options?: { showToast?: boolean; silent?: boolean }) {
     if (!workspace) return;
-    setLoading(true);
+    if (!options?.silent) setLoading(true);
     setError(null);
     try {
       setPolicy(await systemApi.getProxyPolicy(workspace.id));
-      if (showToast) toast.success('Đã làm mới network policy.');
+      if (options?.showToast) toast.success('Đã làm mới network policy.');
     } catch (loadError) {
       const message = getErrorMessage(loadError);
       setError(message);
-      if (showToast) toast.error(message);
+      if (options?.showToast) toast.error(message);
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     void loadPolicy();
   }, [workspace?.id]);
+
+  useWorkspaceEventSubscription((event) => {
+    if (event.type === 'network.changed' || event.type === 'stream.reconnected') {
+      void loadPolicy({ silent: true });
+    }
+  });
 
   const grouped = useMemo(() => {
     const map = new Map<NetworkPolicyCategory, NetworkProxyPolicyItem[]>();
@@ -82,7 +89,11 @@ export default function NetworkPolicyPage() {
             direct.
           </p>
         </div>
-        <SecondaryButton disabled={loading} onClick={() => void loadPolicy(true)} type="button">
+        <SecondaryButton
+          disabled={loading}
+          onClick={() => void loadPolicy({ showToast: true })}
+          type="button"
+        >
           <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           Làm mới
         </SecondaryButton>

@@ -130,16 +130,33 @@ export class FacebookGraphClient {
     limit?: number;
     since?: Date;
   }): Promise<FacebookPagePostsResponse> {
-    const params: Record<string, string> = {
-      access_token: input.pageAccessToken,
-      fields:
-        'id,message,created_time,updated_time,permalink_url,attachments{title,description,type,url,media,subattachments},shares,likes.summary(true),comments.summary(true)',
-      limit: String(input.limit ?? 50),
+    const baseFields =
+      'id,message,created_time,updated_time,permalink_url,attachments{title,description,type,url,media,subattachments},shares';
+    const fullFields = `${baseFields},likes.summary(true),comments.summary(true)`;
+    const buildParams = (fields: string): Record<string, string> => {
+      const p: Record<string, string> = {
+        access_token: input.pageAccessToken,
+        fields,
+        limit: String(input.limit ?? 50),
+      };
+      if (input.cursor) p.after = input.cursor;
+      if (input.since) p.since = String(Math.floor(input.since.getTime() / 1000));
+      return p;
     };
-    if (input.cursor) params.after = input.cursor;
-    if (input.since) params.since = String(Math.floor(input.since.getTime() / 1000));
 
-    return this.get(`/${input.pageId}/published_posts`, params, facebookPagePostsResponseSchema);
+    try {
+      return await this.get(
+        `/${input.pageId}/published_posts`,
+        buildParams(fullFields),
+        facebookPagePostsResponseSchema,
+      );
+    } catch {
+      return await this.get(
+        `/${input.pageId}/published_posts`,
+        buildParams(baseFields),
+        facebookPagePostsResponseSchema,
+      );
+    }
   }
 
   async publishPageFeedPost(input: {
@@ -484,7 +501,7 @@ export class FacebookGraphClient {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(body),
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(45000),
       });
     } catch (error) {
       throwIfRemoteRequestError(error);

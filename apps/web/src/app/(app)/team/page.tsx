@@ -1,5 +1,6 @@
 'use client';
 
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   canAssignRole,
   hasPermission,
@@ -7,7 +8,7 @@ import {
   type WorkspaceRole,
 } from '@socialhub/shared';
 import { Info } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import {
   Field,
   InlineError,
@@ -21,43 +22,42 @@ import { useToast } from '@/components/toast-provider';
 import { workspaceApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
-import type { WorkspaceInvitation, WorkspaceMember } from '@/lib/types';
+import type { WorkspaceInvitation } from '@/lib/types';
+import { workspaceQueryKeys } from '@/lib/workspace-queries';
 
 export default function TeamPage() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const toast = useToast();
   const workspace = auth.activeWorkspace;
-  const [members, setMembers] = useState<WorkspaceMember[]>([]);
-  const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [inviteRole, setInviteRole] = useState<WorkspaceRole>('VIEWER');
   const [invitation, setInvitation] = useState<WorkspaceInvitation | null>(null);
 
-  async function loadMembers(workspaceId: string) {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await workspaceApi.members(workspaceId);
-      setMembers(result.items);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError));
-    } finally {
-      setLoading(false);
-    }
-  }
+  const workspaceId = workspace?.id ?? '';
 
-  useEffect(() => {
-    if (!workspace) return;
-    void loadMembers(workspace.id);
-  }, [workspace]);
+  const membersQuery = useQuery({
+    queryKey: workspaceQueryKeys.members(workspaceId),
+    queryFn: () => workspaceApi.members(workspaceId),
+    enabled: Boolean(workspaceId),
+  });
+
+  const members = membersQuery.data?.items ?? [];
+  const loading = membersQuery.isPending;
+  const error = mutationError ?? (membersQuery.error ? getErrorMessage(membersQuery.error) : null);
+
+  async function loadMembers(workspaceId: string) {
+    setMutationError(null);
+    await queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.members(workspaceId) });
+  }
 
   async function handleInvite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!workspace) return;
 
     setSubmitting(true);
-    setError(null);
+    setMutationError(null);
     setInvitation(null);
     const form = new FormData(event.currentTarget);
 
@@ -79,7 +79,7 @@ export default function TeamPage() {
 
   async function changeRole(memberId: string, role: WorkspaceRole) {
     if (!workspace) return;
-    setError(null);
+    setMutationError(null);
     try {
       await workspaceApi.changeRole(workspace.id, memberId, role);
       await loadMembers(workspace.id);
@@ -91,7 +91,7 @@ export default function TeamPage() {
 
   async function removeMember(memberId: string) {
     if (!workspace) return;
-    setError(null);
+    setMutationError(null);
     try {
       await workspaceApi.removeMember(workspace.id, memberId);
       await loadMembers(workspace.id);

@@ -5,7 +5,9 @@ import {
   HttpException,
   Inject,
   OnModuleDestroy,
+  Optional,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -48,6 +50,8 @@ import { KEYRING } from '../../infrastructure/tokens';
 import { AuditService } from '../audit/audit.service';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
+import { EventsService } from '../events/events.service';
 
 const updateProxySchema = z
   .object({
@@ -81,10 +85,13 @@ type UpdateProxyInput = z.infer<typeof updateProxySchema>;
 
 @Controller('workspaces/:workspaceId/system')
 @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
-@RequirePermissions('workspace:update')
 export class SystemController implements OnModuleDestroy {
   private proxyRuntimeInstance?: ProxyRuntimeService;
   private readonly endpointValidator: ProxyEndpointValidator;
+  private directStatusCache?: {
+    expiresAt: number;
+    data: Awaited<ReturnType<typeof checkProxyAwareNetwork>>;
+  };
 
   async onModuleDestroy() {
     await this.proxyRuntimeInstance?.closeAll();
@@ -96,11 +103,20 @@ export class SystemController implements OnModuleDestroy {
     @Inject(KEYRING) private readonly keyring: Keyring,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(RedisService) private readonly redisService: RedisService,
+    @Optional()
+    @Inject(AdapterRegistryFactory)
+    private readonly adapterFactory?: AdapterRegistryFactory,
+    @Optional()
+    @Inject(EventsService)
+    private readonly events?: EventsService,
   ) {
     this.endpointValidator = new ProxyEndpointValidator(dns);
   }
 
   private get proxyRuntime(): ProxyRuntimeService {
+    if (typeof this.adapterFactory?.getProxyRuntime === 'function') {
+      return this.adapterFactory.getProxyRuntime();
+    }
     if (!this.proxyRuntimeInstance) {
       const redisClient = (
         this.redisService?.getClient ? this.redisService.getClient() : {}
@@ -116,52 +132,104 @@ export class SystemController implements OnModuleDestroy {
   }
 
   @Get('network')
-  async getNetworkStatus(@Req() request: FastifyRequest & AuthenticatedRequest) {
+  @RequirePermissions('social_account:view')
+  async getNetworkStatus(
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+    @Query('refresh') refresh?: string,
+  ) {
     const workspaceId = requireMembership(request).workspaceId;
+    const forceRefresh = refresh === 'true' || refresh === '1';
     const proxyConfig = await this.workspaceProxyConfig(workspaceId);
+    const proxyAvailable = Boolean(proxyConfig.proxyUrl);
     let status: Partial<Awaited<ReturnType<typeof checkProxyAwareNetwork>>> = {};
     let prepared: Awaited<ReturnType<typeof this.proxyRuntime.prepareWorkspace>> | undefined;
 
-    try {
-      prepared = await this.proxyRuntime.prepareWorkspace(
-        workspaceId,
-        (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
-        (ciphertext) => decryptToken(ciphertext, this.keyring),
-        { forceAttestation: true },
-      );
-
-      if (prepared.attestation) {
-        status = {
-          checkOk: true,
-          checkedAt: prepared.attestation.checkedAt,
-          ip: prepared.attestation.ip,
-          countryCode: prepared.attestation.countryCode,
-          country: prepared.attestation.country ?? null,
-          city: prepared.attestation.city ?? null,
-          isp: prepared.attestation.isp ?? null,
-          provider: prepared.attestation.provider,
-          proxyAvailable: true,
-          proxyActive: true,
-          countryLockSatisfied: true,
-        };
-      } else {
-        status = await checkProxyAwareNetwork(proxyConfig, createDirectFetch());
-      }
-    } catch (err: unknown) {
+    if (proxyConfig.enabled && !proxyAvailable) {
       status = {
         checkOk: false,
         checkedAt: new Date().toISOString(),
-        checkError: err instanceof Error ? err.message : String(err),
+        checkError: 'Đã bật Proxy nhưng chưa nhập Proxy URL.',
         proxyAvailable: false,
         proxyActive: false,
         countryLockSatisfied: false,
       };
-    } finally {
-      prepared?.dispatcherHandle?.release();
+    } else if (!proxyConfig.enabled) {
+      const now = Date.now();
+      if (!forceRefresh && this.directStatusCache && this.directStatusCache.expiresAt > now) {
+        status = {
+          ...this.directStatusCache.data,
+          proxyAvailable,
+          proxyActive: false,
+          countryLockSatisfied: true,
+        };
+      } else {
+        const directCheck = await checkProxyAwareNetwork(proxyConfig, createDirectFetch());
+        this.directStatusCache = {
+          expiresAt: now + 5 * 60 * 1000,
+          data: directCheck,
+        };
+        status = directCheck;
+      }
+    } else {
+      try {
+        prepared = await this.proxyRuntime.prepareWorkspace(
+          workspaceId,
+          (id) => this.prisma.workspaceProxySetting.findUnique({ where: { workspaceId: id } }),
+          (ciphertext) => decryptToken(ciphertext, this.keyring),
+          { forceAttestation: forceRefresh },
+        );
+
+        if (prepared.attestation) {
+          status = {
+            checkOk: true,
+            checkedAt: prepared.attestation.checkedAt,
+            ip: prepared.attestation.ip,
+            countryCode: prepared.attestation.countryCode,
+            country: prepared.attestation.country ?? null,
+            city: prepared.attestation.city ?? null,
+            isp: prepared.attestation.isp ?? null,
+            provider: prepared.attestation.provider,
+            proxyAvailable: true,
+            proxyActive: true,
+            countryLockSatisfied: true,
+          };
+        }
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const lockMatch = /^Proxy IP is in ([A-Z]{2}), but country lock requires ([A-Z]{2})/.exec(
+          errMsg,
+        );
+        if (lockMatch) {
+          status = {
+            checkOk: true,
+            checkedAt: new Date().toISOString(),
+            countryCode: lockMatch[1],
+            country: lockMatch[1],
+            checkError: `IP Proxy đang ở ${lockMatch[1]}, không khớp khóa quốc gia ${lockMatch[2]}.`,
+            proxyAvailable: true,
+            proxyActive: false,
+            countryLockSatisfied: false,
+          };
+        } else {
+          status = {
+            checkOk: false,
+            checkedAt: new Date().toISOString(),
+            checkError: errMsg,
+            proxyAvailable,
+            proxyActive: false,
+            countryLockSatisfied: false,
+          };
+        }
+      } finally {
+        prepared?.dispatcherHandle?.release();
+      }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await this.rememberLastCheck(workspaceId, status as any);
+    if (forceRefresh && status.checkedAt) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await this.rememberLastCheck(workspaceId, status as any);
+    }
+
     return {
       ...status,
       proxyConfig: publicProxyConfig(proxyConfig),
@@ -173,6 +241,7 @@ export class SystemController implements OnModuleDestroy {
   }
 
   @Post('proxy')
+  @RequirePermissions('workspace:update')
   async updateProxy(
     @Body(zodPipe(updateProxySchema)) config: UpdateProxyInput,
     @Req() request: FastifyRequest & AuthenticatedRequest,
@@ -311,20 +380,28 @@ export class SystemController implements OnModuleDestroy {
       },
     });
 
+    this.directStatusCache = undefined;
+    this.events?.publish(workspaceId, { type: 'network.changed' });
     response.header('x-proxy-version', String(nextConfig.version ?? 1));
     return publicProxyConfig(nextConfig);
   }
 
   @Get('proxy-policy')
+  @RequirePermissions('social_account:view')
   async getProxyPolicies(@Req() request: FastifyRequest & AuthenticatedRequest): Promise<{
+    generatedAt: string;
+    items: NetworkProxyPolicyItem[];
     policies: NetworkProxyPolicyItem[];
     summary: ReturnType<typeof summarizeNetworkProxyPolicies>;
     proxyConfig: ReturnType<typeof publicProxyConfig>;
     proxyAvailable: boolean;
   }> {
     const proxyConfig = await this.workspaceProxyConfig(requireMembership(request).workspaceId);
+    const items = [...NETWORK_PROXY_POLICIES];
     return {
-      policies: [...NETWORK_PROXY_POLICIES],
+      generatedAt: new Date().toISOString(),
+      items,
+      policies: items,
       summary: summarizeNetworkProxyPolicies(),
       proxyConfig: publicProxyConfig(proxyConfig),
       proxyAvailable: Boolean(proxyConfig.proxyUrl),

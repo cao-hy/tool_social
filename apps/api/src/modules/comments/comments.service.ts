@@ -1,19 +1,24 @@
-import { Inject, Injectable, type OnModuleDestroy } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable, Optional, type OnModuleDestroy } from '@nestjs/common';
 import { createQueueOutboxEvent, findOrCreateOutboundOperation, type Prisma } from '@socialhub/db';
-import { buildJobId, buildQueueJobOptions, type QueuePayload } from '@socialhub/shared';
+import {
+  buildJobId,
+  buildQueueJobOptions,
+  workspaceRealtimeChannel,
+  type QueuePayload,
+  type WorkspaceRealtimeEvent,
+} from '@socialhub/shared';
 import type { Platform } from '@socialhub/shared';
-import { decryptToken, type Keyring } from '@socialhub/security';
-import { RedisTokenRefreshLock } from '@socialhub/social-runtime';
-import { isPlatformError, type SocialPlatformAdapter } from '@socialhub/platform-adapters';
+import { type Keyring } from '@socialhub/security';
 import { Queue } from 'bullmq';
 import { AppError } from '../../common/errors/app-error';
 import { logger } from '../../common/logger';
 import { KEYRING } from '../../infrastructure/infrastructure.module';
 import { AdapterRegistryFactory } from '../../infrastructure/adapter-registry.factory';
-import { getFreshAccessTokenViaCentralService } from '../../infrastructure/token-refresh';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService, type AuditContext } from '../audit/audit.service';
+import { EventsService } from '../events/events.service';
 import type {
   AddCommentNoteInput,
   AssignCommentInput,
@@ -47,13 +52,15 @@ export class CommentsService implements OnModuleDestroy {
   private readonly syncQueue: Queue;
   private readonly createPlatformCommentQueue: Queue;
   private readonly replyPlatformCommentQueue: Queue;
+  private readonly moderatePlatformCommentQueue: Queue;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(RedisService) private readonly redis: RedisService,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(AdapterRegistryFactory) private readonly adapterFactory: AdapterRegistryFactory,
-    @Inject(KEYRING) private readonly keyring: Keyring,
+    @Inject(KEYRING) _keyring: Keyring,
+    @Optional() @Inject(EventsService) private readonly events?: EventsService,
   ) {
     this.syncQueue = new Queue('sync-comments', { connection: this.redis.getClient() });
     this.createPlatformCommentQueue = new Queue('create-platform-comment', {
@@ -62,12 +69,16 @@ export class CommentsService implements OnModuleDestroy {
     this.replyPlatformCommentQueue = new Queue('reply-platform-comment', {
       connection: this.redis.getClient(),
     });
+    this.moderatePlatformCommentQueue = new Queue('moderate-platform-comment', {
+      connection: this.redis.getClient(),
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
     await this.syncQueue.close();
     await this.createPlatformCommentQueue.close();
     await this.replyPlatformCommentQueue.close();
+    await this.moderatePlatformCommentQueue.close();
   }
 
   async list(workspaceId: string, query: ListCommentsQuery) {
@@ -77,6 +88,14 @@ export class CommentsService implements OnModuleDestroy {
       status: query.status,
       platform: query.platform,
       socialAccountId: query.socialAccountId,
+      platformPostId: query.platformPostId,
+      platformPost: query.contentPostId ? { contentPostId: query.contentPostId } : undefined,
+      socialAccount:
+        query.storeId === 'UNASSIGNED'
+          ? { storeId: null }
+          : query.storeId
+            ? { storeId: query.storeId }
+            : undefined,
       assignment: query.assignedToId ? { assignedToId: query.assignedToId } : undefined,
       tags: query.tagId ? { some: { tagId: query.tagId } } : undefined,
       OR: query.q
@@ -126,6 +145,12 @@ export class CommentsService implements OnModuleDestroy {
       after: { status: input.status },
     });
 
+    this.events?.publish(workspaceId, {
+      type: 'comments.synced',
+      commentId: comment.id,
+      platformPostId: comment.platformPostId,
+    });
+
     return this.toCommentView(updated);
   }
 
@@ -168,7 +193,7 @@ export class CommentsService implements OnModuleDestroy {
       },
     });
 
-    await this.prisma.notification.create({
+    const createdNotification = await this.prisma.notification.create({
       data: {
         workspaceId,
         userId: member.userId,
@@ -178,6 +203,11 @@ export class CommentsService implements OnModuleDestroy {
         linkUrl: '/inbox',
         data: { commentId: comment.id },
       },
+    });
+    this.events?.publish(workspaceId, {
+      type: 'notification.created',
+      notificationId: createdNotification.id,
+      commentId: comment.id,
     });
 
     await this.audit.record({
@@ -228,6 +258,12 @@ export class CommentsService implements OnModuleDestroy {
       ),
     ]);
 
+    this.events?.publish(workspaceId, {
+      type: 'comments.synced',
+      commentId: comment.id,
+      platformPostId: comment.platformPostId,
+    });
+
     return this.get(workspaceId, comment.id);
   }
 
@@ -241,38 +277,63 @@ export class CommentsService implements OnModuleDestroy {
     const comment = await this.findComment(workspaceId, commentId);
     const before = { message: comment.message };
 
-    if (input.updatePlatform) {
-      if (!comment.isFromPage) {
-        throw AppError.conflict(
-          'Chỉ sửa được comment/reply do page hoặc channel của bạn gửi. Comment của khách không thể sửa.',
-        );
-      }
-
-      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-        const adapter = adapters.requireCapability(comment.platform, 'editComment');
-        if (!adapter.editComment) {
-          throw AppError.capabilityUnsupported(comment.platform, 'editComment');
-        }
-        this.ensureCommentActionScopes(comment, 'editComment');
-        const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
-        await adapter.editComment(
-          {
-            accessToken,
-            externalAccountId: comment.socialAccount.externalAccountId,
-            externalPageId: comment.socialAccount.externalPageId ?? undefined,
-            correlationId: auditContext.requestId ?? `comment-edit:${comment.id}`,
-          },
-          comment.externalCommentId,
-          input.message,
-        );
+    if (!input.updatePlatform) {
+      const updated = await this.prisma.comment.update({
+        where: { id: comment.id },
+        data: { message: input.message },
+        include: this.commentInclude(),
       });
+
+      await this.audit.record({
+        ...auditContext,
+        actorUserId,
+        workspaceId,
+        action: 'POST_UPDATED',
+        resourceType: 'Comment',
+        resourceId: comment.id,
+        before,
+        after: { message: input.message, updatePlatform: false },
+      });
+
+      this.events?.publish(workspaceId, {
+        type: 'comments.synced',
+        commentId: comment.id,
+        platformPostId: comment.platformPostId,
+      });
+
+      return this.toCommentView(updated);
     }
 
-    const updated = await this.prisma.comment.update({
-      where: { id: comment.id },
-      data: { message: input.message },
-      include: this.commentInclude(),
+    if (!comment.isFromPage) {
+      throw AppError.conflict(
+        'Chỉ sửa được comment/reply do page hoặc channel của bạn gửi. Comment của khách không thể sửa.',
+      );
+    }
+
+    await this.ensureOfflineCommentCapability(workspaceId, comment, 'editComment');
+
+    const correlationId = auditContext.requestId ?? `comment-edit:${comment.id}:${Date.now()}`;
+    const queued = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.comment.update({
+        where: { id: comment.id },
+        data: { message: input.message },
+        include: this.commentInclude(),
+      });
+
+      const outboxEventId = await this.enqueueModerateCommentTx(tx, {
+        workspaceId,
+        comment,
+        actorUserId,
+        correlationId,
+        action: 'EDIT_MESSAGE',
+        message: input.message,
+        previousMessage: comment.message,
+      });
+
+      return { updated, outboxEventId };
     });
+
+    await this.dispatchCommentOutboxEvent(queued.outboxEventId);
 
     await this.audit.record({
       ...auditContext,
@@ -282,10 +343,16 @@ export class CommentsService implements OnModuleDestroy {
       resourceType: 'Comment',
       resourceId: comment.id,
       before,
-      after: { message: input.message, updatePlatform: input.updatePlatform },
+      after: { message: input.message, updatePlatform: true, queued: true },
     });
 
-    return this.toCommentView(updated);
+    this.events?.publish(workspaceId, {
+      type: 'comments.synced',
+      commentId: comment.id,
+      platformPostId: comment.platformPostId,
+    });
+
+    return this.toCommentView(queued.updated);
   }
 
   async updateVisibility(
@@ -296,30 +363,30 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.requireCapability(comment.platform, 'hideComment');
-      if (!adapter.hideComment) {
-        throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
-      }
-      this.ensureCommentActionScopes(comment, 'hideComment');
-      const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
-      await adapter.hideComment(
-        {
-          accessToken,
-          externalAccountId: comment.socialAccount.externalAccountId,
-          externalPageId: comment.socialAccount.externalPageId ?? undefined,
-          correlationId: auditContext.requestId ?? `comment-hide:${comment.id}`,
-        },
-        comment.externalCommentId,
-        input.hidden,
-      );
+    await this.ensureOfflineCommentCapability(workspaceId, comment, 'hideComment');
+
+    const correlationId = auditContext.requestId ?? `comment-hide:${comment.id}:${Date.now()}`;
+    const queued = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.comment.update({
+        where: { id: comment.id },
+        data: { isHidden: input.hidden },
+        include: this.commentInclude(),
+      });
+
+      const outboxEventId = await this.enqueueModerateCommentTx(tx, {
+        workspaceId,
+        comment,
+        actorUserId,
+        correlationId,
+        action: 'SET_VISIBILITY',
+        hidden: input.hidden,
+        previousHidden: comment.isHidden,
+      });
+
+      return { updated, outboxEventId };
     });
 
-    const updated = await this.prisma.comment.update({
-      where: { id: comment.id },
-      data: { isHidden: input.hidden },
-      include: this.commentInclude(),
-    });
+    await this.dispatchCommentOutboxEvent(queued.outboxEventId);
 
     await this.audit.record({
       ...auditContext,
@@ -329,10 +396,16 @@ export class CommentsService implements OnModuleDestroy {
       resourceType: 'Comment',
       resourceId: comment.id,
       before: { isHidden: comment.isHidden },
-      after: { isHidden: input.hidden },
+      after: { isHidden: input.hidden, queued: true },
     });
 
-    return this.toCommentView(updated);
+    this.events?.publish(workspaceId, {
+      type: 'comments.synced',
+      commentId: comment.id,
+      platformPostId: comment.platformPostId,
+    });
+
+    return this.toCommentView(queued.updated);
   }
 
   async deleteComment(
@@ -344,71 +417,7 @@ export class CommentsService implements OnModuleDestroy {
   ) {
     const comment = await this.findComment(workspaceId, commentId);
 
-    if (input.deleteFromPlatform) {
-      const usesModerationDelete = comment.platform === 'YOUTUBE' && !comment.isFromPage;
-      const action = usesModerationDelete ? 'hideComment' : 'deleteComment';
-
-      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-        const adapter = adapters.requireCapability(comment.platform, action);
-        this.ensureCommentActionScopes(comment, action);
-        const accessToken = await this.getFreshAccessToken(comment.socialAccount, adapter);
-
-        try {
-          if (usesModerationDelete) {
-            if (!adapter.hideComment) {
-              throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
-            }
-            await adapter.hideComment(
-              {
-                accessToken,
-                externalAccountId: comment.socialAccount.externalAccountId,
-                externalPageId: comment.socialAccount.externalPageId ?? undefined,
-                correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
-              },
-              comment.externalCommentId,
-              true,
-            );
-          } else {
-            if (!adapter.deleteComment) {
-              throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
-            }
-            await adapter.deleteComment(
-              {
-                accessToken,
-                externalAccountId: comment.socialAccount.externalAccountId,
-                externalPageId: comment.socialAccount.externalPageId ?? undefined,
-                correlationId: auditContext.requestId ?? `comment-delete:${comment.id}`,
-              },
-              comment.externalCommentId,
-            );
-          }
-        } catch (error) {
-          let shouldIgnore = false;
-          if (isPlatformError(error) && error.kind === 'NOT_FOUND') {
-            shouldIgnore = true;
-          } else if (
-            error instanceof Error &&
-            (error.message.includes('does not exist') ||
-              error.message.includes('not found') ||
-              error.message.includes('Unsupported delete request') ||
-              error.message.includes('cannot be loaded'))
-          ) {
-            shouldIgnore = true;
-          }
-
-          if (!shouldIgnore) {
-            throw error;
-          }
-        }
-      });
-
-      await this.prisma.comment.deleteMany({
-        where: {
-          workspaceId,
-          OR: [{ id: comment.id }, { parentId: comment.id }],
-        },
-      });
-    } else {
+    if (!input.deleteFromPlatform) {
       const deletedAt = new Date();
       await this.prisma.comment.updateMany({
         where: {
@@ -418,7 +427,57 @@ export class CommentsService implements OnModuleDestroy {
         },
         data: { deletedAt },
       });
+
+      await this.audit.record({
+        ...auditContext,
+        actorUserId,
+        workspaceId,
+        action: 'COMMENT_DELETED',
+        resourceType: 'Comment',
+        resourceId: comment.id,
+        metadata: { deleteFromPlatform: false },
+      });
+
+      this.events?.publish(workspaceId, {
+        type: 'comments.synced',
+        commentId: comment.id,
+        platformPostId: comment.platformPostId,
+      });
+      this.events?.publish(workspaceId, {
+        type: 'posts.changed',
+        contentPostId: comment.platformPost.contentPostId,
+        platformPostId: comment.platformPostId,
+      });
+
+      return { deleted: true, queued: false };
     }
+
+    const usesModerationDelete = comment.platform === 'YOUTUBE' && !comment.isFromPage;
+    const action = usesModerationDelete ? 'hideComment' : 'deleteComment';
+    await this.ensureOfflineCommentCapability(workspaceId, comment, action);
+
+    const correlationId = auditContext.requestId ?? `comment-delete:${comment.id}:${Date.now()}`;
+    const deletedAt = new Date();
+    const outboxEventId = await this.prisma.$transaction(async (tx) => {
+      await tx.comment.updateMany({
+        where: {
+          workspaceId,
+          deletedAt: null,
+          OR: [{ id: comment.id }, { parentId: comment.id }],
+        },
+        data: { deletedAt },
+      });
+
+      return await this.enqueueModerateCommentTx(tx, {
+        workspaceId,
+        comment,
+        actorUserId,
+        correlationId,
+        action: 'DELETE_COMMENT',
+      });
+    });
+
+    await this.dispatchCommentOutboxEvent(outboxEventId);
 
     await this.audit.record({
       ...auditContext,
@@ -427,10 +486,21 @@ export class CommentsService implements OnModuleDestroy {
       action: 'COMMENT_DELETED',
       resourceType: 'Comment',
       resourceId: comment.id,
-      metadata: { deleteFromPlatform: input.deleteFromPlatform },
+      metadata: { deleteFromPlatform: true, queued: true },
     });
 
-    return { deleted: true };
+    this.events?.publish(workspaceId, {
+      type: 'comments.synced',
+      commentId: comment.id,
+      platformPostId: comment.platformPostId,
+    });
+    this.events?.publish(workspaceId, {
+      type: 'posts.changed',
+      contentPostId: comment.platformPost.contentPostId,
+      platformPostId: comment.platformPostId,
+    });
+
+    return { deleted: true, queued: true };
   }
 
   async addNote(
@@ -448,6 +518,11 @@ export class CommentsService implements OnModuleDestroy {
         body: input.body,
       },
       include: { author: true },
+    });
+    this.events?.publish(workspaceId, {
+      type: 'comments.synced',
+      platformPostId: comment.platformPostId,
+      contentPostId: comment.platformPost.contentPostId,
     });
     return {
       id: note.id,
@@ -495,13 +570,23 @@ export class CommentsService implements OnModuleDestroy {
       throw AppError.conflict('Social account chưa kết nối.');
     }
 
-    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.requireCapability(platformPost.platform, 'createComment');
+    if (typeof this.adapterFactory.offlineAdapters === 'function') {
+      const adapter = this.adapterFactory
+        .offlineAdapters()
+        .requireCapability(platformPost.platform, 'createComment');
       if (!adapter.createComment) {
         throw AppError.capabilityUnsupported(platformPost.platform, 'createComment');
       }
       this.ensureCreateCommentScopes(platformPost);
-    });
+    } else {
+      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+        const adapter = adapters.requireCapability(platformPost.platform, 'createComment');
+        if (!adapter.createComment) {
+          throw AppError.capabilityUnsupported(platformPost.platform, 'createComment');
+        }
+        this.ensureCreateCommentScopes(platformPost);
+      });
+    }
 
     const correlationId =
       auditContext.requestId ?? `comment-create:${platformPost.id}:${Date.now()}`;
@@ -721,13 +806,23 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const comment = await this.findComment(workspaceId, commentId);
-    await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.requireCapability(comment.platform, 'replyToComment');
+    if (typeof this.adapterFactory.offlineAdapters === 'function') {
+      const adapter = this.adapterFactory
+        .offlineAdapters()
+        .requireCapability(comment.platform, 'replyToComment');
       if (!adapter.replyToComment) {
         throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
       }
       this.ensureReplyCommentScopes(comment);
-    });
+    } else {
+      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+        const adapter = adapters.requireCapability(comment.platform, 'replyToComment');
+        if (!adapter.replyToComment) {
+          throw AppError.capabilityUnsupported(comment.platform, 'replyToComment');
+        }
+        this.ensureReplyCommentScopes(comment);
+      });
+    }
 
     const queued = await this.prisma.$transaction(async (tx) => {
       const reply = await tx.commentReply.create({
@@ -809,25 +904,169 @@ export class CommentsService implements OnModuleDestroy {
     };
   }
 
+  private async ensureOfflineCommentCapability(
+    workspaceId: string,
+    comment: Awaited<ReturnType<typeof this.findComment>>,
+    action: 'editComment' | 'deleteComment' | 'hideComment',
+  ): Promise<void> {
+    if (typeof this.adapterFactory.offlineAdapters === 'function') {
+      const adapter = this.adapterFactory
+        .offlineAdapters()
+        .requireCapability(comment.platform, action);
+      if (action === 'editComment' && !adapter.editComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'editComment');
+      }
+      if (action === 'hideComment' && !adapter.hideComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+      }
+      if (action === 'deleteComment' && !adapter.deleteComment) {
+        throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
+      }
+      this.ensureCommentActionScopes(comment, action);
+    } else {
+      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
+        const adapter = adapters.requireCapability(comment.platform, action);
+        if (action === 'editComment' && !adapter.editComment) {
+          throw AppError.capabilityUnsupported(comment.platform, 'editComment');
+        }
+        if (action === 'hideComment' && !adapter.hideComment) {
+          throw AppError.capabilityUnsupported(comment.platform, 'hideComment');
+        }
+        if (action === 'deleteComment' && !adapter.deleteComment) {
+          throw AppError.capabilityUnsupported(comment.platform, 'deleteComment');
+        }
+        this.ensureCommentActionScopes(comment, action);
+      });
+    }
+  }
+
+  private async enqueueModerateCommentTx(
+    tx: Prisma.TransactionClient,
+    input: {
+      workspaceId: string;
+      comment: Awaited<ReturnType<CommentsService['findComment']>>;
+      actorUserId: string;
+      correlationId: string;
+      action: 'EDIT_MESSAGE' | 'SET_VISIBILITY' | 'DELETE_COMMENT';
+      message?: string;
+      previousMessage?: string | null;
+      hidden?: boolean;
+      previousHidden?: boolean;
+    },
+  ): Promise<string> {
+    const latest = await tx.outboundOperation.findFirst({
+      where: {
+        operationType: 'MODERATE_COMMENT',
+        resourceType: 'Comment',
+        resourceId: input.comment.id,
+      },
+      orderBy: { operationGeneration: 'desc' },
+      select: { operationGeneration: true },
+    });
+    const nextGeneration = (latest?.operationGeneration ?? 0) + 1;
+    const operation = await findOrCreateOutboundOperation(tx, {
+      workspaceId: input.workspaceId,
+      operationType: 'MODERATE_COMMENT',
+      resourceType: 'Comment',
+      resourceId: input.comment.id,
+      operationGeneration: nextGeneration,
+    });
+    const payload: QueuePayload<'moderate-platform-comment'> = {
+      commentId: input.comment.id,
+      platformPostId: input.comment.platformPostId,
+      socialAccountId: input.comment.socialAccountId,
+      workspaceId: input.workspaceId,
+      requestedByUserId: input.actorUserId,
+      correlationId: input.correlationId,
+      operationId: operation.id,
+      action: input.action,
+      message: input.message,
+      previousMessage: input.previousMessage,
+      hidden: input.hidden,
+      previousHidden: input.previousHidden,
+    };
+    const jobId = buildJobId('moderate-platform-comment', payload);
+    const opts = buildQueueJobOptions('moderate-platform-comment', jobId);
+    await tx.backgroundJob.upsert({
+      where: { queueName_jobId: { queueName: 'moderate-platform-comment', jobId } },
+      create: {
+        workspaceId: input.workspaceId,
+        queueName: 'moderate-platform-comment',
+        jobId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        correlationId: input.correlationId,
+      },
+      update: {
+        workspaceId: input.workspaceId,
+        status: 'QUEUED',
+        payload: payload as Prisma.InputJsonValue,
+        attempts: 0,
+        maxAttempts: opts.attempts,
+        startedAt: null,
+        finishedAt: null,
+        durationMs: null,
+        errorCode: null,
+        errorMessage: null,
+        isDead: false,
+        correlationId: input.correlationId,
+      },
+    });
+    const outboxEvent = await createQueueOutboxEvent(tx, {
+      workspaceId: input.workspaceId,
+      queueName: 'moderate-platform-comment',
+      jobId,
+      payload,
+      options: opts,
+      aggregateType: 'OutboundOperation',
+      aggregateId: operation.id,
+    });
+    return outboxEvent.id;
+  }
+
   private async dispatchCommentOutboxEvent(outboxEventId: string): Promise<void> {
     const event = await this.prisma.outboxEvent.findUnique({ where: { id: outboxEventId } });
     if (!event) return;
     const value = event.payload as unknown as {
-      queueName: 'create-platform-comment' | 'reply-platform-comment';
-      jobName: 'create-platform-comment' | 'reply-platform-comment';
-      payload: QueuePayload<'create-platform-comment'> | QueuePayload<'reply-platform-comment'>;
+      queueName: 'create-platform-comment' | 'reply-platform-comment' | 'moderate-platform-comment';
+      jobName: 'create-platform-comment' | 'reply-platform-comment' | 'moderate-platform-comment';
+      payload:
+        | QueuePayload<'create-platform-comment'>
+        | QueuePayload<'reply-platform-comment'>
+        | QueuePayload<'moderate-platform-comment'>;
       options: ReturnType<typeof buildQueueJobOptions>;
     };
     const queue =
       value.queueName === 'create-platform-comment'
         ? this.createPlatformCommentQueue
-        : this.replyPlatformCommentQueue;
+        : value.queueName === 'reply-platform-comment'
+          ? this.replyPlatformCommentQueue
+          : this.moderatePlatformCommentQueue;
     try {
       await queue.add(value.jobName, value.payload, value.options);
       await this.prisma.outboxEvent.update({
         where: { id: outboxEventId },
         data: { dispatchedAt: new Date(), lastError: null },
       });
+      const redisClient = this.redis.getClient();
+      if (redisClient && typeof redisClient.publish === 'function') {
+        const realtimeEvent: WorkspaceRealtimeEvent = {
+          id: randomUUID(),
+          workspaceId: value.payload.workspaceId,
+          type: 'job.queued',
+          timestamp: new Date().toISOString(),
+          queueName: value.queueName,
+          jobId: value.options.jobId,
+        };
+        void redisClient
+          .publish(
+            workspaceRealtimeChannel(value.payload.workspaceId),
+            JSON.stringify(realtimeEvent),
+          )
+          .catch(() => undefined);
+      }
     } catch (error) {
       await this.prisma.outboxEvent.update({
         where: { id: outboxEventId },
@@ -963,47 +1202,6 @@ export class CommentsService implements OnModuleDestroy {
     }
   }
 
-  private async getFreshAccessToken(
-    account: {
-      id: string;
-      workspaceId: string;
-      platform: Platform;
-      token: {
-        id: string;
-        accessToken: string;
-        refreshToken: string | null;
-        accessTokenExpiresAt: Date | null;
-        refreshTokenExpiresAt: Date | null;
-      } | null;
-    },
-    adapter: SocialPlatformAdapter,
-  ): Promise<string> {
-    if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
-
-    const refreshThreshold = Date.now() + 2 * 60 * 1000;
-    if (
-      !account.token.accessTokenExpiresAt ||
-      account.token.accessTokenExpiresAt.getTime() > refreshThreshold
-    ) {
-      return decryptToken(account.token.accessToken, this.keyring);
-    }
-
-    if (!account.token.refreshToken) {
-      throw AppError.conflict('Token đã hết hạn. Hãy ngắt kết nối rồi kết nối lại tài khoản.');
-    }
-
-    return await getFreshAccessTokenViaCentralService(
-      {
-        prisma: this.prisma,
-        keyring: this.keyring,
-        adapterFactory: this.adapterFactory,
-        tokenRefreshLock: new RedisTokenRefreshLock(this.redis.getClient()),
-        account,
-      },
-      adapter,
-    );
-  }
-
   async sync(workspaceId: string, input: SyncCommentsInput, requestId: string) {
     const account = await this.prisma.socialAccount.findFirst({
       where: { id: input.socialAccountId, workspaceId, deletedAt: null },
@@ -1029,6 +1227,13 @@ export class CommentsService implements OnModuleDestroy {
       { ...payload, correlationId: requestId },
       buildQueueJobOptions('sync-comments', jobId),
     );
+    this.events?.publish(workspaceId, {
+      type: 'job.queued',
+      queueName: 'sync-comments',
+      jobId,
+      socialAccountId: account.id,
+      platformPostId: input.platformPostId,
+    });
     return { queued: true, jobId };
   }
 
@@ -1072,7 +1277,12 @@ export class CommentsService implements OnModuleDestroy {
 
   private commentInclude() {
     return {
-      socialAccount: { include: { token: true } },
+      socialAccount: {
+        include: {
+          token: true,
+          store: { select: { id: true, name: true, slug: true, color: true } },
+        },
+      },
       platformPost: { include: { contentPost: true } },
       parent: { select: { externalCommentId: true } },
       assignment: { include: { assignedTo: true, assignedBy: true, member: true } },
@@ -1092,6 +1302,13 @@ export class CommentsService implements OnModuleDestroy {
       contentPostTitle: comment.platformPost.contentPost.title,
       socialAccountId: comment.socialAccountId,
       socialAccountName: comment.socialAccount.name,
+      storeId: comment.socialAccount.storeId ?? null,
+      store:
+        (
+          comment.socialAccount as {
+            store?: { id: string; name: string; slug: string; color: string | null } | null;
+          }
+        ).store ?? null,
       externalCommentId: comment.externalCommentId,
       parentId: comment.parentId,
       authorExternalId: comment.authorExternalId,

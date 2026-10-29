@@ -8,10 +8,18 @@ const processWebhookPayloadSchema = z.object({
   webhookEventId: z.string().min(1),
 });
 
+export interface WebhookQueuedJobInfo {
+  workspaceId: string;
+  socialAccountId: string;
+  platformPostId?: string;
+  jobId: string;
+}
+
 export function createProcessWebhookProcessor(input: {
   prisma: PrismaClientInstance;
   adapters: AdapterRegistry;
   syncCommentsQueue: Queue;
+  onJobQueued?: (info: WebhookQueuedJobInfo) => void;
 }) {
   return async (job: {
     data: unknown;
@@ -63,7 +71,12 @@ export function createProcessWebhookProcessor(input: {
 }
 
 async function processWebhook(
-  input: { prisma: PrismaClientInstance; adapters: AdapterRegistry; syncCommentsQueue: Queue },
+  input: {
+    prisma: PrismaClientInstance;
+    adapters: AdapterRegistry;
+    syncCommentsQueue: Queue;
+    onJobQueued?: (info: WebhookQueuedJobInfo) => void;
+  },
   webhookEventId: string,
 ) {
   const webhookEvent = await input.prisma.webhookEvent.findUnique({
@@ -119,8 +132,15 @@ async function processWebhook(
         since: new Date(Math.max(0, event.occurredAt.getTime() - 5 * 60 * 1000)).toISOString(),
       };
 
+      const syncJobId = buildJobId('sync-comments', syncPayload);
       await input.syncCommentsQueue.add('sync-comments', syncPayload, {
-        jobId: buildJobId('sync-comments', syncPayload),
+        jobId: syncJobId,
+      });
+      input.onJobQueued?.({
+        workspaceId: account.workspaceId,
+        socialAccountId: account.id,
+        platformPostId: platformPost?.id,
+        jobId: syncJobId,
       });
       queued += 1;
     }

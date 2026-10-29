@@ -1,4 +1,9 @@
-import type { ApiResponse, NetworkProxyPolicyItem, WorkspaceRole } from '@socialhub/shared';
+import type {
+  ApiResponse,
+  NetworkProxyPolicyItem,
+  Platform,
+  WorkspaceRole,
+} from '@socialhub/shared';
 import type {
   AuditLogItem,
   AnalyticsDashboardView,
@@ -21,6 +26,7 @@ import type {
   ReplyTemplateView,
   SocialAccountView,
   StorageUsageView,
+  StoreView,
   TikTokCreatorInfoView,
   WorkspaceInvitation,
   WorkspaceMember,
@@ -75,6 +81,12 @@ function getApiBaseUrl(): string {
   return url.replace(/\/$/, '');
 }
 
+export function getWorkspaceEventsStreamUrl(workspaceId: string): string {
+  return `${getApiBaseUrl()}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/events/stream`;
+}
+
+export const AUTH_UNAUTHORIZED_EVENT = 'socialhub:unauthorized';
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined && !headers.has('Content-Type')) {
@@ -90,6 +102,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const body = (await response.json()) as ApiResponse<T>;
 
   if (!body.success) {
+    if (response.status === 401 && !path.startsWith('/auth/') && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(AUTH_UNAUTHORIZED_EVENT));
+    }
+
     throw new ApiClientError(
       body.error.code,
       body.error.message,
@@ -127,7 +143,7 @@ export const authApi = {
 };
 
 export const systemApi = {
-  getNetworkStatus: (workspaceId: string) =>
+  getNetworkStatus: (workspaceId: string, options?: { refresh?: boolean }) =>
     apiFetch<{
       ip: string;
       countryCode: string | null;
@@ -149,7 +165,7 @@ export const systemApi = {
       proxyAvailable: boolean;
       proxyActive: boolean;
       countryLockSatisfied: boolean;
-    }>(`/workspaces/${workspaceId}/system/network`),
+    }>(`/workspaces/${workspaceId}/system/network${options?.refresh ? '?refresh=true' : ''}`),
   getProxyPolicy: (workspaceId: string) =>
     apiFetch<{
       generatedAt: string;
@@ -223,13 +239,98 @@ export const workspaceApi = {
     apiFetch<{ items: AuditLogItem[] }>(`/workspaces/${workspaceId}/audit-logs`),
 };
 
-export const socialAccountsApi = {
+export const storesApi = {
   list: (workspaceId: string) =>
-    apiFetch<{ items: SocialAccountView[] }>(`/workspaces/${workspaceId}/social-accounts`),
-  startOAuth: (workspaceId: string, platform: string) =>
-    apiFetch<OAuthStartResult>(
-      `/workspaces/${workspaceId}/social-accounts/oauth/${platform}/authorize`,
+    apiFetch<{ items: StoreView[] }>(`/workspaces/${workspaceId}/stores`),
+  create: (
+    workspaceId: string,
+    input: {
+      name: string;
+      description?: string | null;
+      color?: string | null;
+      isDefault?: boolean;
+      socialAccountIds?: string[];
+    },
+  ) =>
+    apiFetch<StoreView>(`/workspaces/${workspaceId}/stores`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  update: (
+    workspaceId: string,
+    storeId: string,
+    input: {
+      name?: string;
+      description?: string | null;
+      color?: string | null;
+      isDefault?: boolean;
+      socialAccountIds?: string[];
+    },
+  ) =>
+    apiFetch<StoreView>(`/workspaces/${workspaceId}/stores/${storeId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    }),
+  delete: (workspaceId: string, storeId: string) =>
+    apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/stores/${storeId}`, {
+      method: 'DELETE',
+    }),
+  autoGroup: (workspaceId: string) =>
+    apiFetch<{ storesCreated: number; groupedAccounts: number; stores?: StoreView[] }>(
+      `/workspaces/${workspaceId}/stores/auto-group`,
       { method: 'POST' },
+    ),
+};
+
+export const socialAccountsApi = {
+  list: (workspaceId: string, storeId?: string) => {
+    const suffix = storeId ? `?storeId=${encodeURIComponent(storeId)}` : '';
+    return apiFetch<{ items: SocialAccountView[] }>(
+      `/workspaces/${workspaceId}/social-accounts${suffix}`,
+    );
+  },
+  assignStore: (workspaceId: string, socialAccountId: string, storeId: string | null) =>
+    apiFetch<{ id: string; storeId: string | null; store: StoreView | null }>(
+      `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/store`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ storeId }),
+      },
+    ),
+  startOAuth: (workspaceId: string, platform: string, storeId?: string) => {
+    const suffix = storeId ? `?storeId=${encodeURIComponent(storeId)}` : '';
+    return apiFetch<OAuthStartResult>(
+      `/workspaces/${workspaceId}/social-accounts/oauth/${platform}/authorize${suffix}`,
+      { method: 'POST' },
+    );
+  },
+  completeCallbackFromUrl: (workspaceId: string, callbackUrl: string) =>
+    apiFetch<{
+      connected: true;
+      socialAccountId: string;
+      accountName: string;
+      platform: Platform;
+      workspaceId: string;
+    }>(`/workspaces/${workspaceId}/social-accounts/oauth/complete-callback`, {
+      method: 'POST',
+      body: JSON.stringify({ callbackUrl }),
+    }),
+  syncMetaToken: (
+    workspaceId: string,
+    input: {
+      accessToken?: string;
+      platforms?: Array<'FACEBOOK' | 'INSTAGRAM'>;
+      pageIds?: string[];
+      storeId?: string | null;
+      autoCreateStores?: boolean;
+    },
+  ) =>
+    apiFetch<{ syncedCount: number; items: SocialAccountView[] }>(
+      `/workspaces/${workspaceId}/social-accounts/meta/sync-token`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      },
     ),
   disconnect: (workspaceId: string, socialAccountId: string) =>
     apiFetch<{ disconnected: true }>(
@@ -263,6 +364,35 @@ export const socialAccountsApi = {
       `/workspaces/${workspaceId}/social-accounts/${socialAccountId}/sync-posts`,
       { method: 'POST' },
     ),
+  syncPostsByFilter: (
+    workspaceId: string,
+    input: {
+      storeId?: string;
+      platform?: Platform;
+      socialAccountId?: string;
+      socialAccountIds?: string[];
+      cutoffDays?: number;
+      sinceDate?: string;
+      force?: boolean;
+    },
+  ) =>
+    apiFetch<{
+      matchedCount: number;
+      queuedCount: number;
+      skippedCount: number;
+      results: Array<{
+        socialAccountId: string;
+        accountName: string;
+        platform: Platform;
+        queued: boolean;
+        jobId?: string;
+        backgroundJobId?: string;
+        message: string;
+      }>;
+    }>(`/workspaces/${workspaceId}/social-accounts/sync-posts`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 };
 
 export const platformsApi = {
@@ -321,19 +451,31 @@ export const jobsApi = {
 export const analyticsApi = {
   dashboard: (
     workspaceId: string,
-    query?: { from?: string; to?: string; platform?: string; socialAccountId?: string },
+    query?: {
+      from?: string;
+      to?: string;
+      platform?: string;
+      socialAccountId?: string;
+      storeId?: string;
+    },
   ) => {
     const params = new URLSearchParams();
     if (query?.from) params.set('from', query.from);
     if (query?.to) params.set('to', query.to);
     if (query?.platform) params.set('platform', query.platform);
     if (query?.socialAccountId) params.set('socialAccountId', query.socialAccountId);
+    if (query?.storeId) params.set('storeId', query.storeId);
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
     return apiFetch<AnalyticsDashboardView>(`/workspaces/${workspaceId}/analytics${suffix}`);
   },
   sync: (
     workspaceId: string,
-    input?: { platformPostIds?: string[]; platform?: string; socialAccountId?: string },
+    input?: {
+      platformPostIds?: string[];
+      platform?: string;
+      socialAccountId?: string;
+      storeId?: string;
+    },
   ) =>
     apiFetch<{
       queued: number;
@@ -437,9 +579,12 @@ export const mediaApi = {
       body: file,
     }),
   delete: (workspaceId: string, mediaAssetId: string) =>
-    apiFetch<{ deleted: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}`, {
-      method: 'DELETE',
-    }),
+    apiFetch<{ deleted: true; queued?: boolean }>(
+      `/workspaces/${workspaceId}/media/${mediaAssetId}`,
+      {
+        method: 'DELETE',
+      },
+    ),
   archive: (workspaceId: string, mediaAssetId: string) =>
     apiFetch<{ archived: true }>(`/workspaces/${workspaceId}/media/${mediaAssetId}/archive`, {
       method: 'POST',
@@ -453,6 +598,8 @@ export const postsApi = {
       status?: string;
       platform?: string;
       socialAccountId?: string;
+      storeId?: string;
+      mediaType?: 'IMAGE' | 'VIDEO' | 'NONE';
       q?: string;
       dateFrom?: string;
       dateTo?: string;
@@ -466,6 +613,8 @@ export const postsApi = {
     if (query?.status) params.set('status', query.status);
     if (query?.platform) params.set('platform', query.platform);
     if (query?.socialAccountId) params.set('socialAccountId', query.socialAccountId);
+    if (query?.storeId) params.set('storeId', query.storeId);
+    if (query?.mediaType) params.set('mediaType', query.mediaType);
     if (query?.q) params.set('q', query.q);
     if (query?.dateFrom) params.set('dateFrom', query.dateFrom);
     if (query?.dateTo) params.set('dateTo', query.dateTo);
@@ -485,6 +634,7 @@ export const postsApi = {
   create: (
     workspaceId: string,
     input: {
+      storeId?: string | null;
       title?: string;
       body?: string;
       linkUrl?: string;
@@ -525,6 +675,7 @@ export const postsApi = {
     workspaceId: string,
     postId: string,
     input: {
+      storeId?: string | null;
       title?: string;
       body?: string;
       linkUrl?: string;
@@ -559,10 +710,12 @@ export const postsApi = {
     apiFetch<{
       requested: number;
       deleted: number;
+      queued?: number;
       failed: number;
       results: Array<{
         postId: string;
         deleted: boolean;
+        queued?: boolean;
         errorCode?: string;
         errorMessage?: string;
       }>;
@@ -604,6 +757,9 @@ export const commentsApi = {
       status?: string;
       platform?: string;
       socialAccountId?: string;
+      storeId?: string;
+      contentPostId?: string;
+      platformPostId?: string;
       assignedToId?: string;
       tagId?: string;
       q?: string;
@@ -614,6 +770,9 @@ export const commentsApi = {
     if (query?.status) params.set('status', query.status);
     if (query?.platform) params.set('platform', query.platform);
     if (query?.socialAccountId) params.set('socialAccountId', query.socialAccountId);
+    if (query?.storeId) params.set('storeId', query.storeId);
+    if (query?.contentPostId) params.set('contentPostId', query.contentPostId);
+    if (query?.platformPostId) params.set('platformPostId', query.platformPostId);
     if (query?.assignedToId) params.set('assignedToId', query.assignedToId);
     if (query?.tagId) params.set('tagId', query.tagId);
     if (query?.q) params.set('q', query.q);
@@ -653,7 +812,7 @@ export const commentsApi = {
       body: JSON.stringify({ hidden }),
     }),
   delete: (workspaceId: string, commentId: string, deleteFromPlatform = true) =>
-    apiFetch<{ deleted: true }>(
+    apiFetch<{ deleted: boolean; queued?: boolean }>(
       `/workspaces/${workspaceId}/comments/${commentId}?deleteFromPlatform=${String(
         deleteFromPlatform,
       )}`,

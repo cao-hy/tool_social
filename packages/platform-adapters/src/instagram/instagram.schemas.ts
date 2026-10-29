@@ -39,6 +39,17 @@ export const instagramPagesResponseSchema = z.object({
   data: z.array(instagramPageSchema),
 });
 
+export const instagramDirectPageSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  instagram_business_account: z
+    .object({
+      id: z.string(),
+    })
+    .optional(),
+});
+export type InstagramDirectPage = z.infer<typeof instagramDirectPageSchema>;
+
 export const instagramProfileSchema = z.object({
   id: z.string(),
   username: z.string(),

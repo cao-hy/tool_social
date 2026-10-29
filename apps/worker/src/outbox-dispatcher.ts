@@ -98,6 +98,21 @@ export async function dispatchClaimedOutboxEvent(
     const parsed = outboxQueuePayloadSchema.parse(event.payload) as unknown as QueueOutboxPayload;
     const queue = registry.getQueue(parsed.queueName as Parameters<QueueRegistry['getQueue']>[0]);
     await (queue as Queue).add(parsed.jobName, parsed.payload, parsed.options);
+    const payloadObj =
+      typeof parsed.payload === 'object' && parsed.payload !== null
+        ? (parsed.payload as Record<string, unknown>)
+        : null;
+    const workspaceId =
+      typeof payloadObj?.workspaceId === 'string' ? payloadObj.workspaceId : undefined;
+    registry.publishRealtime?.(workspaceId, {
+      type: 'job.queued',
+      queueName: parsed.queueName,
+      jobId: parsed.jobId,
+      platformPostId:
+        typeof payloadObj?.platformPostId === 'string' ? payloadObj.platformPostId : undefined,
+      contentPostId:
+        typeof payloadObj?.contentPostId === 'string' ? payloadObj.contentPostId : undefined,
+    });
     await prisma.outboxEvent.update({
       where: { id: event.id },
       data: {

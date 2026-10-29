@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { InlineError, SecondaryButton } from '@/components/form-controls';
 import { useToast } from '@/components/toast-provider';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
 import { notificationsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -24,9 +25,9 @@ export default function NotificationsPage() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadNotifications() {
+  async function loadNotifications(options?: { silent?: boolean }) {
     if (!workspace) return;
-    setLoading(true);
+    if (!options?.silent) setLoading(true);
     setError(null);
     try {
       const result = await notificationsApi.list(workspace.id, { unreadOnly, limit: 100 });
@@ -34,13 +35,23 @@ export default function NotificationsPage() {
     } catch (loadError) {
       setError(getErrorMessage(loadError));
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     void loadNotifications();
   }, [workspace, unreadOnly]);
+
+  useWorkspaceEventSubscription((event) => {
+    if (
+      event.type === 'notification.created' ||
+      event.type === 'notifications.changed' ||
+      event.type === 'stream.reconnected'
+    ) {
+      void loadNotifications({ silent: true });
+    }
+  });
 
   async function markRead(notificationId: string) {
     if (!workspace) return;

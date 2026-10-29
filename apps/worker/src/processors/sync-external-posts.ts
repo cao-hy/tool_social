@@ -69,6 +69,14 @@ export function createSyncExternalPostsProcessor(input: {
         },
       });
       await finishBackgroundJob(input.prisma, jobName, jobId, startedAt, 'COMPLETED');
+      await input.prisma.backgroundJob.deleteMany({
+        where: {
+          workspaceId: payload.workspaceId,
+          queueName: 'sync-external-posts',
+          status: { in: ['FAILED', 'DEAD'] },
+          jobId: { startsWith: `sync-external-posts-${payload.socialAccountId}-` },
+        },
+      });
 
       return result;
     } catch (error) {
@@ -144,7 +152,8 @@ async function syncPostsLoop(
     const ctx = {
       accessToken,
       externalAccountId: account.externalAccountId,
-      externalPageId: account.externalPageId ?? undefined,
+      externalPageId:
+        account.platform === 'PINTEREST' ? undefined : (account.externalPageId ?? undefined),
       correlationId: syncJob.id,
     };
 
@@ -218,7 +227,7 @@ async function syncPostsLoop(
 
 async function importPost(
   prisma: PrismaClientInstance,
-  account: { id: string; workspaceId: string; platform: Platform },
+  account: { id: string; workspaceId: string; platform: Platform; storeId?: string | null },
   createdByUserId: string,
   post: ExternalPost,
 ): Promise<'created' | 'updated'> {
@@ -233,17 +242,28 @@ async function importPost(
     },
   });
 
+  const isScheduled = Boolean(post.scheduledAt);
+  const contentStatus = isScheduled ? 'SCHEDULED' : 'PUBLISHED';
+  const platformStatus = isScheduled ? 'PENDING' : 'PUBLISHED';
+  const publishedAt = isScheduled ? null : post.publishedAt;
+  const scheduledAt = post.scheduledAt ?? null;
+  const sortTimestamp = post.scheduledAt ?? post.publishedAt;
+
   if (existing) {
     await prisma.$transaction(async (tx) => {
       await tx.contentPost.update({
         where: { id: existing.contentPostId },
         data: {
+          ...(account.storeId ? { storeId: account.storeId } : {}),
+          status: contentStatus,
           title: post.title,
           body: post.caption ?? post.description ?? '',
           externalSyncedAt: new Date(),
           externalPermalink: post.permalink,
           externalAuthor: externalAuthorJson(post),
-          publishedAt: post.publishedAt,
+          scheduledAt,
+          publishedAt,
+          createdAt: sortTimestamp,
         },
       });
       await tx.platformPost.update({
@@ -255,8 +275,8 @@ async function importPost(
           externalCreatedAt: post.publishedAt,
           externalUpdatedAt: post.updatedAt,
           externalRaw: post.raw as Prisma.InputJsonValue,
-          publishedAt: post.publishedAt,
-          status: 'PUBLISHED',
+          publishedAt,
+          status: platformStatus,
         },
       });
     });
@@ -267,15 +287,18 @@ async function importPost(
     const contentPost = await tx.contentPost.create({
       data: {
         workspaceId: account.workspaceId,
+        storeId: account.storeId ?? null,
         createdById: createdByUserId,
-        status: 'PUBLISHED',
+        status: contentStatus,
         title: post.title,
         body: post.caption ?? post.description ?? '',
         sourceType: 'EXTERNAL',
         externalSyncedAt: new Date(),
         externalPermalink: post.permalink,
         externalAuthor: externalAuthorJson(post),
-        publishedAt: post.publishedAt,
+        scheduledAt,
+        publishedAt,
+        createdAt: sortTimestamp,
       },
     });
 
@@ -285,7 +308,7 @@ async function importPost(
         contentPostId: contentPost.id,
         socialAccountId: account.id,
         platform: account.platform,
-        status: 'PUBLISHED',
+        status: platformStatus,
         title: post.title,
         caption: post.caption ?? post.description,
         externalPostId: post.externalPostId,
@@ -294,7 +317,7 @@ async function importPost(
         externalUpdatedAt: post.updatedAt,
         externalRaw: post.raw as Prisma.InputJsonValue,
         syncSource: 'API',
-        publishedAt: post.publishedAt,
+        publishedAt,
       },
     });
   });

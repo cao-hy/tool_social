@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { notificationsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
-import { notificationToastMessage } from '@/lib/notification-format';
+import { notificationBodyText, notificationToastMessage } from '@/lib/notification-format';
 import type { NotificationView } from '@/lib/types';
 import { useToast } from './toast-provider';
+import { useWorkspaceEventSubscription } from './workspace-events-provider';
 
-const POLL_INTERVAL_MS = 5_000;
+const FALLBACK_POLL_INTERVAL_MS = 5_000;
+const SSE_POLL_INTERVAL_MS = 30_000;
 const INITIAL_TOAST_WINDOW_MS = 2 * 60_000;
 const MAX_INITIAL_TOASTS = 3;
 const notifiedNotificationIds = new Set<string>();
@@ -18,59 +20,72 @@ export function NotificationToasts() {
   const knownIdsRef = useRef<Set<string>>(new Set());
   const initializedWorkspaceRef = useRef<string | null>(null);
 
-  useEffect(() => {
+  const poll = useCallback(async () => {
     if (!activeWorkspace) return;
 
-    let cancelled = false;
+    try {
+      const result = await notificationsApi.list(activeWorkspace.id, {
+        unreadOnly: true,
+        limit: 20,
+      });
 
-    async function poll() {
-      if (!activeWorkspace || cancelled) return;
-
-      try {
-        const result = await notificationsApi.list(activeWorkspace.id, {
-          unreadOnly: true,
-          limit: 20,
-        });
-
-        if (cancelled) return;
-
-        if (initializedWorkspaceRef.current !== activeWorkspace.id) {
-          initializedWorkspaceRef.current = activeWorkspace.id;
-          knownIdsRef.current = new Set(result.items.map((item) => item.id));
-          result.items
-            .filter(shouldToastOnInitialPoll)
-            .sort(
-              (left, right) =>
-                new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
-            )
-            .slice(-MAX_INITIAL_TOASTS)
-            .forEach((item) => pushNotificationToast(item, toast));
-          return;
-        }
-
-        const fresh = result.items
-          .filter((item) => !knownIdsRef.current.has(item.id))
+      if (initializedWorkspaceRef.current !== activeWorkspace.id) {
+        initializedWorkspaceRef.current = activeWorkspace.id;
+        knownIdsRef.current = new Set(result.items.map((item) => item.id));
+        result.items
+          .filter(shouldToastOnInitialPoll)
           .sort(
             (left, right) =>
               new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
-          );
-
-        for (const item of fresh) {
-          knownIdsRef.current.add(item.id);
-          pushNotificationToast(item, toast);
-        }
-      } catch {
-        // Poll notification không được làm hỏng trải nghiệm chính nếu API tạm lỗi.
+          )
+          .slice(-MAX_INITIAL_TOASTS)
+          .forEach((item) => pushNotificationToast(item, toast));
+        return;
       }
+
+      const fresh = result.items
+        .filter((item) => !knownIdsRef.current.has(item.id))
+        .sort(
+          (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
+        );
+
+      for (const item of fresh) {
+        knownIdsRef.current.add(item.id);
+        pushNotificationToast(item, toast);
+      }
+    } catch {
+      // Poll notification không được làm hỏng trải nghiệm chính nếu API tạm lỗi.
     }
+  }, [activeWorkspace, toast]);
+
+  const { connected: sseConnected } = useWorkspaceEventSubscription((event) => {
+    if (
+      event.type === 'notification.created' ||
+      event.type === 'posts.changed' ||
+      event.type === 'job.failed' ||
+      event.type === 'stream.reconnected'
+    ) {
+      void poll();
+    }
+    if (event.type === 'comment.create_failed' && event.errorMessage) {
+      toast.error(`Gửi bình luận thất bại: ${event.errorMessage}`);
+    } else if (event.type === 'comment.reply_failed' && event.errorMessage) {
+      toast.error(`Phản hồi bình luận thất bại: ${event.errorMessage}`);
+    } else if (event.type === 'comment.moderation_failed' && event.errorMessage) {
+      toast.error(`Thao tác bình luận thất bại: ${event.errorMessage}`);
+    }
+  });
+
+  useEffect(() => {
+    if (!activeWorkspace) return;
 
     void poll();
-    const interval = window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+    const intervalMs = sseConnected ? SSE_POLL_INTERVAL_MS : FALLBACK_POLL_INTERVAL_MS;
+    const interval = window.setInterval(() => void poll(), intervalMs);
     return () => {
-      cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activeWorkspace, toast]);
+  }, [activeWorkspace, poll, sseConnected]);
 
   return null;
 }
@@ -91,11 +106,17 @@ function pushNotificationToast(item: NotificationView, toast: ReturnType<typeof 
   if (notifiedNotificationIds.has(item.id) || !isToastWorthShowing(item)) return;
   notifiedNotificationIds.add(item.id);
 
-  const message = notificationToastMessage(item);
   if (item.type === 'POST_FAILED') {
-    toast.error(message, 'Publish thất bại');
+    const customFailureTitle =
+      item.title === 'Cập nhật bài đã đăng thất bại' ||
+      item.title === 'Xóa bài trên mạng xã hội thất bại';
+    if (customFailureTitle) {
+      toast.error(notificationBodyText(item) ?? item.title, item.title);
+      return;
+    }
+    toast.error(notificationToastMessage(item), 'Publish thất bại');
     return;
   }
 
-  toast.success(message, 'Publish thành công');
+  toast.success(notificationToastMessage(item), 'Publish thành công');
 }

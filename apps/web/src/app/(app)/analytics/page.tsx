@@ -1,13 +1,20 @@
 'use client';
 
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CloudDownload, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { analyticsApi, jobsApi, socialAccountsApi } from '@/lib/api-client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { analyticsApi, jobsApi, socialAccountsApi, storesApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 
-import type { AnalyticsDashboardView, BackgroundJobView, SocialAccountView } from '@/lib/types';
+import type { BackgroundJobView } from '@/lib/types';
+import {
+  SHARED_META_STALE_TIME,
+  workspaceQueryKeys,
+  type AnalyticsCacheParams,
+} from '@/lib/workspace-queries';
 import { useToast } from '@/components/toast-provider';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
 import { DataQualityTab } from './tabs/data-quality-tab';
 import { OverviewTab } from './tabs/overview-tab';
 import { ContentTab } from './tabs/content-tab';
@@ -18,56 +25,112 @@ const TERMINAL_JOB_STATUSES = new Set<BackgroundJobView['status']>(['COMPLETED',
 
 export default function AnalyticsPage() {
   const { activeWorkspace } = useAuth();
+  const queryClient = useQueryClient();
   const toast = useToast();
-  const [dashboard, setDashboard] = useState<AnalyticsDashboardView | null>(null);
-  const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
   const [filters, setFilters] = useState<{
     from: string;
     to: string;
+    store: string;
     platform: string;
     account: string;
   }>({
     from: '',
     to: '',
+    store: '',
     platform: '',
     account: '',
   });
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [externalSyncing, setExternalSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null);
   const [externalSyncProgress, setExternalSyncProgress] =
     useState<ExternalSyncProgressState | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [currentTab, setCurrentTab] = useState('overview');
+  const reloadTimerRef = useRef<number | null>(null);
+  const [realtimeTick, setRealtimeTick] = useState(0);
 
-  const load = useCallback(async () => {
-    if (!activeWorkspace) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const [analytics, accountResult] = await Promise.all([
-        analyticsApi.dashboard(activeWorkspace.id, {
-          from: filters.from || undefined,
-          to: filters.to || undefined,
-          platform: filters.platform || undefined,
-          socialAccountId: filters.account || undefined,
-        }),
-        socialAccountsApi.list(activeWorkspace.id),
-      ]);
-      setDashboard(analytics);
-      setAccounts(accountResult.items);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError));
-    } finally {
-      setLoading(false);
-      // Reset page on load
+  const analyticsParams = useMemo<AnalyticsCacheParams>(
+    () => ({
+      from: filters.from || undefined,
+      to: filters.to || undefined,
+      storeId: filters.store || undefined,
+      platform: filters.platform || undefined,
+      socialAccountId: filters.account || undefined,
+    }),
+    [filters.account, filters.from, filters.platform, filters.store, filters.to],
+  );
+
+  const workspaceId = activeWorkspace?.id ?? '';
+
+  const dashboardQuery = useQuery({
+    queryKey: workspaceQueryKeys.analyticsDashboard(workspaceId, analyticsParams),
+    queryFn: () => analyticsApi.dashboard(workspaceId, analyticsParams),
+    enabled: Boolean(workspaceId),
+    placeholderData: keepPreviousData,
+  });
+
+  const accountsQuery = useQuery({
+    queryKey: workspaceQueryKeys.socialAccounts(workspaceId),
+    queryFn: () => socialAccountsApi.list(workspaceId),
+    enabled: Boolean(workspaceId),
+    staleTime: SHARED_META_STALE_TIME,
+  });
+
+  const storesQuery = useQuery({
+    queryKey: workspaceQueryKeys.stores(workspaceId),
+    queryFn: () => storesApi.list(workspaceId),
+    enabled: Boolean(workspaceId),
+    staleTime: SHARED_META_STALE_TIME,
+  });
+
+  const dashboard = dashboardQuery.data ?? null;
+  const accounts = useMemo(() => accountsQuery.data?.items ?? [], [accountsQuery.data]);
+  const stores = useMemo(() => storesQuery.data?.items ?? [], [storesQuery.data]);
+  const loading = dashboardQuery.isPending;
+  const error = dashboardQuery.error
+    ? getErrorMessage(dashboardQuery.error)
+    : accountsQuery.error
+      ? getErrorMessage(accountsQuery.error)
+      : storesQuery.error
+        ? getErrorMessage(storesQuery.error)
+        : null;
+
+  const load = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!activeWorkspace) return;
+      if (options?.silent) {
+        await queryClient.invalidateQueries({
+          queryKey: workspaceQueryKeys.analyticsRoot(activeWorkspace.id),
+        });
+        return;
+      }
+      await Promise.all([dashboardQuery.refetch(), accountsQuery.refetch(), storesQuery.refetch()]);
+    },
+    [accountsQuery, activeWorkspace, dashboardQuery, queryClient, storesQuery],
+  );
+
+  const { connected: sseConnected } = useWorkspaceEventSubscription((event) => {
+    if (
+      event.type === 'job.active' ||
+      event.type === 'job.completed' ||
+      event.type === 'job.failed'
+    ) {
+      setRealtimeTick((n) => n + 1);
     }
-  }, [activeWorkspace, filters.account, filters.from, filters.platform, filters.to]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+    if (
+      event.type === 'metrics.synced' ||
+      event.type === 'accounts.changed' ||
+      event.type === 'stream.reconnected'
+    ) {
+      if (reloadTimerRef.current !== null) {
+        window.clearTimeout(reloadTimerRef.current);
+      }
+      reloadTimerRef.current = window.setTimeout(() => {
+        reloadTimerRef.current = null;
+        void load({ silent: true });
+      }, 600);
+    }
+  });
 
   const syncJobKey = useMemo(() => syncProgress?.jobIds.join('|') ?? '', [syncProgress?.jobIds]);
   const externalSyncJobKey = useMemo(
@@ -122,12 +185,21 @@ export default function AnalyticsPage() {
     }
 
     void poll();
-    const interval = setInterval(() => void poll(), 2500);
+    const interval = setInterval(() => void poll(), sseConnected ? 15000 : 2500);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [activeWorkspace, load, syncJobKey, syncProgress?.active, syncProgress?.total, toast]);
+  }, [
+    activeWorkspace,
+    load,
+    realtimeTick,
+    sseConnected,
+    syncJobKey,
+    syncProgress?.active,
+    syncProgress?.total,
+    toast,
+  ]);
 
   useEffect(() => {
     if (
@@ -185,7 +257,7 @@ export default function AnalyticsPage() {
     }
 
     void poll();
-    const interval = setInterval(() => void poll(), 2500);
+    const interval = setInterval(() => void poll(), sseConnected ? 15000 : 2500);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -196,6 +268,8 @@ export default function AnalyticsPage() {
     externalSyncProgress?.active,
     externalSyncProgress?.total,
     load,
+    realtimeTick,
+    sseConnected,
     toast,
   ]);
 
@@ -209,10 +283,14 @@ export default function AnalyticsPage() {
       accounts.filter(
         (account) =>
           account.status === 'CONNECTED' &&
+          (!filters.store ||
+            (filters.store === 'UNASSIGNED'
+              ? !account.storeId
+              : account.storeId === filters.store)) &&
           (!filters.platform || account.platform === filters.platform) &&
           (!filters.account || account.id === filters.account),
       ),
-    [accounts, filters.account, filters.platform],
+    [accounts, filters.account, filters.platform, filters.store],
   );
 
   async function syncMetrics() {
@@ -220,6 +298,7 @@ export default function AnalyticsPage() {
     setSyncing(true);
     try {
       const result = await analyticsApi.sync(activeWorkspace.id, {
+        storeId: filters.store || undefined,
         platform: filters.platform || undefined,
         socialAccountId: filters.account || undefined,
       });
@@ -338,7 +417,7 @@ export default function AnalyticsPage() {
         </div>
       </header>
 
-      <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-4">
+      <section className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-5">
         <FilterInput
           label="Từ ngày"
           type="date"
@@ -351,6 +430,24 @@ export default function AnalyticsPage() {
           value={filters.to}
           onChange={(to) => setFilters((current) => ({ ...current, to }))}
         />
+        <label className="grid gap-2 text-sm font-semibold text-slate-700">
+          Store / Brand
+          <select
+            className="h-11 rounded-lg border border-slate-300 px-3 font-normal text-slate-950"
+            value={filters.store}
+            onChange={(event) => {
+              setFilters((current) => ({ ...current, store: event.target.value, account: '' }));
+            }}
+          >
+            <option value="">Tất cả Stores</option>
+            {stores.map((store) => (
+              <option key={store.id} value={store.id}>
+                {store.name}
+              </option>
+            ))}
+            <option value="UNASSIGNED">Chưa gán Store</option>
+          </select>
+        </label>
         <label className="grid gap-2 text-sm font-semibold text-slate-700">
           Nền tảng
           <select
@@ -379,7 +476,14 @@ export default function AnalyticsPage() {
           >
             <option value="">Tất cả</option>
             {accounts
-              .filter((account) => !filters.platform || account.platform === filters.platform)
+              .filter(
+                (account) =>
+                  (!filters.store ||
+                    (filters.store === 'UNASSIGNED'
+                      ? !account.storeId
+                      : account.storeId === filters.store)) &&
+                  (!filters.platform || account.platform === filters.platform),
+              )
               .map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.platform} · {account.name}

@@ -276,6 +276,23 @@ async function publishPlatformPost(
       return { published: false, reason: 'not_found' };
     }
 
+    const initialState = jsonObject(platformPost.platformState);
+    const initialPendingDelete = jsonObject(
+      (initialState?.pendingDelete as Prisma.JsonValue | undefined) ?? null,
+    );
+    if (
+      platformPost.status === 'DELETED' ||
+      Boolean(platformPost.contentPost?.deletedAt) ||
+      initialPendingDelete?.state === 'QUEUED' ||
+      initialPendingDelete?.state === 'PROCESSING'
+    ) {
+      logger.info(
+        { platformPostId: platformPost.id, status: platformPost.status },
+        'Bỏ qua publish vì bài đã bị xóa hoặc đang chờ xóa',
+      );
+      return { published: false, reason: 'deleted' };
+    }
+
     if (platformPost.externalPostId || platformPost.status === 'PUBLISHED') {
       return { published: false, reason: 'already_published' };
     }
@@ -389,6 +406,12 @@ async function publishPlatformPost(
       ) {
         const message =
           'Social account này được tạo bằng development fixture. Hãy disconnect và kết nối lại bằng OAuth thật trước khi publish.';
+        if (operationOwnership) {
+          await markPreTargetFailed(input.prisma, operationOwnership, {
+            code: 'ACCOUNT_RECONNECT_REQUIRED',
+            message,
+          });
+        }
         await markFailed(input.prisma, platformPost.id, 'ACCOUNT_RECONNECT_REQUIRED', message);
         await input.prisma.socialAccount.update({
           where: { id: platformPost.socialAccountId },
@@ -398,7 +421,7 @@ async function publishPlatformPost(
         return { published: false, reason: 'fixture_account_with_real_adapter' };
       }
 
-      let publishNetworkProof = buildPublishNetworkProof({
+      const publishNetworkProof = buildPublishNetworkProof({
         egressPolicy: adaptersContext.proxy?.egressPolicy ?? null,
         proxyEnabled: adaptersContext.proxy?.config.enabled ?? null,
         proxyActive: adaptersContext.proxy ? Boolean(adaptersContext.proxy.attestation) : null,
@@ -534,25 +557,6 @@ async function publishPlatformPost(
           },
         } satisfies AdapterContext;
 
-        const currentAccount = await input.prisma.socialAccount.findUnique({
-          where: { id: platformPost.socialAccountId },
-          select: { status: true, disconnectGeneration: true },
-        });
-        if (
-          !currentAccount ||
-          currentAccount.status !== 'CONNECTED' ||
-          currentAccount.disconnectGeneration !== platformPost.socialAccount.disconnectGeneration
-        ) {
-          await markFailed(
-            input.prisma,
-            platformPost.id,
-            'ACCOUNT_DISCONNECTED',
-            'Social account disconnected during preparation.',
-          );
-          await updateParentStatus(input.prisma, platformPost.contentPostId);
-          return { published: false, reason: 'account_disconnected' };
-        }
-
         const accountStillEligible = await input.prisma.socialAccount.findUnique({
           where: { id: platformPost.socialAccountId },
           select: { status: true, disconnectGeneration: true },
@@ -585,21 +589,6 @@ async function publishPlatformPost(
             publishAttemptStartedAt: new Date(),
             publishFence: { increment: 1 },
           },
-        });
-
-        publishNetworkProof = buildPublishNetworkProof({
-          egressPolicy: adaptersContext.proxy?.egressPolicy ?? null,
-          proxyEnabled: adaptersContext.proxy?.config.enabled ?? null,
-          proxyActive: adaptersContext.proxy ? Boolean(adaptersContext.proxy.attestation) : null,
-          configVersion: adaptersContext.proxy?.configVersion ?? null,
-          proxyFingerprint: adaptersContext.proxy?.routeFingerprint ?? null,
-          countryLock: adaptersContext.proxy?.config.countryLock ?? null,
-          countryLockSatisfied: adaptersContext.proxy?.config.countryLock
-            ? adaptersContext.proxy.attestation?.countryCode ===
-              adaptersContext.proxy.config.countryLock
-            : null,
-          attestation: adaptersContext.proxy?.attestation ?? null,
-          checkOk: adaptersContext.proxy?.attestation ? true : null,
         });
 
         const remotePublishStartedAt = Date.now();
@@ -647,6 +636,68 @@ async function publishPlatformPost(
           },
         });
         remoteConfirmationPersisted = true;
+
+        const postUploadCheck =
+          typeof input.prisma.platformPost.findUnique === 'function'
+            ? await input.prisma.platformPost.findUnique({
+                where: { id: platformPost.id },
+                select: {
+                  status: true,
+                  platformState: true,
+                  contentPost: { select: { deletedAt: true } },
+                },
+              })
+            : undefined;
+        const postUploadState = jsonObject(postUploadCheck?.platformState);
+        const postUploadPendingDelete = jsonObject(
+          (postUploadState?.pendingDelete as Prisma.JsonValue | undefined) ?? null,
+        );
+        if (
+          postUploadCheck === null ||
+          postUploadCheck?.status === 'DELETED' ||
+          Boolean(postUploadCheck?.contentPost?.deletedAt) ||
+          postUploadPendingDelete?.state === 'QUEUED' ||
+          postUploadPendingDelete?.state === 'PROCESSING'
+        ) {
+          logger.warn(
+            {
+              platformPostId: platformPost.id,
+              externalPostId: result.externalPostId,
+            },
+            'Phát hiện yêu cầu xóa bài trong lúc đang publish — tiến hành thu hồi bài vừa đăng',
+          );
+          if ('deletePost' in adapter && typeof adapter.deletePost === 'function') {
+            await adapter
+              .deletePost(adapterContext, result.externalPostId)
+              .catch((deleteErr: unknown) => {
+                logger.warn(
+                  {
+                    err: deleteErr,
+                    platformPostId: platformPost.id,
+                    externalPostId: result.externalPostId,
+                  },
+                  'Không thể thu hồi ngay bài vừa đăng sau khi user bấm xóa giữa chừng',
+                );
+              });
+          }
+          if (postUploadCheck) {
+            await input.prisma.$transaction(async (tx) => {
+              await tx.platformPost.update({
+                where: { id: platformPost.id },
+                data: {
+                  status: 'DELETED',
+                  externalPostId: null,
+                  errorCode: null,
+                  errorMessage: null,
+                },
+              });
+              await markLocalCommittedInTransaction(tx, operationOwnership);
+            });
+            await updateParentStatus(input.prisma, platformPost.contentPostId);
+          }
+          return { published: false, reason: 'deleted_during_publish' };
+        }
+
         const postPublishFollowupStartedAt = Date.now();
         const platformState = await platformStateAfterPublish(
           adapter,

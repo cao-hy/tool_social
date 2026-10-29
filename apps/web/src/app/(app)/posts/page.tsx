@@ -1,23 +1,30 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { hasPermission, PLATFORM_LABELS, type Platform } from '@socialhub/shared';
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
+  CloudDownload,
   Copy,
   Download,
   Eye,
-  Filter,
+  MessageSquare,
+  MessageSquarePlus,
   Pencil,
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Field,
   InlineError,
@@ -26,14 +33,21 @@ import {
   SelectInput,
   TextInput,
 } from '@/components/form-controls';
-import { DeletePostDialog } from '@/components/delete-post-dialog';
 import {
+  BulkPostCommentModal,
+  isCreateCommentSupportedPlatform,
+} from '@/components/bulk-post-comment-modal';
+import { DeletePostDialog } from '@/components/delete-post-dialog';
+import { PostCommentsDrawer } from '@/components/post-comments-drawer';
+import {
+  extractYouTubeEmbedUrl,
   FallbackImage,
   mediaPreviewSources,
   mediaThumbnailSources,
 } from '@/components/media-preview';
 import { useToast } from '@/components/toast-provider';
-import { platformsApi, postsApi, socialAccountsApi } from '@/lib/api-client';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
+import { platformsApi, postsApi, socialAccountsApi, storesApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { rowsToCsv } from '@/lib/csv';
 import { getErrorMessage } from '@/lib/errors';
@@ -47,7 +61,14 @@ import type {
   DeletePostResult,
   PlatformCapabilitiesView,
   SocialAccountView,
+  StoreView,
 } from '@/lib/types';
+import {
+  CAPABILITIES_STALE_TIME,
+  SHARED_META_STALE_TIME,
+  workspaceQueryKeys,
+  type PostsListCacheParams,
+} from '@/lib/workspace-queries';
 
 const POST_STATUSES = [
   'DRAFT',
@@ -71,7 +92,14 @@ const DELETABLE_POST_STATUSES = [
   'CANCELLED',
 ] as const;
 
-type BulkDeleteProgressStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'ERROR';
+type BulkDeleteProgressStatus = 'PENDING' | 'RUNNING' | 'QUEUED' | 'DONE' | 'ERROR';
+type PostMediaFilter = '' | 'VIDEO' | 'IMAGE' | 'NONE';
+
+const MEDIA_FILTER_LABELS: Record<Exclude<PostMediaFilter, ''>, string> = {
+  VIDEO: 'Video',
+  IMAGE: 'Hình ảnh',
+  NONE: 'Không có media',
+};
 
 interface BulkDeleteProgressItem {
   postId: string;
@@ -80,19 +108,93 @@ interface BulkDeleteProgressItem {
   errorMessage?: string;
 }
 
+interface PostsListCachedData {
+  items: ContentPostView[];
+  statusCounts: Record<string, number>;
+  nextCursor: string | null;
+}
+
+const INITIAL_POSTS_CACHE_PARAMS: PostsListCacheParams = {
+  sortBy: 'createdAt',
+  direction: 'desc',
+  limit: DEFAULT_PAGE_SIZE,
+  cursor: undefined,
+};
+
+function getStickyStoreKey(workspaceId: string): string {
+  return `socialhub:posts:selected-store:${workspaceId}`;
+}
+
+function readStickyStoreId(workspaceId?: string): string {
+  if (!workspaceId || typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(getStickyStoreKey(workspaceId)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeStickyStoreId(workspaceId: string | undefined, nextStoreId: string): void {
+  if (!workspaceId || typeof window === 'undefined') return;
+  try {
+    if (nextStoreId) {
+      window.localStorage.setItem(getStickyStoreKey(workspaceId), nextStoreId);
+    } else {
+      window.localStorage.removeItem(getStickyStoreKey(workspaceId));
+    }
+  } catch {
+    // ignore storage quota / privacy mode errors
+  }
+}
+
 export default function PostsPage() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const toast = useToast();
   const workspace = auth.activeWorkspace;
-  const [posts, setPosts] = useState<ContentPostView[]>([]);
-  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
-  const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
+  const initialStickyStoreId = readStickyStoreId(workspace?.id);
+  const initialPostsCache = workspace
+    ? queryClient.getQueryData<PostsListCachedData>(
+        workspaceQueryKeys.postsList(workspace.id, {
+          ...INITIAL_POSTS_CACHE_PARAMS,
+          storeId: initialStickyStoreId || undefined,
+        }),
+      )
+    : undefined;
+  const [posts, setPosts] = useState<ContentPostView[]>(() => initialPostsCache?.items ?? []);
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>(
+    () => initialPostsCache?.statusCounts ?? {},
+  );
+  const [accounts, setAccounts] = useState<SocialAccountView[]>(
+    () =>
+      (workspace
+        ? queryClient.getQueryData<{ items: SocialAccountView[] }>(
+            workspaceQueryKeys.socialAccounts(workspace.id),
+          )?.items
+        : undefined) ?? [],
+  );
+  const [stores, setStores] = useState<StoreView[]>(
+    () =>
+      (workspace
+        ? queryClient.getQueryData<{ items: StoreView[] }>(workspaceQueryKeys.stores(workspace.id))
+            ?.items
+        : undefined) ?? [],
+  );
   const [capabilityByPlatform, setCapabilityByPlatform] = useState<
     Partial<Record<Platform, PlatformCapabilitiesView>>
-  >({});
+  >(() => {
+    const cached = queryClient.getQueryData<{ platforms: PlatformCapabilitiesView[] }>(
+      workspaceQueryKeys.capabilities(),
+    );
+    if (!cached) return {};
+    return Object.fromEntries(cached.platforms.map((item) => [item.platform, item])) as Partial<
+      Record<Platform, PlatformCapabilitiesView>
+    >;
+  });
   const [status, setStatus] = useState('');
+  const [storeId, setStoreId] = useState(() => initialStickyStoreId);
   const [platform, setPlatform] = useState('');
-  const [socialAccountId, setSocialAccountId] = useState('');
+  const [mediaType, setMediaType] = useState<PostMediaFilter>('');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [dateFrom, setDateFrom] = useState('');
@@ -102,7 +204,9 @@ export default function PostsPage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(
+    () => initialPostsCache?.nextCursor ?? null,
+  );
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -116,11 +220,24 @@ export default function PostsPage() {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncFilterStoreId, setSyncFilterStoreId] = useState('');
+  const [syncFilterPlatform, setSyncFilterPlatform] = useState('');
+  const [syncCutoffDays, setSyncCutoffDays] = useState<number>(30);
+  const [syncSelectedAccountIds, setSyncSelectedAccountIds] = useState<string[]>([]);
+  const [syncingExternalPosts, setSyncingExternalPosts] = useState(false);
+
+  const [commentModalPosts, setCommentModalPosts] = useState<ContentPostView[]>([]);
+  const [commentModalExplicitSelection, setCommentModalExplicitSelection] = useState(false);
+  const [loadingCommentModal, setLoadingCommentModal] = useState(false);
+  const [activeCommentsPost, setActiveCommentsPost] = useState<ContentPostView | null>(null);
+
   const activeFilters = useMemo(
     () => ({
       status: status || undefined,
+      storeId: storeId || undefined,
       platform: platform || undefined,
-      socialAccountId: socialAccountId || undefined,
+      mediaType: mediaType || undefined,
       q: debouncedQuery.trim() || undefined,
       dateFrom: dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined,
       dateTo: dateTo ? new Date(`${dateTo}T23:59:59.999`).toISOString() : undefined,
@@ -133,11 +250,12 @@ export default function PostsPage() {
       dateTo,
       debouncedQuery,
       direction,
+      mediaType,
       pageSize,
       platform,
-      socialAccountId,
       sortBy,
       status,
+      storeId,
     ],
   );
   const selectedPosts = useMemo(
@@ -153,27 +271,142 @@ export default function PostsPage() {
     [selectedPosts],
   );
 
-  async function loadPosts(cursor?: string) {
+  const realtimeReloadTimerRef = useRef<number | null>(null);
+  const lastWorkspaceIdRef = useRef<string | undefined>(workspace?.id);
+
+  function selectStoreId(nextStoreId: string) {
+    setStoreId(nextStoreId);
+    writeStickyStoreId(workspace?.id, nextStoreId);
+  }
+
+  useEffect(() => {
+    if (lastWorkspaceIdRef.current === workspace?.id) return;
+    lastWorkspaceIdRef.current = workspace?.id;
+    setStoreId(readStickyStoreId(workspace?.id));
+  }, [workspace?.id]);
+
+  async function loadPosts(cursor?: string, options?: { silent?: boolean; useCache?: boolean }) {
     if (!workspace) return;
-    setLoading(true);
+    const listParams: PostsListCacheParams = { ...activeFilters, cursor };
+    const queryKey = workspaceQueryKeys.postsList(workspace.id, listParams);
+    const cached = queryClient.getQueryData<PostsListCachedData>(queryKey);
+
+    if (cached) {
+      setPosts(cached.items);
+      setStatusCounts(cached.statusCounts);
+      setNextCursor(cached.nextCursor);
+    }
+
+    const shouldBlockUi = !options?.silent && !cached;
+    if (shouldBlockUi) setLoading(true);
     setError(null);
     try {
-      const result = await postsApi.list(workspace.id, { ...activeFilters, cursor });
+      const result = await queryClient.fetchQuery({
+        queryKey,
+        queryFn: () => postsApi.list(workspace.id, listParams),
+        staleTime: options?.useCache ? 60_000 : 0,
+      });
       setPosts(result.items);
       setStatusCounts(result.statusCounts);
       setNextCursor(result.nextCursor);
     } catch (loadError) {
-      setError(getErrorMessage(loadError));
+      if (!options?.silent) setError(getErrorMessage(loadError));
     } finally {
-      setLoading(false);
+      if (shouldBlockUi) setLoading(false);
     }
   }
 
+  function scheduleSilentReload(delayMs = 500) {
+    if (realtimeReloadTimerRef.current !== null) {
+      window.clearTimeout(realtimeReloadTimerRef.current);
+    }
+    realtimeReloadTimerRef.current = window.setTimeout(() => {
+      realtimeReloadTimerRef.current = null;
+      void loadPosts(cursorStack.at(-1), { silent: true });
+    }, delayMs);
+  }
+
+  useWorkspaceEventSubscription((event) => {
+    if (event.type === 'comment.created' && event.platformPostId) {
+      const targetId = event.platformPostId;
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.platformPosts.some((pp) => pp.id === targetId)
+            ? {
+                ...post,
+                platformPosts: post.platformPosts.map((pp) =>
+                  pp.id === targetId ? { ...pp, commentCount: (pp.commentCount ?? 0) + 1 } : pp,
+                ),
+              }
+            : post,
+        ),
+      );
+      setActiveCommentsPost((prev) =>
+        prev && prev.platformPosts.some((pp) => pp.id === targetId)
+          ? {
+              ...prev,
+              platformPosts: prev.platformPosts.map((pp) =>
+                pp.id === targetId ? { ...pp, commentCount: (pp.commentCount ?? 0) + 1 } : pp,
+              ),
+            }
+          : prev,
+      );
+      scheduleSilentReload(900);
+      return;
+    }
+
+    if (
+      event.type === 'comment.replied' ||
+      event.type === 'comments.synced' ||
+      event.type === 'posts.changed' ||
+      event.type === 'metrics.synced' ||
+      event.type === 'stream.reconnected'
+    ) {
+      scheduleSilentReload(500);
+    }
+  });
+
+  useEffect(() => {
+    return () => {
+      if (realtimeReloadTimerRef.current !== null) {
+        window.clearTimeout(realtimeReloadTimerRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!workspace) return;
-    Promise.all([socialAccountsApi.list(workspace.id), platformsApi.capabilities()])
-      .then(([accountResult, capabilityResult]) => {
+    Promise.all([
+      queryClient.fetchQuery({
+        queryKey: workspaceQueryKeys.socialAccounts(workspace.id),
+        queryFn: () => socialAccountsApi.list(workspace.id),
+        staleTime: SHARED_META_STALE_TIME,
+      }),
+      queryClient.fetchQuery({
+        queryKey: workspaceQueryKeys.stores(workspace.id),
+        queryFn: () => storesApi.list(workspace.id),
+        staleTime: SHARED_META_STALE_TIME,
+      }),
+      queryClient.fetchQuery({
+        queryKey: workspaceQueryKeys.capabilities(),
+        queryFn: () => platformsApi.capabilities(),
+        staleTime: CAPABILITIES_STALE_TIME,
+      }),
+    ])
+      .then(([accountResult, storeResult, capabilityResult]) => {
         setAccounts(accountResult.items);
+        setStores(storeResult.items);
+        setStoreId((current) => {
+          if (
+            current &&
+            current !== 'UNASSIGNED' &&
+            !storeResult.items.some((item) => item.id === current)
+          ) {
+            writeStickyStoreId(workspace.id, '');
+            return '';
+          }
+          return current;
+        });
         setCapabilityByPlatform(
           Object.fromEntries(
             capabilityResult.platforms.map((item) => [item.platform, item]),
@@ -181,7 +414,7 @@ export default function PostsPage() {
         );
       })
       .catch((loadError) => setError(getErrorMessage(loadError)));
-  }, [workspace]);
+  }, [queryClient, workspace]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => setDebouncedQuery(query), 350);
@@ -190,8 +423,24 @@ export default function PostsPage() {
 
   useEffect(() => {
     setCursorStack([]);
-    void loadPosts();
+    void loadPosts(undefined, { useCache: true });
   }, [workspace, activeFilters]);
+
+  useEffect(() => {
+    if (!workspace) return;
+    const currentParams: PostsListCacheParams = {
+      ...activeFilters,
+      cursor: cursorStack.at(-1),
+    };
+    const key = workspaceQueryKeys.postsList(workspace.id, currentParams);
+    if (queryClient.getQueryData(key) !== undefined) {
+      queryClient.setQueryData<PostsListCachedData>(key, {
+        items: posts,
+        statusCounts,
+        nextCursor,
+      });
+    }
+  }, [activeFilters, cursorStack, nextCursor, posts, queryClient, statusCounts, workspace]);
 
   useEffect(() => {
     const visiblePostIds = new Set(posts.map((post) => post.id));
@@ -257,6 +506,8 @@ export default function PostsPage() {
       const message = deleteResultMessage(result);
       if (result.deleted) {
         toast.success(message);
+      } else if (result.queued) {
+        toast.info(message);
       } else if (deleteResultFailures(result).length > 0) {
         toast.warning(message);
       } else {
@@ -318,6 +569,7 @@ export default function PostsPage() {
     );
 
     let deleted = 0;
+    let queued = 0;
     let failed = 0;
     const failedPostIds = new Set<string>();
     try {
@@ -344,6 +596,13 @@ export default function PostsPage() {
             deleted += 1;
             setBulkDeleteProgress((current) =>
               current.map((item) => (item.postId === post.id ? { ...item, status: 'DONE' } : item)),
+            );
+          } else if (result.queued) {
+            queued += 1;
+            setBulkDeleteProgress((current) =>
+              current.map((item) =>
+                item.postId === post.id ? { ...item, status: 'QUEUED' } : item,
+              ),
             );
           } else {
             failed += 1;
@@ -380,7 +639,17 @@ export default function PostsPage() {
       setSelectedPostIds((current) => current.filter((postId) => failedPostIds.has(postId)));
       await loadPosts(cursorStack.at(-1));
       if (failed > 0) {
-        toast.warning(`Đã xóa ${deleted}/${targets.length} bài. ${failed} bài lỗi.`);
+        toast.warning(
+          `Đã xử lý ${deleted + queued}/${targets.length} bài (${deleted} đã xóa, ${queued} đang xóa ngầm). ${failed} bài lỗi.`,
+        );
+      } else if (queued > 0 && deleted > 0) {
+        setSelectedPostIds([]);
+        toast.info(
+          `Đã xóa ${deleted} bài, đưa ${queued} bài vào hàng đợi xóa ngầm trên mạng xã hội.`,
+        );
+      } else if (queued > 0) {
+        setSelectedPostIds([]);
+        toast.info(`Đã đưa ${queued} bài vào hàng đợi xóa ngầm trên mạng xã hội.`);
       } else {
         setSelectedPostIds([]);
         toast.success(`Đã xóa ${deleted} bài viết.`);
@@ -419,6 +688,7 @@ export default function PostsPage() {
           title: post.title ?? '',
           status: post.status,
           derivedStatus: post.derivedStatus,
+          mediaTypes: [...new Set(post.media.map((item) => item.type))].join('; ') || 'NONE',
           platforms: post.platformPosts.map((item) => item.platform).join('; '),
           accounts: post.platformPosts.map((item) => item.socialAccountName).join('; '),
           scheduledAt: post.scheduledAt ?? '',
@@ -432,6 +702,7 @@ export default function PostsPage() {
           'title',
           'status',
           'derivedStatus',
+          'mediaTypes',
           'platforms',
           'accounts',
           'scheduledAt',
@@ -457,9 +728,210 @@ export default function PostsPage() {
   const canRetry = hasPermission(workspace.role, 'post:publish');
   const canDelete = hasPermission(workspace.role, 'post:delete');
   const canCreate = hasPermission(workspace.role, 'post:create');
+  const canSync = hasPermission(workspace.role, 'social_account:sync');
+  const canComment = hasPermission(workspace.role, 'comment:reply');
+
+  const syncCandidateAccounts = useMemo(() => {
+    return accounts.filter((acc) => {
+      if (acc.status !== 'CONNECTED') return false;
+      if (syncFilterStoreId === 'UNASSIGNED') {
+        if (acc.storeId) return false;
+      } else if (syncFilterStoreId && acc.storeId !== syncFilterStoreId) {
+        return false;
+      }
+      if (syncFilterPlatform && acc.platform !== syncFilterPlatform) {
+        return false;
+      }
+      return true;
+    });
+  }, [accounts, syncFilterPlatform, syncFilterStoreId]);
+
+  const visibleCommentablePosts = useMemo(() => {
+    return posts.filter((post) =>
+      post.platformPosts.some(
+        (pp) =>
+          pp.status === 'PUBLISHED' &&
+          Boolean(pp.externalPostId) &&
+          isCreateCommentSupportedPlatform(pp.platform, capabilityByPlatform),
+      ),
+    );
+  }, [capabilityByPlatform, posts]);
+
+  const selectedCommentableTargets = useMemo(() => {
+    return selectedPosts.flatMap((post) =>
+      post.platformPosts.filter(
+        (pp) =>
+          pp.status === 'PUBLISHED' &&
+          Boolean(pp.externalPostId) &&
+          isCreateCommentSupportedPlatform(pp.platform, capabilityByPlatform),
+      ),
+    );
+  }, [capabilityByPlatform, selectedPosts]);
+
+  const canOpenBulkCommentFromFilter =
+    visibleCommentablePosts.length > 0 ||
+    (statusCounts.PUBLISHED ?? 0) + (statusCounts.PARTIALLY_PUBLISHED ?? 0) > 0;
+
+  function openSyncPostsModal() {
+    const initStoreId = storeId || '';
+    const initPlatform = platform || '';
+    setSyncFilterStoreId(initStoreId);
+    setSyncFilterPlatform(initPlatform);
+    const matching = accounts.filter((acc) => {
+      if (acc.status !== 'CONNECTED') return false;
+      if (initStoreId === 'UNASSIGNED') {
+        if (acc.storeId) return false;
+      } else if (initStoreId && acc.storeId !== initStoreId) {
+        return false;
+      }
+      if (initPlatform && acc.platform !== initPlatform) {
+        return false;
+      }
+      return true;
+    });
+    setSyncSelectedAccountIds(matching.map((item) => item.id));
+    setSyncModalOpen(true);
+  }
+
+  function updateSyncFilters(nextStoreId: string, nextPlatform: string) {
+    setSyncFilterStoreId(nextStoreId);
+    setSyncFilterPlatform(nextPlatform);
+    const matching = accounts.filter((acc) => {
+      if (acc.status !== 'CONNECTED') return false;
+      if (nextStoreId === 'UNASSIGNED') {
+        if (acc.storeId) return false;
+      } else if (nextStoreId && acc.storeId !== nextStoreId) {
+        return false;
+      }
+      if (nextPlatform && acc.platform !== nextPlatform) {
+        return false;
+      }
+      return true;
+    });
+    setSyncSelectedAccountIds(matching.map((item) => item.id));
+  }
+
+  async function submitSyncExternalPosts() {
+    if (!workspace) return;
+    if (syncSelectedAccountIds.length === 0) {
+      toast.warning('Vui lòng chọn ít nhất 1 kênh để đồng bộ bài viết.');
+      return;
+    }
+    setSyncingExternalPosts(true);
+    setError(null);
+    try {
+      const res = await socialAccountsApi.syncPostsByFilter(workspace.id, {
+        socialAccountIds: syncSelectedAccountIds,
+        cutoffDays: syncCutoffDays,
+        sinceDate: dateFrom ? new Date(`${dateFrom}T00:00:00`).toISOString() : undefined,
+        force: true,
+      });
+      setSyncModalOpen(false);
+      if (res.queuedCount > 0) {
+        toast.success(
+          `Đã đưa ${res.queuedCount}/${res.matchedCount} kênh vào hàng đợi kéo bài viết! Danh sách sẽ tự động cập nhật sau vài giây.`,
+        );
+        window.setTimeout(() => void loadPosts(cursorStack.at(-1)), 3500);
+        window.setTimeout(() => void loadPosts(cursorStack.at(-1)), 8500);
+      } else {
+        const reason = res.results[0]?.message ?? 'Không có kênh nào được đưa vào hàng đợi.';
+        toast.warning(reason);
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setSyncingExternalPosts(false);
+    }
+  }
+
+  async function openCommentModal(explicitPosts?: ContentPostView[]) {
+    if (!workspace) return;
+
+    if (explicitPosts && explicitPosts.length > 0) {
+      const supportedTargets = explicitPosts.flatMap((post) =>
+        post.platformPosts.filter(
+          (pp) =>
+            pp.status === 'PUBLISHED' &&
+            Boolean(pp.externalPostId) &&
+            isCreateCommentSupportedPlatform(pp.platform, capabilityByPlatform),
+        ),
+      );
+      if (supportedTargets.length === 0) {
+        toast.warning(
+          'Các bài đang chọn chưa có kênh nào hỗ trợ API comment tự động (Facebook, Instagram, YouTube).',
+        );
+        return;
+      }
+      setCommentModalExplicitSelection(true);
+      setCommentModalPosts(explicitPosts);
+      return;
+    }
+
+    setLoadingCommentModal(true);
+    try {
+      const collectedById = new Map<string, ContentPostView>();
+      let cursor: string | undefined;
+      for (let page = 0; page < 3; page += 1) {
+        const res = await postsApi.list(workspace.id, {
+          q: activeFilters.q,
+          dateFrom: activeFilters.dateFrom,
+          dateTo: activeFilters.dateTo,
+          sortBy: activeFilters.sortBy,
+          direction: activeFilters.direction,
+          limit: 100,
+          cursor,
+        });
+        for (const item of res.items) {
+          collectedById.set(item.id, item);
+        }
+        if (!res.nextCursor) break;
+        cursor = res.nextCursor;
+      }
+
+      if (storeId || platform || mediaType) {
+        const scopedRes = await postsApi.list(workspace.id, {
+          storeId: storeId || undefined,
+          platform: platform || undefined,
+          mediaType: mediaType || undefined,
+          q: activeFilters.q,
+          dateFrom: activeFilters.dateFrom,
+          dateTo: activeFilters.dateTo,
+          sortBy: activeFilters.sortBy,
+          direction: activeFilters.direction,
+          limit: 100,
+        });
+        for (const item of scopedRes.items) {
+          collectedById.set(item.id, item);
+        }
+      }
+
+      const collected = Array.from(collectedById.values());
+
+      const supportedTargets = collected.flatMap((post) =>
+        post.platformPosts.filter(
+          (pp) =>
+            pp.status === 'PUBLISHED' &&
+            Boolean(pp.externalPostId) &&
+            isCreateCommentSupportedPlatform(pp.platform, capabilityByPlatform),
+        ),
+      );
+
+      if (supportedTargets.length === 0) {
+        toast.warning(
+          'Không tìm thấy bài viết Đã đăng nào hỗ trợ API comment (Facebook, Instagram, YouTube) trong bộ lọc hiện tại.',
+        );
+        return;
+      }
+
+      setCommentModalExplicitSelection(false);
+      setCommentModalPosts(collected);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setLoadingCommentModal(false);
+    }
+  }
   const activeAdvancedFilterCount = [
-    platform,
-    socialAccountId,
     dateFrom,
     dateTo,
     sortBy !== 'createdAt' ? sortBy : '',
@@ -467,8 +939,9 @@ export default function PostsPage() {
   ].filter(Boolean).length;
   const hasAnyFilter = Boolean(
     status ||
+    storeId ||
     platform ||
-    socialAccountId ||
+    mediaType ||
     debouncedQuery.trim() ||
     dateFrom ||
     dateTo ||
@@ -486,10 +959,96 @@ export default function PostsPage() {
         body: 'Tạo draft đầu tiên, chọn tài khoản publish, rồi đăng ngay hoặc đưa vào lịch.',
       };
 
+  const activeFilterChips: Array<{ key: string; label: string; onRemove: () => void }> = [];
+  if (debouncedQuery.trim()) {
+    activeFilterChips.push({
+      key: 'q',
+      label: `Từ khóa: "${debouncedQuery.trim()}"`,
+      onRemove: () => {
+        setQuery('');
+        setDebouncedQuery('');
+      },
+    });
+  }
+  if (storeId) {
+    const storeName =
+      storeId === 'UNASSIGNED'
+        ? 'Chưa gán Store'
+        : (stores.find((item) => item.id === storeId)?.name ?? storeId);
+    activeFilterChips.push({
+      key: 'storeId',
+      label: `Store: ${storeName}`,
+      onRemove: () => selectStoreId(''),
+    });
+  }
+  if (platform) {
+    activeFilterChips.push({
+      key: 'platform',
+      label: `Nền tảng: ${PLATFORM_LABELS[platform as Platform] ?? platform}`,
+      onRemove: () => setPlatform(''),
+    });
+  }
+  if (mediaType) {
+    activeFilterChips.push({
+      key: 'mediaType',
+      label: `Media: ${MEDIA_FILTER_LABELS[mediaType]}`,
+      onRemove: () => setMediaType(''),
+    });
+  }
+  if (dateFrom) {
+    activeFilterChips.push({
+      key: 'dateFrom',
+      label: `Từ ngày: ${formatDateInputLabel(dateFrom)}`,
+      onRemove: () => setDateFrom(''),
+    });
+  }
+  if (dateTo) {
+    activeFilterChips.push({
+      key: 'dateTo',
+      label: `Đến ngày: ${formatDateInputLabel(dateTo)}`,
+      onRemove: () => setDateTo(''),
+    });
+  }
+  if (sortBy !== 'createdAt') {
+    activeFilterChips.push({
+      key: 'sortBy',
+      label: 'Sắp xếp: Ngày cập nhật',
+      onRemove: () => setSortBy('createdAt'),
+    });
+  }
+  if (direction !== 'desc') {
+    activeFilterChips.push({
+      key: 'direction',
+      label: 'Thứ tự: Cũ nhất trước',
+      onRemove: () => setDirection('desc'),
+    });
+  }
+
+  function applyQuickDatePreset(preset: 'today' | 'last7d' | 'last30d' | 'thisMonth') {
+    const now = new Date();
+    const todayStr = toLocalDateInputValue(now);
+    if (preset === 'today') {
+      setDateFrom(todayStr);
+      setDateTo(todayStr);
+      return;
+    }
+    if (preset === 'thisMonth') {
+      const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      setDateFrom(toLocalDateInputValue(firstOfMonth));
+      setDateTo(todayStr);
+      return;
+    }
+    const daysBack = preset === 'last7d' ? 6 : 29;
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - daysBack);
+    setDateFrom(toLocalDateInputValue(start));
+    setDateTo(todayStr);
+  }
+
   function resetFilters() {
     setStatus('');
+    selectStoreId('');
     setPlatform('');
-    setSocialAccountId('');
+    setMediaType('');
     setQuery('');
     setDebouncedQuery('');
     setDateFrom('');
@@ -519,6 +1078,29 @@ export default function PostsPage() {
           <IconButton disabled={exporting} label="Export CSV" onClick={() => void exportCsv()}>
             <Download className="h-4 w-4" />
           </IconButton>
+          {canComment ? (
+            <SecondaryButton
+              className="h-11 gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
+              disabled={loadingCommentModal || !canOpenBulkCommentFromFilter}
+              onClick={() =>
+                void openCommentModal(selectedPosts.length > 0 ? selectedPosts : undefined)
+              }
+              type="button"
+            >
+              <MessageSquarePlus className="h-4 w-4 text-brand-600" />
+              {loadingCommentModal
+                ? 'Đang gom bài...'
+                : selectedCommentableTargets.length > 0
+                  ? `Comment hàng loạt (${selectedCommentableTargets.length})`
+                  : 'Comment hàng loạt'}
+            </SecondaryButton>
+          ) : null}
+          {canSync ? (
+            <SecondaryButton className="h-11 gap-2" onClick={openSyncPostsModal} type="button">
+              <CloudDownload className="h-4 w-4 text-brand-600" />
+              Đồng bộ bài viết
+            </SecondaryButton>
+          ) : null}
           {canCreate ? (
             <Link
               className="inline-flex h-11 items-center gap-2 rounded-md bg-brand-600 px-4 text-sm font-semibold text-white transition hover:bg-brand-700"
@@ -532,120 +1114,236 @@ export default function PostsPage() {
       </header>
 
       <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_180px_180px_minmax(280px,1fr)_auto]">
-          <Field label="Nền tảng">
-            <SelectInput
-              value={platform}
-              onChange={(event) => {
-                setPlatform(event.target.value);
-                setSocialAccountId('');
-              }}
-            >
-              <option value="">Tất cả nền tảng</option>
-              {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </SelectInput>
-          </Field>
-          <Field label="Từ ngày">
-            <TextInput
-              type="date"
-              value={dateFrom}
-              onChange={(event) => setDateFrom(event.target.value)}
-            />
-          </Field>
-          <Field label="Đến ngày">
-            <TextInput
-              type="date"
-              value={dateTo}
-              onChange={(event) => setDateTo(event.target.value)}
-            />
-          </Field>
-          <Field label="Tìm kiếm">
-            <TextInput
-              placeholder="Tìm theo tiêu đề, nội dung, link..."
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </Field>
-          <div className="flex items-end gap-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[minmax(220px,1.5fr)_minmax(145px,1fr)_minmax(145px,1fr)_minmax(145px,1fr)_auto] xl:items-end">
+          <div className="sm:col-span-2 lg:col-span-4 xl:col-span-1">
+            <Field label="Tìm kiếm">
+              <div className="relative">
+                <Search
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  className="h-11 w-full rounded-md border border-slate-300 bg-white pl-9 pr-9 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
+                  placeholder="Tìm theo tiêu đề, nội dung, link..."
+                  type="text"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+                {query ? (
+                  <button
+                    aria-label="Xóa từ khóa tìm kiếm"
+                    className="absolute right-2.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-100"
+                    onClick={() => {
+                      setQuery('');
+                      setDebouncedQuery('');
+                    }}
+                    title="Xóa từ khóa"
+                    type="button"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </div>
+            </Field>
+          </div>
+
+          <div>
+            <Field label="Store / Brand">
+              <SelectInput value={storeId} onChange={(event) => selectStoreId(event.target.value)}>
+                <option value="">Tất cả Stores</option>
+                {stores.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+                <option value="UNASSIGNED">Chưa gán Store</option>
+              </SelectInput>
+            </Field>
+          </div>
+
+          <div>
+            <Field label="Nền tảng">
+              <SelectInput value={platform} onChange={(event) => setPlatform(event.target.value)}>
+                <option value="">Tất cả nền tảng</option>
+                {Object.entries(PLATFORM_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
+          </div>
+
+          <div>
+            <Field label="Loại media">
+              <SelectInput
+                value={mediaType}
+                onChange={(event) => setMediaType(event.target.value as PostMediaFilter)}
+              >
+                <option value="">Tất cả media</option>
+                <option value="VIDEO">Video</option>
+                <option value="IMAGE">Hình ảnh</option>
+                <option value="NONE">Không có media</option>
+              </SelectInput>
+            </Field>
+          </div>
+
+          <div className="flex items-end">
             <SecondaryButton
               aria-expanded={showAdvancedFilters}
-              className="h-11 gap-2"
+              className={`h-11 w-full whitespace-nowrap px-3 xl:w-auto ${
+                showAdvancedFilters || activeAdvancedFilterCount > 0
+                  ? 'border-brand-300 bg-brand-50/60 text-brand-700 hover:bg-brand-50'
+                  : ''
+              }`}
               onClick={() => setShowAdvancedFilters((current) => !current)}
               type="button"
             >
-              <Filter className="h-4 w-4" />
-              Bộ lọc {activeAdvancedFilterCount > 0 ? `(${activeAdvancedFilterCount})` : ''}
+              <SlidersHorizontal className="h-4 w-4 shrink-0" />
+              <span>Ngày &amp; Sắp xếp</span>
+              {activeAdvancedFilterCount > 0 ? (
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-600 px-1.5 text-[11px] font-semibold text-white">
+                  {activeAdvancedFilterCount}
+                </span>
+              ) : null}
             </SecondaryButton>
           </div>
         </div>
 
         {showAdvancedFilters ? (
-          <div className="mt-3 grid gap-3 border-t border-slate-200 pt-3 md:grid-cols-3">
-            <Field label="Tài khoản">
-              <SelectInput
-                value={socialAccountId}
-                onChange={(event) => setSocialAccountId(event.target.value)}
-              >
-                <option value="">Tất cả tài khoản</option>
-                {accounts
-                  .filter((account) => !platform || account.platform === platform)
-                  .map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-              </SelectInput>
-            </Field>
-            <Field label="Sắp xếp">
-              <SelectInput
-                value={sortBy}
-                onChange={(event) => setSortBy(event.target.value as 'createdAt' | 'updatedAt')}
-              >
-                <option value="createdAt">Ngày tạo</option>
-                <option value="updatedAt">Ngày cập nhật</option>
-              </SelectInput>
-            </Field>
-            <Field label="Thứ tự">
-              <SelectInput
-                value={direction}
-                onChange={(event) => setDirection(event.target.value as 'asc' | 'desc')}
-              >
-                <option value="desc">Mới nhất trước</option>
-                <option value="asc">Cũ nhất trước</option>
-              </SelectInput>
-            </Field>
+          <div className="mt-3 space-y-3 rounded-md border border-slate-200 bg-slate-50/70 p-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-xs font-medium text-slate-600">Chọn nhanh:</span>
+              {(
+                [
+                  { id: 'today', label: 'Hôm nay' },
+                  { id: 'last7d', label: '7 ngày qua' },
+                  { id: 'last30d', label: '30 ngày qua' },
+                  { id: 'thisMonth', label: 'Tháng này' },
+                ] as const
+              ).map((preset) => (
+                <button
+                  key={preset.id}
+                  className="inline-flex h-7 items-center rounded-full border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
+                  onClick={() => applyQuickDatePreset(preset.id)}
+                  type="button"
+                >
+                  {preset.label}
+                </button>
+              ))}
+              {dateFrom || dateTo ? (
+                <button
+                  className="inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-slate-500 transition hover:bg-slate-200/70 hover:text-slate-800"
+                  onClick={() => {
+                    setDateFrom('');
+                    setDateTo('');
+                  }}
+                  type="button"
+                >
+                  <X className="h-3 w-3" />
+                  Xóa ngày
+                </button>
+              ) : null}
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <Field label="Từ ngày">
+                <TextInput
+                  max={dateTo || undefined}
+                  type="date"
+                  value={dateFrom}
+                  onChange={(event) => setDateFrom(event.target.value)}
+                />
+              </Field>
+              <Field label="Đến ngày">
+                <TextInput
+                  min={dateFrom || undefined}
+                  type="date"
+                  value={dateTo}
+                  onChange={(event) => setDateTo(event.target.value)}
+                />
+              </Field>
+              <Field label="Sắp xếp theo">
+                <SelectInput
+                  value={sortBy}
+                  onChange={(event) => setSortBy(event.target.value as 'createdAt' | 'updatedAt')}
+                >
+                  <option value="createdAt">Ngày tạo</option>
+                  <option value="updatedAt">Ngày cập nhật</option>
+                </SelectInput>
+              </Field>
+              <Field label="Thứ tự">
+                <SelectInput
+                  value={direction}
+                  onChange={(event) => setDirection(event.target.value as 'asc' | 'desc')}
+                >
+                  <option value="desc">Mới nhất trước</option>
+                  <option value="asc">Cũ nhất trước</option>
+                </SelectInput>
+              </Field>
+            </div>
           </div>
         ) : null}
 
-        <div className="mt-4 flex flex-wrap items-center gap-1 border-b border-slate-200">
-          <PostStatusTab
-            active={status === ''}
-            count={totalStatusCount}
-            label="Tất cả"
-            onClick={() => setStatus('')}
-          />
-          {POST_STATUSES.map((item) => (
-            <PostStatusTab
-              key={item}
-              active={status === item}
-              count={statusCounts[item] ?? 0}
-              label={postStatusLabel(item)}
-              onClick={() => setStatus(item)}
-            />
-          ))}
-          {hasAnyFilter ? (
-            <IconButton
-              className="ml-auto h-9 w-9 border-transparent"
-              label="Xóa lọc"
+        {activeFilterChips.length > 0 ? (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-3">
+            <span className="mr-1 text-xs font-medium text-slate-500">Đang lọc:</span>
+            {activeFilterChips.map((chip) => (
+              <span
+                key={chip.key}
+                className="inline-flex max-w-full items-center gap-1 rounded-full border border-brand-200 bg-brand-50/70 py-1 pl-2.5 pr-1.5 text-xs font-medium text-brand-800"
+              >
+                <span className="max-w-[220px] truncate">{chip.label}</span>
+                <button
+                  aria-label={`Bỏ lọc ${chip.label}`}
+                  className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-brand-600 transition hover:bg-brand-200/70 hover:text-brand-900"
+                  onClick={chip.onRemove}
+                  type="button"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+            <button
+              className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-slate-600 transition hover:bg-red-50 hover:text-red-600"
               onClick={resetFilters}
+              type="button"
             >
-              <X className="h-4 w-4" />
-            </IconButton>
-          ) : null}
+              <RotateCcw className="h-3.5 w-3.5" />
+              Đặt lại bộ lọc
+            </button>
+          </div>
+        ) : null}
+
+        <div className="-mx-4 mt-3 overflow-x-auto border-b border-slate-200 px-4 sm:mx-0 sm:px-0">
+          <div className="flex min-w-max items-center gap-1">
+            <PostStatusTab
+              active={status === ''}
+              count={totalStatusCount}
+              label="Tất cả"
+              onClick={() => setStatus('')}
+            />
+            {POST_STATUSES.map((item) => (
+              <PostStatusTab
+                key={item}
+                active={status === item}
+                count={statusCounts[item] ?? 0}
+                label={postStatusLabel(item)}
+                onClick={() => setStatus(item)}
+              />
+            ))}
+            {status ? (
+              <button
+                className="ml-auto inline-flex h-9 shrink-0 items-center gap-1 rounded-md px-2.5 text-xs font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                onClick={() => setStatus('')}
+                title="Quay lại Tất cả trạng thái"
+                type="button"
+              >
+                <X className="h-3.5 w-3.5" />
+                Tất cả trạng thái
+              </button>
+            ) : null}
+          </div>
         </div>
       </section>
 
@@ -664,6 +1362,23 @@ export default function PostsPage() {
             ) : null}
           </div>
           <div className="flex items-center gap-2">
+            {canComment && canOpenBulkCommentFromFilter ? (
+              <SecondaryButton
+                className="h-9 gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
+                disabled={loadingCommentModal}
+                onClick={() =>
+                  void openCommentModal(selectedPosts.length > 0 ? selectedPosts : undefined)
+                }
+                type="button"
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+                {loadingCommentModal
+                  ? 'Đang tải danh sách bài...'
+                  : selectedCommentableTargets.length > 0
+                    ? `Comment các bài đã chọn (${selectedCommentableTargets.length})`
+                    : 'Comment nhiều bài / Gắn link SP'}
+              </SecondaryButton>
+            ) : null}
             {selectedDeletablePosts.length > 0 ? (
               <SecondaryButton
                 className="h-9 gap-2 border-red-200 text-red-700 hover:bg-red-50"
@@ -687,12 +1402,12 @@ export default function PostsPage() {
               <tr>
                 <th className="w-12 px-4 py-3">
                   <input
-                    aria-label="Chọn tất cả bài có thể xóa"
+                    aria-label="Chọn tất cả bài"
                     checked={
                       deletablePosts.length > 0 &&
                       deletablePosts.every((post) => selectedPostIds.includes(post.id))
                     }
-                    disabled={!canDelete || deletablePosts.length === 0}
+                    disabled={(!canDelete && !canComment) || deletablePosts.length === 0}
                     type="checkbox"
                     onChange={toggleAllVisiblePosts}
                   />
@@ -700,7 +1415,25 @@ export default function PostsPage() {
                 <th className="w-28 px-4 py-3">Bài đăng</th>
                 <th className="w-36 px-4 py-3">Nền tảng</th>
                 <th className="w-40 px-4 py-3">Trạng thái</th>
-                <th className="w-36 px-4 py-3">Thời gian</th>
+                <th className="w-36 px-4 py-3">
+                  <button
+                    className="inline-flex items-center gap-1 font-semibold uppercase text-slate-500 transition hover:text-slate-900"
+                    onClick={() => setDirection((current) => (current === 'desc' ? 'asc' : 'desc'))}
+                    title={
+                      direction === 'desc'
+                        ? 'Đang xếp: Mới nhất → Cũ nhất (bấm để đảo ngược)'
+                        : 'Đang xếp: Cũ nhất → Mới nhất (bấm để đảo ngược)'
+                    }
+                    type="button"
+                  >
+                    <span>Thời gian</span>
+                    {direction === 'desc' ? (
+                      <ArrowDown className="h-3.5 w-3.5 text-brand-600" />
+                    ) : (
+                      <ArrowUp className="h-3.5 w-3.5 text-brand-600" />
+                    )}
+                  </button>
+                </th>
                 <th className="w-48 px-4 py-3">Kết quả</th>
                 <th className="w-52 px-4 py-3 text-right">Thao tác</th>
               </tr>
@@ -715,7 +1448,7 @@ export default function PostsPage() {
                     <input
                       aria-label={`Chọn bài ${post.title ?? post.id}`}
                       checked={selectedPostIds.includes(post.id)}
-                      disabled={!canDelete || !canDeletePostStatus(post.status)}
+                      disabled={(!canDelete && !canComment) || !canDeletePostStatus(post.status)}
                       type="checkbox"
                       onChange={() => togglePostSelection(post)}
                     />
@@ -727,6 +1460,20 @@ export default function PostsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <PlatformChips post={post} />
+                    {(post.store ?? post.platformPosts.find((p) => p.store)?.store) ? (
+                      <div className="mt-1.5">
+                        <span
+                          className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium text-white"
+                          style={{
+                            backgroundColor:
+                              (post.store ?? post.platformPosts.find((p) => p.store)?.store)
+                                ?.color ?? '#2563eb',
+                          }}
+                        >
+                          {(post.store ?? post.platformPosts.find((p) => p.store)?.store)?.name}
+                        </span>
+                      </div>
+                    ) : null}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={post.status} />
@@ -742,16 +1489,31 @@ export default function PostsPage() {
                         </span>
                       </div>
                     ) : null}
+                    <PostPendingAsyncBadge post={post} />
                   </td>
                   <td className="px-4 py-3 text-slate-700">
                     <p>{formatShortDate(primaryPostTime(post))}</p>
                     <p className="mt-1 text-xs text-slate-500">{primaryPostTimeLabel(post)}</p>
                   </td>
                   <td className="px-4 py-3 text-slate-700">
-                    <PostResultSummary post={post} />
+                    <PostResultSummary
+                      post={post}
+                      onOpenComments={() => setActiveCommentsPost(post)}
+                    />
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1.5">
+                      {post.platformPosts.some(
+                        (pp) => pp.status === 'PUBLISHED' && Boolean(pp.externalPostId),
+                      ) ? (
+                        <IconButton
+                          className="h-9 w-9 border-brand-200 text-brand-700 hover:bg-brand-50"
+                          label="Xem & trả lời bình luận / Gắn link sản phẩm"
+                          onClick={() => setActiveCommentsPost(post)}
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                        </IconButton>
+                      ) : null}
                       <IconLink className="h-9 w-9" href={`/posts/${post.id}`} label="Xem chi tiết">
                         <Eye className="h-4 w-4" />
                       </IconLink>
@@ -848,6 +1610,203 @@ export default function PostsPage() {
         onConfirm={(input) => void bulkDeletePosts(input)}
       />
       <MediaPreviewDialog post={previewPost} onClose={() => setPreviewPost(null)} />
+      {workspace ? (
+        <PostCommentsDrawer
+          capabilityByPlatform={capabilityByPlatform}
+          post={activeCommentsPost}
+          workspaceId={workspace.id}
+          onClose={() => setActiveCommentsPost(null)}
+          onPostUpdated={() => void loadPosts(cursorStack.at(-1), { silent: true })}
+        />
+      ) : null}
+
+      {syncModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">
+                  Đồng bộ bài viết từ kênh mạng xã hội
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Lọc theo Store, Nền tảng và chọn chính xác các kênh bạn muốn kéo bài viết lịch sử
+                  về.
+                </p>
+              </div>
+              <button
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                onClick={() => setSyncModalOpen(false)}
+                type="button"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Store / Brand
+                  </label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+                    onChange={(e) => updateSyncFilters(e.target.value, syncFilterPlatform)}
+                    value={syncFilterStoreId}
+                  >
+                    <option value="">Tất cả Stores</option>
+                    {stores.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                    <option value="UNASSIGNED">Chưa gán Store</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">Nền tảng</label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+                    onChange={(e) => updateSyncFilters(syncFilterStoreId, e.target.value)}
+                    value={syncFilterPlatform}
+                  >
+                    <option value="">Tất cả nền tảng</option>
+                    {Object.entries(PLATFORM_LABELS).map(([val, label]) => (
+                      <option key={val} value={val}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Khoảng thời gian
+                  </label>
+                  <select
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+                    onChange={(e) => setSyncCutoffDays(Number(e.target.value))}
+                    value={syncCutoffDays}
+                  >
+                    <option value={7}>7 ngày gần nhất</option>
+                    <option value={30}>30 ngày gần nhất</option>
+                    <option value={90}>90 ngày gần nhất</option>
+                    <option value={365}>365 ngày gần nhất</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-700">
+                    Các kênh sẽ đồng bộ ({syncSelectedAccountIds.length}/
+                    {syncCandidateAccounts.length})
+                  </label>
+                  <div className="flex gap-2 text-xs">
+                    <button
+                      className="font-medium text-brand-600 hover:underline"
+                      onClick={() =>
+                        setSyncSelectedAccountIds(syncCandidateAccounts.map((a) => a.id))
+                      }
+                      type="button"
+                    >
+                      Chọn tất cả
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      className="font-medium text-slate-500 hover:underline"
+                      onClick={() => setSyncSelectedAccountIds([])}
+                      type="button"
+                    >
+                      Bỏ chọn
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-1.5 max-h-60 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+                  {syncCandidateAccounts.length === 0 ? (
+                    <p className="p-4 text-center text-xs text-slate-500">
+                      Không có kênh CONNECTED nào khớp với bộ lọc Store / Nền tảng trên.
+                    </p>
+                  ) : (
+                    syncCandidateAccounts.map((acc) => {
+                      const checked = syncSelectedAccountIds.includes(acc.id);
+                      const storeObj = stores.find((s) => s.id === acc.storeId);
+                      return (
+                        <label
+                          key={acc.id}
+                          className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-slate-50"
+                        >
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <input
+                              checked={checked}
+                              onChange={(e) => {
+                                setSyncSelectedAccountIds((prev) =>
+                                  e.target.checked
+                                    ? [...prev, acc.id]
+                                    : prev.filter((id) => id !== acc.id),
+                                );
+                              }}
+                              type="checkbox"
+                            />
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                              {PLATFORM_LABELS[acc.platform]}
+                            </span>
+                            <span className="truncate font-semibold text-slate-900">
+                              {acc.name}
+                            </span>
+                            {acc.username ? (
+                              <span className="truncate text-slate-400">@{acc.username}</span>
+                            ) : null}
+                          </div>
+                          {storeObj ? (
+                            <span
+                              className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium text-white"
+                              style={{ backgroundColor: storeObj.color ?? '#2563eb' }}
+                            >
+                              {storeObj.name}
+                            </span>
+                          ) : null}
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2 border-t border-slate-100 pt-4">
+              <SecondaryButton onClick={() => setSyncModalOpen(false)} type="button">
+                Đóng
+              </SecondaryButton>
+              <PrimaryButton
+                busy={syncingExternalPosts}
+                disabled={syncingExternalPosts || syncSelectedAccountIds.length === 0}
+                onClick={() => void submitSyncExternalPosts()}
+                type="button"
+              >
+                Đồng bộ ngay ({syncSelectedAccountIds.length} kênh)
+              </PrimaryButton>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <BulkPostCommentModal
+        capabilityByPlatform={capabilityByPlatform}
+        initialMediaType={mediaType}
+        initialPlatform={platform}
+        initialStoreId={storeId}
+        isExplicitSelection={commentModalExplicitSelection}
+        posts={commentModalPosts}
+        stores={stores}
+        workspaceId={workspace.id}
+        onClose={() => setCommentModalPosts([])}
+        onSubmitted={() => {
+          setSelectedPostIds([]);
+          scheduleSilentReload(1500);
+        }}
+      />
     </div>
   );
 }
@@ -857,17 +1816,24 @@ function canDeletePostStatus(status: ContentPostView['status']) {
 }
 
 function deleteResultFailures(result: DeletePostResult) {
-  return result.remoteDeleteResults?.filter((item) => !item.deleted) ?? [];
+  return result.remoteDeleteResults?.filter((item) => !item.deleted && !item.queued) ?? [];
 }
 
 function deleteResultMessage(result: DeletePostResult) {
   const failures = deleteResultFailures(result);
+  const queuedTargetItems = result.remoteDeleteResults?.filter((item) => item.queued) ?? [];
   const deletedTargetItems = result.remoteDeleteResults?.filter((item) => item.deleted) ?? [];
   const deletedTargetsText = summarizeDeleteTargets(deletedTargetItems);
   if (result.deleted) {
     return deletedTargetsText
       ? `Đã xóa bài viết khỏi workspace và xóa trên ${deletedTargetsText}.`
       : 'Đã xóa bài viết khỏi workspace.';
+  }
+  if (result.queued || queuedTargetItems.length > 0) {
+    const queuedTargetsText = summarizeDeleteTargets(queuedTargetItems);
+    return queuedTargetsText
+      ? `Đã đưa yêu cầu xóa trên ${queuedTargetsText} vào hàng đợi chạy ngầm.`
+      : 'Đã đưa yêu cầu xóa bài viết vào hàng đợi chạy ngầm.';
   }
   if (failures.length > 0) {
     const failedReasons = failures.map(formatDeleteFailure).slice(0, 2).join('; ');
@@ -1052,20 +2018,50 @@ function MediaPreviewDialog({
   const source = asset?.displayUrl ?? asset?.thumbnailUrl ?? asset?.readUrl;
   if (!post || !asset || !source) return null;
 
+  const youtubeEmbed = extractYouTubeEmbedUrl(asset.displayUrl ?? asset.readUrl ?? source);
+  const externalLink = post.platformPosts.find((pp) => pp.externalUrl)?.externalUrl ?? null;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6">
       <div className="w-full max-w-4xl overflow-hidden rounded-md bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
           <p className="truncate text-sm font-semibold text-slate-950">
             {post.title ?? asset.originalFileName ?? 'Media preview'}
           </p>
-          <IconButton className="h-9 w-9" label="Đóng" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </IconButton>
+          <div className="flex shrink-0 items-center gap-2">
+            {externalLink ? (
+              <a
+                className="rounded-md border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-50"
+                href={externalLink}
+                rel="noreferrer"
+                target="_blank"
+              >
+                Mở bài gốc ↗
+              </a>
+            ) : null}
+            <IconButton className="h-9 w-9" label="Đóng" onClick={onClose}>
+              <X className="h-4 w-4" />
+            </IconButton>
+          </div>
         </div>
         <div className="bg-slate-950 p-3">
-          {asset.type === 'VIDEO' && asset.status !== 'ARCHIVED' ? (
-            <video className="max-h-[72vh] w-full rounded bg-black" controls src={source} />
+          {youtubeEmbed ? (
+            <iframe
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              className="aspect-video max-h-[72vh] w-full rounded bg-black"
+              src={youtubeEmbed}
+              title={post.title ?? asset.originalFileName ?? 'YouTube video'}
+            />
+          ) : asset.type === 'VIDEO' &&
+            asset.status !== 'ARCHIVED' &&
+            asset.mimeType !== 'image/jpeg' ? (
+            <video
+              className="max-h-[72vh] w-full rounded bg-black"
+              controls
+              poster={asset.thumbnailUrl ?? undefined}
+              src={source}
+            />
           ) : (
             <FallbackImage
               alt={asset.originalFileName ?? 'media'}
@@ -1104,9 +2100,11 @@ function BulkDeletePostsDialog({
     0,
   );
   const completedCount = progress.filter(
-    (item) => item.status === 'DONE' || item.status === 'ERROR',
+    (item) => item.status === 'DONE' || item.status === 'QUEUED' || item.status === 'ERROR',
   ).length;
-  const successCount = progress.filter((item) => item.status === 'DONE').length;
+  const successCount = progress.filter(
+    (item) => item.status === 'DONE' || item.status === 'QUEUED',
+  ).length;
   const errorCount = progress.filter((item) => item.status === 'ERROR').length;
   const totalCount = progress.length || posts.length;
   const percent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
@@ -1242,19 +2240,23 @@ function BulkDeleteProgressBadge({ status }: { status: BulkDeleteProgressStatus 
   const tone =
     status === 'DONE'
       ? 'bg-emerald-50 text-emerald-700'
-      : status === 'ERROR'
-        ? 'bg-red-50 text-red-700'
-        : status === 'RUNNING'
-          ? 'bg-amber-50 text-amber-700'
-          : 'bg-slate-100 text-slate-500';
+      : status === 'QUEUED'
+        ? 'bg-sky-50 text-sky-700'
+        : status === 'ERROR'
+          ? 'bg-red-50 text-red-700'
+          : status === 'RUNNING'
+            ? 'bg-amber-50 text-amber-700'
+            : 'bg-slate-100 text-slate-500';
   const label =
     status === 'DONE'
       ? 'Xong'
-      : status === 'ERROR'
-        ? 'Lỗi'
-        : status === 'RUNNING'
-          ? 'Đang xóa'
-          : 'Chờ';
+      : status === 'QUEUED'
+        ? 'Đã xếp queue'
+        : status === 'ERROR'
+          ? 'Lỗi'
+          : status === 'RUNNING'
+            ? 'Đang xóa'
+            : 'Chờ';
 
   return (
     <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>
@@ -1263,26 +2265,57 @@ function BulkDeleteProgressBadge({ status }: { status: BulkDeleteProgressStatus 
   );
 }
 
-function PostResultSummary({ post }: { post: ContentPostView }) {
+function PostResultSummary({
+  post,
+  onOpenComments,
+}: {
+  post: ContentPostView;
+  onOpenComments?: () => void;
+}) {
   const published = post.platformPosts.filter((item) => item.status === 'PUBLISHED').length;
+  const scheduled =
+    post.status === 'SCHEDULED'
+      ? post.platformPosts.filter((item) => item.status === 'PENDING' || item.status === 'QUEUED')
+          .length
+      : 0;
   const failed = post.platformPosts.filter((item) => item.status === 'FAILED').length;
   const attempts = post.platformPosts.reduce((sum, item) => sum + item.attemptCount, 0);
   const total = post.platformPosts.length;
+  const syncedComments = post.platformPosts.reduce(
+    (sum, item) => sum + (item.commentCount ?? 0),
+    0,
+  );
   const metrics = aggregatePlatformMetrics(post.platformPosts);
   const hasMetrics = hasVisibleMetrics(metrics);
   const views = metrics.values.views?.value ?? metrics.values.impressions?.value ?? null;
   const engagement = metrics.values.engagement?.value ?? null;
-  const comments = metrics.values.comments?.value ?? null;
+  const metricComments = metrics.values.comments?.value ?? null;
+  const displayComments =
+    syncedComments > 0 ? syncedComments : metricComments !== null ? metricComments : 0;
 
   return (
     <div className="grid gap-1 text-xs leading-5">
-      <span className="font-semibold text-slate-900">
-        {published}/{total || 1} đã đăng
-      </span>
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-slate-900">
+          {scheduled > 0 && published === 0
+            ? `${scheduled}/${total || 1} chờ lên lịch`
+            : `${published}/${total || 1} đã đăng`}
+        </span>
+        {published > 0 && onOpenComments ? (
+          <button
+            className="inline-flex items-center gap-1 rounded-full border border-brand-200 bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100"
+            onClick={onOpenComments}
+            title="Xem và trả lời bình luận của bài này"
+            type="button"
+          >
+            <MessageSquare className="h-3 w-3" />
+            {displayComments} cmt
+          </button>
+        ) : null}
+      </div>
       {hasMetrics ? (
         <span className="text-slate-600">
-          {formatMetricNumber(views)} views · {formatMetricNumber(engagement)} tương tác ·{' '}
-          {formatMetricNumber(comments)} cmt
+          {formatMetricNumber(views)} views · {formatMetricNumber(engagement)} tương tác
         </span>
       ) : null}
       <span className={failed > 0 ? 'font-medium text-red-700' : 'text-slate-500'}>
@@ -1308,15 +2341,100 @@ function PlatformChips({ post }: { post: ContentPostView }) {
   );
 }
 
+function readPlatformSubState(
+  state: ContentPostView['platformPosts'][number]['platformState'],
+  key: 'pendingDelete' | 'pendingUpdate',
+): { state?: string; errorCode?: string; errorMessage?: string } | null {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
+  const sub = (state as Record<string, unknown>)[key];
+  if (!sub || typeof sub !== 'object' || Array.isArray(sub)) return null;
+  return sub as { state?: string; errorCode?: string; errorMessage?: string };
+}
+
+function PostPendingAsyncBadge({ post }: { post: ContentPostView }) {
+  let deletingActive = false;
+  let deletingFailed = false;
+  let updatingActive = false;
+  let updatingFailed = false;
+
+  for (const pp of post.platformPosts) {
+    const del = readPlatformSubState(pp.platformState, 'pendingDelete');
+    if (del?.state === 'QUEUED' || del?.state === 'PROCESSING') deletingActive = true;
+    if (del?.state === 'FAILED') deletingFailed = true;
+    const upd = readPlatformSubState(pp.platformState, 'pendingUpdate');
+    if (upd?.state === 'QUEUED' || upd?.state === 'PROCESSING') updatingActive = true;
+    if (upd?.state === 'FAILED') updatingFailed = true;
+  }
+
+  if (deletingActive) {
+    return (
+      <div className="mt-1">
+        <span className="inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+          Đang xóa MXH...
+        </span>
+      </div>
+    );
+  }
+  if (deletingFailed) {
+    return (
+      <div className="mt-1">
+        <span className="inline-block rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+          Lỗi xóa MXH
+        </span>
+      </div>
+    );
+  }
+  if (updatingActive) {
+    return (
+      <div className="mt-1">
+        <span className="inline-block rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+          Đang cập nhật MXH...
+        </span>
+      </div>
+    );
+  }
+  if (updatingFailed) {
+    return (
+      <div className="mt-1">
+        <span className="inline-block rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+          Lỗi cập nhật MXH
+        </span>
+      </div>
+    );
+  }
+  return null;
+}
+
 function PlatformErrors({ post }: { post: ContentPostView }) {
   const failed = post.platformPosts.filter((item) => item.errorMessage);
-  if (failed.length === 0) return null;
+  if (failed.length > 0) {
+    return (
+      <p className="mt-2 max-w-xl truncate rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+        {failed[0]?.errorCode}: {failed[0]?.errorMessage}
+      </p>
+    );
+  }
 
-  return (
-    <p className="mt-2 max-w-xl truncate rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
-      {failed[0]?.errorCode}: {failed[0]?.errorMessage}
-    </p>
-  );
+  for (const pp of post.platformPosts) {
+    const del = readPlatformSubState(pp.platformState, 'pendingDelete');
+    if (del?.state === 'FAILED' && del.errorMessage) {
+      return (
+        <p className="mt-2 max-w-xl truncate rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+          Xóa thất bại ({del.errorCode ?? 'ERROR'}): {del.errorMessage}
+        </p>
+      );
+    }
+    const upd = readPlatformSubState(pp.platformState, 'pendingUpdate');
+    if (upd?.state === 'FAILED' && upd.errorMessage) {
+      return (
+        <p className="mt-2 max-w-xl truncate rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+          Cập nhật thất bại ({upd.errorCode ?? 'ERROR'}): {upd.errorMessage}
+        </p>
+      );
+    }
+  }
+
+  return null;
 }
 
 function RowActions({
@@ -1386,11 +2504,13 @@ function StatusBadge({ status, muted = false }: { status: string; muted?: boolea
   const tone =
     status === 'PUBLISHED'
       ? 'bg-emerald-50 text-emerald-700'
-      : status === 'FAILED'
-        ? 'bg-red-50 text-red-700'
-        : status === 'PROCESSING' || status === 'QUEUED'
-          ? 'bg-amber-50 text-amber-700'
-          : 'bg-slate-100 text-slate-600';
+      : status === 'SCHEDULED'
+        ? 'bg-indigo-50 text-indigo-700'
+        : status === 'FAILED'
+          ? 'bg-red-50 text-red-700'
+          : status === 'PROCESSING' || status === 'QUEUED'
+            ? 'bg-amber-50 text-amber-700'
+            : 'bg-slate-100 text-slate-600';
 
   return (
     <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>
@@ -1412,7 +2532,7 @@ function PostStatusTab({
 }) {
   return (
     <button
-      className={`inline-flex h-11 items-center justify-between gap-2 border-b-2 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+      className={`inline-flex h-11 shrink-0 items-center justify-between gap-2 whitespace-nowrap border-b-2 px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
         active
           ? 'border-brand-600 text-brand-700'
           : 'border-transparent text-slate-600 hover:text-slate-950'
@@ -1430,6 +2550,19 @@ function PostStatusTab({
       </span>
     </button>
   );
+}
+
+function toLocalDateInputValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateInputLabel(value: string): string {
+  const parts = value.split('-');
+  if (parts.length !== 3) return value;
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
 }
 
 function postStatusLabel(status: string) {

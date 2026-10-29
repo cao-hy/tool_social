@@ -4,6 +4,7 @@ import type {
   YouTubeCommentThread,
   YouTubePlaylistItem,
   YouTubeTokenResponse,
+  YouTubeVideoResponse,
 } from './youtube.schemas';
 
 export function mapYouTubeToken(input: {
@@ -93,17 +94,41 @@ function mapYouTubeComment(input: {
   };
 }
 
-export function mapYouTubePlaylistItem(item: YouTubePlaylistItem): ExternalPost {
+export function mapYouTubePlaylistItem(
+  item: YouTubePlaylistItem,
+  video?: YouTubeVideoResponse,
+): ExternalPost {
   const snippet = item.snippet;
   const videoId = snippet?.resourceId?.videoId;
-  const publishedAt = snippet?.publishedAt ? new Date(snippet.publishedAt) : new Date();
+  const uploadedAt = snippet?.publishedAt ? new Date(snippet.publishedAt) : new Date();
+  const publishAtStr = video?.status?.publishAt;
+  const publishAtDate = publishAtStr ? new Date(publishAtStr) : undefined;
+  const rawPrivacy = video?.status?.privacyStatus?.toLowerCase();
+  const privacyStatus =
+    rawPrivacy === 'public' || rawPrivacy === 'private' || rawPrivacy === 'unlisted'
+      ? rawPrivacy
+      : undefined;
+
+  const isScheduled = Boolean(
+    publishAtDate &&
+    !Number.isNaN(publishAtDate.getTime()) &&
+    (privacyStatus === 'private' || publishAtDate.getTime() > Date.now()),
+  );
+
+  const scheduledAt = isScheduled ? publishAtDate : undefined;
+  const publishedAt =
+    !isScheduled && publishAtDate && !Number.isNaN(publishAtDate.getTime())
+      ? publishAtDate
+      : uploadedAt;
 
   return {
     externalPostId: videoId ?? item.id,
-    title: snippet?.title,
-    caption: snippet?.description,
+    title: video?.snippet?.title ?? snippet?.title,
+    caption: video?.snippet?.description ?? snippet?.description,
     permalink: videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined,
     publishedAt,
+    scheduledAt,
+    privacyStatus,
     media: [
       {
         url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : undefined,
@@ -115,7 +140,20 @@ export function mapYouTubePlaylistItem(item: YouTubePlaylistItem): ExternalPost 
         type: 'VIDEO',
       },
     ],
-    metrics: undefined, // Playlist API doesn't return metrics (likes, views) directly. Need Video API for that.
-    raw: item,
+    metrics: video?.statistics
+      ? {
+          views: video.statistics.viewCount ?? null,
+          likes: video.statistics.likeCount ?? null,
+          comments: video.statistics.commentCount ?? null,
+        }
+      : undefined,
+    raw: video
+      ? {
+          ...item,
+          status: video.status,
+          statistics: video.statistics,
+          processingDetails: video.processingDetails,
+        }
+      : item,
   };
 }

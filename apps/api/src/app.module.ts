@@ -6,6 +6,7 @@ import { InfrastructureModule } from './infrastructure/infrastructure.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { CommentsModule } from './modules/comments/comments.module';
+import { EventsModule } from './modules/events/events.module';
 import { HealthModule } from './modules/health/health.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { PlatformsModule } from './modules/platforms/platforms.module';
@@ -27,6 +28,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
 @Module({
   imports: [
     InfrastructureModule,
+    EventsModule,
     HealthModule,
     PlatformsModule,
     AuthModule,

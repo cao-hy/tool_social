@@ -82,10 +82,26 @@ const pinterestImageVariantSchema = z.object({
   url: z.string().url(),
 });
 
+const pinterestMetricRecordSchema = z.preprocess((val) => {
+  if (!val || typeof val !== 'object' || Array.isArray(val)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [key, rawValue] of Object.entries(val as Record<string, unknown>)) {
+    if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+      out[key] = rawValue;
+    } else if (typeof rawValue === 'string' && rawValue.trim() !== '') {
+      const parsed = Number(rawValue);
+      if (Number.isFinite(parsed)) {
+        out[key] = parsed;
+      }
+    }
+  }
+  return out;
+}, z.record(z.number()).optional());
+
 const pinterestPinMetricsSchema = z
   .object({
-    '90d': z.record(z.coerce.number()).optional(),
-    lifetime_metrics: z.record(z.coerce.number()).optional(),
+    '90d': pinterestMetricRecordSchema,
+    lifetime_metrics: pinterestMetricRecordSchema,
   })
   .passthrough();
 

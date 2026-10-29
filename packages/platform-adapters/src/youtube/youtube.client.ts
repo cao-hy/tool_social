@@ -268,6 +268,20 @@ export class YouTubeClient {
     return video;
   }
 
+  async getVideosByIds(accessToken: string, videoIds: string[]): Promise<YouTubeVideoResponse[]> {
+    if (videoIds.length === 0) return [];
+    const response = await this.get(
+      '/videos',
+      {
+        part: 'processingDetails,status,snippet,statistics',
+        id: videoIds.join(','),
+      },
+      youtubeVideosResponseSchema,
+      accessToken,
+    );
+    return response.items;
+  }
+
   queryAnalyticsReport(input: {
     accessToken: string;
     startDate: string;

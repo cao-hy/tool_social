@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, useRef, type ReactNode } from 'react';
@@ -10,6 +11,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
   Circle,
   Clock,
   FileText,
@@ -24,7 +26,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { CURRENT_PHASE, isAvailable, NAV_ITEMS } from '@/lib/navigation';
+import { isAvailable, NAV_ITEMS } from '@/lib/navigation';
 import { notificationsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -34,6 +36,11 @@ import {
   platformBadgeClass,
 } from '@/lib/notification-format';
 import type { NotificationView } from '@/lib/types';
+import {
+  prefetchWorkspaceSharedMeta,
+  prefetchWorkspaceTabData,
+  workspaceQueryKeys,
+} from '@/lib/workspace-queries';
 import { useToast } from './toast-provider';
 
 const ICONS: Record<string, React.ElementType> = {
@@ -50,16 +57,47 @@ const ICONS: Record<string, React.ElementType> = {
   '/settings': Settings,
 };
 const LOGO_PATH = '/logo_b6.png';
+
+function resolveCurrentPageLabel(pathname: string): string {
+  const exact = NAV_ITEMS.find((item) => item.href === pathname);
+  if (exact) return exact.label;
+  if (pathname.startsWith('/posts/') && pathname.endsWith('/edit')) {
+    return 'Chỉnh sửa bài viết';
+  }
+  if (pathname.startsWith('/posts/')) {
+    return 'Chi tiết bài viết';
+  }
+  return 'Tổng quan';
+}
 import { NotificationToasts } from './notification-toasts';
-import { JobActivityPanel } from './job-activity-panel';
+import {
+  JobActivityHeaderControl,
+  JobActivityProvider,
+  JobActivityTransientBar,
+} from './job-activity-panel';
 import { RoleBadge } from './role-badge';
 import { ProxyWidget } from './proxy-widget';
+import {
+  useWorkspaceEventSubscription,
+  WorkspaceEventsProvider,
+} from './workspace-events-provider';
 
 export function AppShell({ children }: { children: ReactNode }) {
   const auth = useAuth();
+  return (
+    <WorkspaceEventsProvider workspaceId={auth.activeWorkspaceId}>
+      <AppShellInner>{children}</AppShellInner>
+    </WorkspaceEventsProvider>
+  );
+}
+
+function AppShellInner({ children }: { children: ReactNode }) {
+  const auth = useAuth();
+  const queryClient = useQueryClient();
   const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
@@ -73,8 +111,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   const lastScrollY = useRef(0);
 
   useEffect(() => {
+    setPendingHref(null);
+  }, [pathname]);
+
+  useEffect(() => {
     if (!auth.loading && !auth.user) router.replace('/login');
   }, [auth.loading, auth.user, router]);
+
+  useEffect(() => {
+    if (!auth.activeWorkspaceId) return;
+    const workspaceId = auth.activeWorkspaceId;
+    const timer = window.setTimeout(() => {
+      prefetchWorkspaceSharedMeta(queryClient, workspaceId);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [auth.activeWorkspaceId, queryClient]);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -90,22 +141,71 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
+  const fetchUnreadCount = async (workspaceId: string) => {
+    try {
+      const res = await notificationsApi.list(workspaceId, {
+        unreadOnly: true,
+        limit: 99,
+      });
+      setUnreadCount(res.items.length);
+    } catch (e) {
+      console.error('Failed to fetch unread notifications', e);
+    }
+  };
+
+  useWorkspaceEventSubscription((event) => {
+    if (!auth.activeWorkspaceId) return;
+    const workspaceId = auth.activeWorkspaceId;
+
+    if (
+      event.type === 'notification.created' ||
+      event.type === 'notifications.changed' ||
+      event.type === 'stream.reconnected'
+    ) {
+      if (isNotificationsOpen) {
+        void loadNotifications({ silent: true });
+      } else {
+        void fetchUnreadCount(workspaceId);
+      }
+    }
+
+    if (
+      event.type === 'posts.changed' ||
+      event.type === 'comment.created' ||
+      event.type === 'comment.replied' ||
+      event.type === 'comments.synced'
+    ) {
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.postsRoot(workspaceId) });
+    }
+
+    if (event.type === 'metrics.synced') {
+      void queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.analyticsRoot(workspaceId),
+      });
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.postsRoot(workspaceId) });
+    }
+
+    if (event.type === 'accounts.changed') {
+      void queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.socialAccounts(workspaceId),
+      });
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.stores(workspaceId) });
+    }
+
+    if (event.type === 'media.updated') {
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.mediaRoot(workspaceId) });
+    }
+
+    if (event.type === 'stream.reconnected') {
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.all(workspaceId) });
+    }
+  });
+
   useEffect(() => {
     if (!auth.activeWorkspaceId) return;
     const workspaceId = auth.activeWorkspaceId;
-    async function fetchUnreadCount() {
-      try {
-        const res = await notificationsApi.list(workspaceId, {
-          unreadOnly: true,
-          limit: 99,
-        });
-        setUnreadCount(res.items.length);
-      } catch (e) {
-        console.error('Failed to fetch unread notifications', e);
-      }
-    }
-    fetchUnreadCount();
-    const interval = setInterval(fetchUnreadCount, 60000);
+    void fetchUnreadCount(workspaceId);
+    const interval = setInterval(() => void fetchUnreadCount(workspaceId), 60000);
     return () => clearInterval(interval);
   }, [auth.activeWorkspaceId]);
 
@@ -187,287 +287,357 @@ export function AppShell({ children }: { children: ReactNode }) {
   const canManageProxy =
     auth.activeWorkspace?.role === 'OWNER' || auth.activeWorkspace?.role === 'ADMIN';
   const navItems = NAV_ITEMS.filter(
-    (item) => item.href !== '/notifications' && item.href !== '/settings',
+    (item) =>
+      item.href !== '/notifications' && item.href !== '/settings' && item.href !== '/network',
   );
 
   return (
-    <div
-      className={`min-h-screen transition-all duration-300 lg:grid ${
-        isCollapsed ? 'lg:grid-cols-[80px_1fr]' : 'lg:grid-cols-[280px_1fr]'
-      }`}
-    >
-      <aside
-        className={`sticky top-0 flex h-screen flex-col border-r border-slate-200 bg-white py-5 ${
-          isCollapsed ? 'items-center px-3' : 'px-5'
+    <JobActivityProvider workspaceId={auth.activeWorkspaceId} isSidebarCollapsed={isCollapsed}>
+      <div
+        className={`min-h-screen transition-all duration-300 lg:grid ${
+          isCollapsed ? 'lg:grid-cols-[80px_1fr]' : 'lg:grid-cols-[280px_1fr]'
         }`}
       >
-        <div
-          className={`mb-6 shrink-0 ${
-            isCollapsed ? 'text-center' : 'flex items-center justify-between'
+        <aside
+          className={`sticky top-0 flex h-screen flex-col border-r border-slate-200 bg-white py-5 ${
+            isCollapsed ? 'items-center px-3' : 'px-5'
           }`}
         >
-          {!isCollapsed && (
-            <div className="min-w-0">
-              <img
-                src={LOGO_PATH}
-                alt="b6-teams logo"
-                className="h-9 w-36 object-cover object-center"
-              />
-              <p className="mt-2 text-sm font-semibold text-brand-600">SocialHub_B6</p>
-              <p className="mt-1 text-xs text-slate-500">Phase {CURRENT_PHASE}</p>
-            </div>
-          )}
-          {isCollapsed && (
-            <div className="mx-auto flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
-              <img src={LOGO_PATH} alt="b6-teams logo" className="h-10 w-10 object-cover" />
-            </div>
-          )}
-        </div>
-
-        {!isCollapsed ? (
-          <div className="relative mb-5 shrink-0">
-            <button
-              onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
-              className="w-full rounded-lg border border-slate-200 p-3 text-left hover:bg-slate-50 transition focus:outline-none focus:ring-2 focus:ring-brand-500"
-            >
-              <p className="truncate text-sm font-semibold text-slate-900">
-                {auth.activeWorkspace?.name ?? 'Chưa có workspace'}
-              </p>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                {auth.activeWorkspace ? <RoleBadge role={auth.activeWorkspace.role} /> : null}
-                <span className="truncate text-xs text-slate-500">{auth.user.email}</span>
+          <div
+            className={`mb-6 shrink-0 ${
+              isCollapsed ? 'text-center' : 'flex items-center justify-between'
+            }`}
+          >
+            {!isCollapsed && (
+              <div className="min-w-0">
+                <img
+                  src={LOGO_PATH}
+                  alt="b6-teams logo"
+                  className="h-9 w-36 object-cover object-center"
+                />
               </div>
-            </button>
+            )}
+            {isCollapsed && (
+              <div className="mx-auto flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
+                <img src={LOGO_PATH} alt="b6-teams logo" className="h-10 w-10 object-cover" />
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="relative mb-5 flex shrink-0 justify-center">
-            <button
-              onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 font-bold text-slate-600 hover:bg-slate-200 transition focus:outline-none focus:ring-2 focus:ring-brand-500"
-              title={auth.activeWorkspace?.name ?? 'Workspace'}
-            >
-              {auth.activeWorkspace?.name?.charAt(0).toUpperCase() ?? 'W'}
-            </button>
-          </div>
-        )}
 
-        {/* Unified Workspace & User Menu Popup */}
-        {isWorkspaceMenuOpen && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setIsWorkspaceMenuOpen(false)} />
-            <div
-              className={`absolute z-50 w-64 rounded-md border border-slate-200 bg-white p-2 shadow-lg ${
-                isCollapsed ? 'left-[70px] top-16' : 'left-5 top-28'
-              }`}
-            >
-              {auth.workspaces.length > 0 && (
-                <>
-                  <div className="mb-2 px-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                    CHỌN WORKSPACE
-                  </div>
-                  <div className="space-y-1">
-                    {auth.workspaces.map((workspace) => (
-                      <button
-                        key={workspace.id}
-                        onClick={() => {
-                          auth.setActiveWorkspaceId(workspace.id);
-                          setIsWorkspaceMenuOpen(false);
-                        }}
-                        className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
-                          workspace.id === auth.activeWorkspaceId
-                            ? 'bg-brand-50 text-brand-700 font-medium'
-                            : 'text-slate-700 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="truncate">{workspace.name}</div>
-                        <div className="text-xs opacity-70 capitalize">
-                          {workspace.role.toLowerCase()}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="my-2 border-t border-slate-100" />
-                </>
-              )}
-              <div className="px-1">
+          <div className="relative mb-5 shrink-0">
+            {!isCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
+                className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-sm font-bold text-brand-700 ring-1 ring-inset ring-brand-200/70">
+                  {auth.activeWorkspace?.name?.charAt(0).toUpperCase() ?? 'W'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-slate-900">
+                    {auth.activeWorkspace?.name ?? 'Chưa có workspace'}
+                  </p>
+                  <p className="truncate text-xs font-medium capitalize text-slate-500">
+                    {auth.activeWorkspace
+                      ? auth.activeWorkspace.role.toLowerCase()
+                      : 'Tài khoản cá nhân'}
+                  </p>
+                </div>
+                <ChevronsUpDown className="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            ) : (
+              <div className="flex justify-center">
                 <button
-                  onClick={() => {
-                    setIsWorkspaceMenuOpen(false);
-                    handleLogout();
-                  }}
-                  className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm text-red-600 hover:bg-red-50 transition"
+                  type="button"
+                  onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
+                  className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 font-bold text-brand-700 ring-1 ring-inset ring-brand-200/70 transition hover:bg-brand-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  title={auth.activeWorkspace?.name ?? 'Workspace'}
                 >
-                  <LogOut className="h-4 w-4" />
-                  Đăng xuất
+                  {auth.activeWorkspace?.name?.charAt(0).toUpperCase() ?? 'W'}
                 </button>
               </div>
-            </div>
-          </>
-        )}
+            )}
 
-        {canManageProxy && auth.activeWorkspaceId ? (
-          <div className="mb-5 shrink-0">
-            <ProxyWidget workspaceId={auth.activeWorkspaceId} isCollapsed={isCollapsed} />
-          </div>
-        ) : null}
-
-        <nav
-          className={`flex-1 overflow-y-auto space-y-1 ${isCollapsed ? 'scrollbar-hide' : 'pr-1 -mr-1'}`}
-        >
-          {navItems.map((item) => {
-            const available = isAvailable(item);
-            const active = pathname === item.href;
-            const Icon = ICONS[item.href] || LayoutDashboard;
-
-            if (!available) {
-              return (
-                <div
-                  key={item.href}
-                  className={`flex items-center rounded-md px-3 py-2 text-sm text-slate-400 ${isCollapsed ? 'justify-center' : ''}`}
-                  title={`Phase ${item.phase}: ${item.label}`}
-                >
-                  <Icon className={`h-5 w-5 ${isCollapsed ? '' : 'mr-3'}`} />
-                  {!isCollapsed && (
-                    <div>
-                      <span className="block font-medium">{item.label}</span>
-                      <span className="text-xs">{item.description}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            }
-
-            return (
-              <Link
-                key={item.href}
-                className={`flex items-center rounded-md px-3 py-2 text-sm transition relative ${
-                  active
-                    ? 'bg-brand-50 font-semibold text-brand-700'
-                    : 'text-slate-700 hover:bg-slate-100'
-                } ${isCollapsed ? 'justify-center' : ''}`}
-                href={item.href}
-                title={isCollapsed ? item.label : undefined}
-              >
-                <div className="relative">
-                  <Icon className={`h-5 w-5 ${isCollapsed ? '' : 'mr-3'}`} />
-                </div>
-                {!isCollapsed && (
-                  <div>
-                    <div>
-                      <span className="block">{item.label}</span>
-                      <span className="text-xs text-slate-500">{item.description}</span>
-                    </div>
-                  </div>
-                )}
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="mt-6 shrink-0 border-t border-slate-200 pt-4 pb-2">
-          <button
-            onClick={() => setIsCollapsed(!isCollapsed)}
-            className={`flex w-full items-center rounded-md p-2 text-sm text-slate-500 hover:bg-slate-100 transition ${isCollapsed ? 'justify-center' : ''}`}
-            title={isCollapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
-          >
-            {isCollapsed ? (
-              <ChevronRight className="h-5 w-5" />
-            ) : (
+            {/* Unified Workspace & User Menu Popup */}
+            {isWorkspaceMenuOpen && (
               <>
-                <ChevronLeft className="mr-3 h-5 w-5" />
-                <span className="font-medium">Thu gọn menu</span>
+                <div className="fixed inset-0 z-40" onClick={() => setIsWorkspaceMenuOpen(false)} />
+                <div
+                  className={`absolute z-50 w-68 rounded-lg border border-slate-200 bg-white p-2 shadow-xl ${
+                    isCollapsed
+                      ? 'left-full top-0 ml-3'
+                      : 'left-0 top-full mt-1.5 w-full min-w-[256px]'
+                  }`}
+                >
+                  <div className="mb-2 rounded-md bg-slate-50 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs font-semibold text-slate-900">
+                        {auth.user.name || 'Tài khoản đang đăng nhập'}
+                      </span>
+                      {auth.activeWorkspace ? <RoleBadge role={auth.activeWorkspace.role} /> : null}
+                    </div>
+                    <p className="mt-1 break-all text-xs text-slate-500">{auth.user.email}</p>
+                  </div>
+
+                  {auth.workspaces.length > 0 && (
+                    <>
+                      <div className="mb-1.5 px-2 pt-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                        Chọn Workspace
+                      </div>
+                      <div className="space-y-1">
+                        {auth.workspaces.map((workspace) => {
+                          const isSelected = workspace.id === auth.activeWorkspaceId;
+                          return (
+                            <button
+                              key={workspace.id}
+                              type="button"
+                              onClick={() => {
+                                auth.setActiveWorkspaceId(workspace.id);
+                                setIsWorkspaceMenuOpen(false);
+                              }}
+                              className={`flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm transition ${
+                                isSelected
+                                  ? 'bg-brand-50 font-medium text-brand-700'
+                                  : 'text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate">{workspace.name}</div>
+                                <div className="text-xs capitalize opacity-70">
+                                  {workspace.role.toLowerCase()}
+                                </div>
+                              </div>
+                              {isSelected ? (
+                                <Check className="h-4 w-4 shrink-0 text-brand-600" />
+                              ) : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="my-2 border-t border-slate-100" />
+                    </>
+                  )}
+                  <div className="px-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsWorkspaceMenuOpen(false);
+                        void handleLogout();
+                      }}
+                      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm font-medium text-red-600 transition hover:bg-red-50"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      Đăng xuất
+                    </button>
+                  </div>
+                </div>
               </>
             )}
-          </button>
-        </div>
-      </aside>
+          </div>
 
-      <main className="min-w-0 bg-slate-50">
-        <header
-          className={`sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 px-5 py-3 shadow-sm backdrop-blur sm:px-8 lg:px-10 transition-transform duration-300 ${isHeaderHidden ? '-translate-y-full' : 'translate-y-0'}`}
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {auth.activeWorkspace?.name ?? 'Workspace'}
-              </p>
-              <div className="mt-1 flex min-w-0 items-center gap-2">
-                <span className="truncate text-sm font-semibold text-slate-950">
-                  {auth.user.email}
-                </span>
-                {auth.activeWorkspace ? <RoleBadge role={auth.activeWorkspace.role} /> : null}
-              </div>
+          {canManageProxy && auth.activeWorkspaceId ? (
+            <div className="mb-5 shrink-0">
+              <ProxyWidget workspaceId={auth.activeWorkspaceId} isCollapsed={isCollapsed} />
             </div>
+          ) : null}
 
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <button
-                  aria-expanded={isNotificationsOpen}
-                  aria-label="Mở thông báo"
-                  className={`relative inline-flex h-10 w-10 items-center justify-center rounded-md border text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-100 ${
-                    isNotificationsOpen
+          <nav
+            className={`flex-1 overflow-y-auto space-y-1 ${isCollapsed ? 'scrollbar-hide' : 'pr-1 -mr-1'}`}
+          >
+            {navItems.map((item) => {
+              const available = isAvailable(item);
+              const activeHref = pendingHref ?? pathname;
+              const active = activeHref === item.href;
+              const Icon = ICONS[item.href] || LayoutDashboard;
+
+              if (!available) {
+                return (
+                  <div
+                    key={item.href}
+                    className={`flex items-center rounded-md px-3 py-2 text-sm text-slate-400 ${isCollapsed ? 'justify-center' : ''}`}
+                    title={`Phase ${item.phase}: ${item.label}`}
+                  >
+                    <Icon className={`h-5 w-5 ${isCollapsed ? '' : 'mr-3'}`} />
+                    {!isCollapsed && (
+                      <div>
+                        <span className="block font-medium">{item.label}</span>
+                        <span className="text-xs">{item.description}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              return (
+                <Link
+                  key={item.href}
+                  className={`flex items-center rounded-md px-3 py-2 text-sm transition relative ${
+                    active
+                      ? 'bg-brand-50 font-semibold text-brand-700'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  } ${isCollapsed ? 'justify-center' : ''}`}
+                  href={item.href}
+                  title={isCollapsed ? item.label : undefined}
+                  onMouseEnter={() => {
+                    router.prefetch(item.href);
+                    prefetchWorkspaceTabData(queryClient, auth.activeWorkspaceId, item.href);
+                  }}
+                  onFocus={() => {
+                    router.prefetch(item.href);
+                    prefetchWorkspaceTabData(queryClient, auth.activeWorkspaceId, item.href);
+                  }}
+                  onClick={(event) => {
+                    if (
+                      !event.defaultPrevented &&
+                      event.button === 0 &&
+                      !event.metaKey &&
+                      !event.ctrlKey &&
+                      !event.shiftKey &&
+                      !event.altKey &&
+                      pathname !== item.href
+                    ) {
+                      setPendingHref(item.href);
+                    }
+                  }}
+                >
+                  <div className="relative">
+                    <Icon className={`h-5 w-5 ${isCollapsed ? '' : 'mr-3'}`} />
+                  </div>
+                  {!isCollapsed && (
+                    <div>
+                      <div>
+                        <span className="block">{item.label}</span>
+                        <span className="text-xs text-slate-500">{item.description}</span>
+                      </div>
+                    </div>
+                  )}
+                </Link>
+              );
+            })}
+          </nav>
+
+          <div className="mt-6 shrink-0 border-t border-slate-200 pt-4 pb-2">
+            <button
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className={`flex w-full items-center rounded-md p-2 text-sm text-slate-500 hover:bg-slate-100 transition ${isCollapsed ? 'justify-center' : ''}`}
+              title={isCollapsed ? 'Mở rộng menu' : 'Thu gọn menu'}
+            >
+              {isCollapsed ? (
+                <ChevronRight className="h-5 w-5" />
+              ) : (
+                <>
+                  <ChevronLeft className="mr-3 h-5 w-5" />
+                  <span className="font-medium">Thu gọn menu</span>
+                </>
+              )}
+            </button>
+          </div>
+        </aside>
+
+        <main className="min-w-0 bg-slate-50">
+          <header
+            className={`sticky top-0 z-30 border-b border-slate-200/80 bg-white/95 px-5 py-2.5 shadow-sm backdrop-blur sm:px-8 lg:px-10 transition-transform duration-300 ${isHeaderHidden ? '-translate-y-full' : 'translate-y-0'}`}
+          >
+            <div className="flex items-center justify-between gap-3">
+              <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
+                <span className="truncate font-medium text-slate-500">
+                  {auth.activeWorkspace?.name ?? 'Workspace'}
+                </span>
+                <span className="select-none text-slate-300">/</span>
+                <span className="truncate font-semibold text-slate-900">
+                  {resolveCurrentPageLabel(pendingHref ?? pathname)}
+                </span>
+              </nav>
+
+              <div className="flex shrink-0 items-center gap-2">
+                <JobActivityHeaderControl onBeforeOpen={() => setIsNotificationsOpen(false)} />
+
+                <div className="relative">
+                  <button
+                    aria-expanded={isNotificationsOpen}
+                    aria-label="Mở thông báo"
+                    className={`relative inline-flex h-10 w-10 items-center justify-center rounded-md border text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-100 ${
+                      isNotificationsOpen
+                        ? 'border-brand-300 bg-brand-50 text-brand-700'
+                        : 'border-slate-300 bg-white'
+                    }`}
+                    title="Thông báo"
+                    type="button"
+                    onClick={() => setIsNotificationsOpen((current) => !current)}
+                  >
+                    <Bell className="h-4 w-4" />
+                    {unreadCount > 0 ? (
+                      <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm ring-2 ring-white">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </span>
+                    ) : null}
+                  </button>
+                  {isNotificationsOpen ? (
+                    <NotificationPopover
+                      items={notificationItems}
+                      loading={notificationsLoading}
+                      unreadCount={unreadCount}
+                      unreadOnly={notificationsUnreadOnly}
+                      updating={notificationsUpdating}
+                      error={notificationsError}
+                      onClose={() => setIsNotificationsOpen(false)}
+                      onRefresh={() => void loadNotifications()}
+                      onToggleUnreadOnly={() => setNotificationsUnreadOnly((current) => !current)}
+                      onMarkRead={(notificationId) => void markNotificationRead(notificationId)}
+                      onMarkAllRead={() => void markAllNotificationsRead()}
+                    />
+                  ) : null}
+                </div>
+
+                <Link
+                  aria-label="Cài đặt"
+                  className={`inline-flex h-10 w-10 items-center justify-center rounded-md border text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-100 ${
+                    (pendingHref ?? pathname) === '/settings'
                       ? 'border-brand-300 bg-brand-50 text-brand-700'
                       : 'border-slate-300 bg-white'
                   }`}
-                  title="Thông báo"
-                  type="button"
-                  onClick={() => setIsNotificationsOpen((current) => !current)}
+                  href="/settings"
+                  title="Cài đặt"
+                  onMouseEnter={() => {
+                    router.prefetch('/settings');
+                    prefetchWorkspaceTabData(queryClient, auth.activeWorkspaceId, '/settings');
+                  }}
+                  onFocus={() => {
+                    router.prefetch('/settings');
+                    prefetchWorkspaceTabData(queryClient, auth.activeWorkspaceId, '/settings');
+                  }}
+                  onClick={(event) => {
+                    if (
+                      !event.defaultPrevented &&
+                      event.button === 0 &&
+                      !event.metaKey &&
+                      !event.ctrlKey &&
+                      !event.shiftKey &&
+                      !event.altKey &&
+                      pathname !== '/settings'
+                    ) {
+                      setPendingHref('/settings');
+                    }
+                  }}
                 >
-                  <Bell className="h-4 w-4" />
-                  {unreadCount > 0 ? (
-                    <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm ring-2 ring-white">
-                      {unreadCount > 99 ? '99+' : unreadCount}
-                    </span>
-                  ) : null}
-                </button>
-                {isNotificationsOpen ? (
-                  <NotificationPopover
-                    items={notificationItems}
-                    loading={notificationsLoading}
-                    unreadCount={unreadCount}
-                    unreadOnly={notificationsUnreadOnly}
-                    updating={notificationsUpdating}
-                    error={notificationsError}
-                    onClose={() => setIsNotificationsOpen(false)}
-                    onRefresh={() => void loadNotifications()}
-                    onToggleUnreadOnly={() => setNotificationsUnreadOnly((current) => !current)}
-                    onMarkRead={(notificationId) => void markNotificationRead(notificationId)}
-                    onMarkAllRead={() => void markAllNotificationsRead()}
-                  />
-                ) : null}
+                  <Settings className="h-4 w-4" />
+                </Link>
               </div>
-
-              <Link
-                aria-label="Cài đặt"
-                className={`inline-flex h-10 w-10 items-center justify-center rounded-md border text-slate-700 transition hover:-translate-y-px hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-100 ${
-                  pathname === '/settings'
-                    ? 'border-brand-300 bg-brand-50 text-brand-700'
-                    : 'border-slate-300 bg-white'
-                }`}
-                href="/settings"
-                title="Cài đặt"
-              >
-                <Settings className="h-4 w-4" />
-              </Link>
-
-              <button
-                aria-label="Đăng xuất"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:-translate-y-px hover:border-red-200 hover:bg-red-50 hover:text-red-700 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-red-100"
-                title="Đăng xuất"
-                type="button"
-                onClick={() => void handleLogout()}
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
             </div>
-          </div>
-        </header>
+            {pendingHref && pendingHref !== pathname ? (
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-brand-100">
+                <div className="h-full w-1/3 animate-pulse bg-brand-600" />
+              </div>
+            ) : null}
+          </header>
 
-        <div className="px-5 py-6 sm:px-8 lg:px-10">{children}</div>
-      </main>
-      <JobActivityPanel workspaceId={auth.activeWorkspaceId} />
-      <NotificationToasts />
-    </div>
+          <div className="px-5 py-6 sm:px-8 lg:px-10">{children}</div>
+        </main>
+        <JobActivityTransientBar />
+        <NotificationToasts />
+      </div>
+    </JobActivityProvider>
   );
 }
 

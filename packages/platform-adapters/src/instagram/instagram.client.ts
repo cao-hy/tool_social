@@ -9,6 +9,7 @@ import {
 import {
   instagramProfileSchema,
   instagramPagesResponseSchema,
+  instagramDirectPageSchema,
   instagramTokenResponseSchema,
   instagramMediaContainerResponseSchema,
   instagramContainerStatusSchema,
@@ -19,6 +20,7 @@ import {
   instagramCommentsPageSchema,
   instagramInsightsResponseSchema,
   type InstagramPage,
+  type InstagramDirectPage,
   type InstagramProfile,
   type InstagramTokenResponse,
   type InstagramMedia,
@@ -100,6 +102,17 @@ export class InstagramGraphClient {
       instagramPagesResponseSchema,
     );
     return response.data;
+  }
+
+  async getDirectPageInstagramAccount(pageAccessToken: string): Promise<InstagramDirectPage> {
+    return this.get(
+      '/me',
+      {
+        fields: 'id,name,instagram_business_account{id}',
+        access_token: pageAccessToken,
+      },
+      instagramDirectPageSchema,
+    );
   }
 
   async getInstagramProfile(

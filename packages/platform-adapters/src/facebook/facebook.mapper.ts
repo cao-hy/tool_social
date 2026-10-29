@@ -14,9 +14,10 @@ import type {
   FacebookTokenResponse,
 } from './facebook.schemas';
 
-export function selectFacebookPage(pages: FacebookPage[]): FacebookPage {
-  const page = pages.find((item) => item.access_token);
-  if (!page) {
+export function selectFacebookPages(pages: FacebookPage[]): [FacebookPage, ...FacebookPage[]] {
+  const validPages = pages.filter((item) => item.access_token);
+  const first = validPages[0];
+  if (!first) {
     throw createPlatformError(
       'PERMISSION_DENIED',
       'FACEBOOK',
@@ -24,7 +25,11 @@ export function selectFacebookPage(pages: FacebookPage[]): FacebookPage {
       {},
     );
   }
-  return page;
+  return [first, ...validPages.slice(1)];
+}
+
+export function selectFacebookPage(pages: FacebookPage[]): FacebookPage {
+  return selectFacebookPages(pages)[0];
 }
 
 export function mapFacebookPageToken(input: {

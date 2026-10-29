@@ -27,6 +27,7 @@ import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
 @Injectable()
 export class AdapterRegistryFactory implements OnModuleDestroy {
   private readonly proxyRuntime: ProxyRuntimeService;
+  private offlineRegistry?: AdapterRegistry;
 
   constructor(
     @Inject(ENV) private readonly env: ApiEnv,
@@ -39,6 +40,22 @@ export class AdapterRegistryFactory implements OnModuleDestroy {
     );
     const policyService = new ProxyPolicyService(policyCache, this.env.PROXY_FINGERPRINT_SECRET);
     this.proxyRuntime = new ProxyRuntimeService(policyService, this.env.PROXY_FINGERPRINT_SECRET);
+  }
+
+  getProxyRuntime(): ProxyRuntimeService {
+    return this.proxyRuntime;
+  }
+
+  offlineAdapters(): AdapterRegistry {
+    if (!this.offlineRegistry) {
+      const offlineFetch: typeof fetch = async () => {
+        throw new ProxyConfigurationError(
+          'Offline adapter registry cannot execute outbound HTTP requests. Use forWorkspace() or withWorkspace().',
+        );
+      };
+      this.offlineRegistry = this.createInternal(offlineFetch);
+    }
+    return this.offlineRegistry;
   }
 
   async onModuleDestroy() {

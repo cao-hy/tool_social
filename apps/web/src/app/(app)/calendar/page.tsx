@@ -1,5 +1,6 @@
 'use client';
 
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -22,40 +23,49 @@ import {
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { InlineError, SecondaryButton } from '@/components/form-controls';
 import { useToast } from '@/components/toast-provider';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
 import { postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
-import type { ContentPostView } from '@/lib/types';
+import { workspaceQueryKeys } from '@/lib/workspace-queries';
 import { CalendarEvent } from '@/components/calendar/calendar-event';
 
 export default function CalendarPage() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const toast = useToast();
   const workspace = auth.activeWorkspace;
-  const [posts, setPosts] = useState<ContentPostView[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   const [currentDate, setCurrentDate] = useState(new Date());
 
-  async function loadPosts() {
+  const workspaceId = workspace?.id ?? '';
+
+  const calendarQuery = useQuery({
+    queryKey: workspaceQueryKeys.calendarPosts(workspaceId),
+    queryFn: () => postsApi.list(workspaceId, { limit: 100 }),
+    enabled: Boolean(workspaceId),
+  });
+
+  const posts = useMemo(() => calendarQuery.data?.items ?? [], [calendarQuery.data]);
+  const loading = calendarQuery.isPending;
+  const error = calendarQuery.error ? getErrorMessage(calendarQuery.error) : null;
+
+  async function loadPosts(options?: { silent?: boolean }) {
     if (!workspace) return;
-    setLoading(true);
-    setError(null);
-    try {
-      // In a real app, you might want to fetch by date range, but here we fetch the limit
-      const result = await postsApi.list(workspace.id, { limit: 100 });
-      setPosts(result.items);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError));
-    } finally {
-      setLoading(false);
+    if (options?.silent) {
+      await queryClient.invalidateQueries({
+        queryKey: workspaceQueryKeys.calendarPosts(workspace.id),
+      });
+      return;
     }
+    await calendarQuery.refetch();
   }
 
-  useEffect(() => {
-    void loadPosts();
-  }, [workspace]);
+  useWorkspaceEventSubscription((event) => {
+    if (!workspace) return;
+    if (event.type === 'posts.changed' || event.type === 'stream.reconnected') {
+      void loadPosts({ silent: true });
+    }
+  });
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

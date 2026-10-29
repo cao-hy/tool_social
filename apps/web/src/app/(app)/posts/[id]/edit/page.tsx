@@ -24,6 +24,7 @@ import {
 } from '@/components/media-preview';
 import { PlatformComposerPanels } from '@/components/platform-composer-panels';
 import { useToast } from '@/components/toast-provider';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
 import { mediaApi, postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
@@ -133,6 +134,28 @@ export default function EditPostPage() {
       .catch((loadError) => setError(getErrorMessage(loadError)))
       .finally(() => setLoading(false));
   }, [workspace, params.id]);
+
+  useWorkspaceEventSubscription((event) => {
+    if (!workspace) return;
+    if (event.type === 'media.updated' && event.mediaAssetId) {
+      const targetId = event.mediaAssetId;
+      if (coverMediaAssets.some((item) => item.id === targetId)) {
+        mediaApi
+          .get(workspace.id, targetId)
+          .then((refreshed) => {
+            setCoverMediaAssets((current) =>
+              current.map((item) => (item.id === targetId ? refreshed : item)),
+            );
+          })
+          .catch(() => undefined);
+      }
+    } else if (event.type === 'accounts.changed' || event.type === 'stream.reconnected') {
+      socialAccountsApi
+        .list(workspace.id)
+        .then((res) => setAccounts(res.items.filter((item) => item.status === 'CONNECTED')))
+        .catch(() => undefined);
+    }
+  });
 
   const groupedAccounts = useMemo(() => {
     const groups = new Map<Platform, SocialAccountView[]>();
@@ -281,8 +304,13 @@ export default function EditPostPage() {
         post.id,
         isPublishedEdit ? payload : { ...payload, socialAccountIds: selectedIds, mediaAssetIds },
       );
-      toast.success('Đã lưu thay đổi.');
-      router.push('/posts');
+      if (isPublishedEdit) {
+        toast.info('Đã đưa bản cập nhật vào hàng đợi đồng bộ lên mạng xã hội.');
+        router.push(`/posts/${post.id}`);
+      } else {
+        toast.success('Đã lưu thay đổi.');
+        router.push('/posts');
+      }
     } catch (saveError) {
       toast.error(getErrorMessage(saveError));
     } finally {

@@ -6,18 +6,33 @@ import type {
   InstagramTokenResponse,
 } from './instagram.schemas';
 
-export function selectInstagramAccount(pages: InstagramPage[]): {
+export interface SelectedInstagramAccount {
   page: InstagramPage;
   igAccountId: string;
-} {
-  // Ưu tiên page có instagram_business_account
-  const pageWithIg = pages.find((p) => p.instagram_business_account?.id);
-  if (!pageWithIg || !pageWithIg.instagram_business_account) {
+}
+
+export function selectInstagramAccounts(
+  pages: InstagramPage[],
+): [SelectedInstagramAccount, ...SelectedInstagramAccount[]] {
+  const results: SelectedInstagramAccount[] = [];
+  for (const page of pages) {
+    const igAccountId = page.instagram_business_account?.id;
+    if (igAccountId) {
+      results.push({ page, igAccountId });
+    }
+  }
+
+  const first = results[0];
+  if (!first) {
     throw new Error(
       'Không tìm thấy tài khoản Instagram Business nào được liên kết với các Facebook Page bạn quản lý.',
     );
   }
-  return { page: pageWithIg, igAccountId: pageWithIg.instagram_business_account.id };
+  return [first, ...results.slice(1)];
+}
+
+export function selectInstagramAccount(pages: InstagramPage[]): SelectedInstagramAccount {
+  return selectInstagramAccounts(pages)[0];
 }
 
 export function mapInstagramToken(input: {
@@ -34,7 +49,10 @@ export function mapInstagramToken(input: {
       : undefined,
     scopes: input.scopes,
     tokenType: input.userToken.token_type ?? 'bearer',
-    accountProfile: mapInstagramProfile(input.profile),
+    accountProfile: {
+      ...mapInstagramProfile(input.profile),
+      externalPageId: input.page.id,
+    },
   };
 }
 

@@ -30,7 +30,7 @@ import { InstagramGraphClient, type InstagramGraphClientConfig } from './instagr
 import {
   mapInstagramProfile,
   mapInstagramToken,
-  selectInstagramAccount,
+  selectInstagramAccounts,
   mapInstagramMedia,
 } from './instagram.mapper';
 import type { InstagramComment, InstagramContainerStatus } from './instagram.schemas';
@@ -121,16 +121,100 @@ export class InstagramAdapter implements SocialPlatformAdapter {
     const shortLivedUserToken = await this.client.exchangeCodeForUserToken(code, redirectUri);
     const userToken = await this.client.extendUserToken(shortLivedUserToken.access_token);
     const pages = await this.client.getManagedPages(userToken.access_token);
-    const { page, igAccountId } = selectInstagramAccount(pages);
-    const profile = await this.client.getInstagramProfile(igAccountId, page.access_token);
+    const matchedAccounts = selectInstagramAccounts(pages);
+    const first = matchedAccounts[0];
+    const profile = await this.client.getInstagramProfile(
+      first.igAccountId,
+      first.page.access_token,
+    );
 
-    return mapInstagramToken({
-      page,
-      igAccountId,
+    const primary = mapInstagramToken({
+      page: first.page,
+      igAccountId: first.igAccountId,
       profile,
       userToken,
       scopes: this.scopes,
     });
+
+    if (matchedAccounts.length > 1) {
+      const additional: TokenSet[] = [];
+      for (const item of matchedAccounts.slice(1)) {
+        const itemProfile = await this.client.getInstagramProfile(
+          item.igAccountId,
+          item.page.access_token,
+        );
+        additional.push(
+          mapInstagramToken({
+            page: item.page,
+            igAccountId: item.igAccountId,
+            profile: itemProfile,
+            userToken,
+            scopes: this.scopes,
+          }),
+        );
+      }
+      primary.additionalAccounts = additional;
+    }
+
+    return primary;
+  }
+
+  async discoverAccountsFromToken(accessToken: string): Promise<TokenSet[]> {
+    let tokenToUse = accessToken;
+    try {
+      const extended = await this.client.extendUserToken(accessToken);
+      if (extended.access_token) {
+        tokenToUse = extended.access_token;
+      }
+    } catch {
+      // Nếu appSecret chưa khớp hoặc token đã là Page/System-User token thì dùng trực tiếp
+    }
+
+    try {
+      const pages = await this.client.getManagedPages(tokenToUse);
+      const matched = pages.filter((p) => Boolean(p.instagram_business_account?.id));
+      if (matched.length > 0) {
+        const results: TokenSet[] = [];
+        for (const page of matched) {
+          const igAccountId = page.instagram_business_account?.id;
+          if (!igAccountId) continue;
+          const profile = await this.client.getInstagramProfile(igAccountId, page.access_token);
+          results.push(
+            mapInstagramToken({
+              page,
+              igAccountId,
+              profile,
+              userToken: { access_token: page.access_token, token_type: 'bearer' },
+              scopes: this.scopes,
+            }),
+          );
+        }
+        return results;
+      }
+    } catch {
+      // Nếu accessToken truyền vào là Page Access Token trực tiếp, fallback xuống kiểm tra /me
+    }
+
+    const directPage = await this.client.getDirectPageInstagramAccount(tokenToUse);
+    const igAccountId = directPage.instagram_business_account?.id;
+    if (!igAccountId) {
+      return [];
+    }
+    const profile = await this.client.getInstagramProfile(igAccountId, tokenToUse);
+    return [
+      mapInstagramToken({
+        page: {
+          id: directPage.id,
+          name: directPage.name ?? profile.username,
+          access_token: accessToken,
+          instagram_business_account: { id: igAccountId },
+        },
+        igAccountId,
+        profile,
+        userToken: { access_token: accessToken, token_type: 'bearer' },
+        scopes: this.scopes,
+      }),
+    ];
   }
 
   async getAccountProfile(ctx: AdapterContext): Promise<SocialAccountProfile> {

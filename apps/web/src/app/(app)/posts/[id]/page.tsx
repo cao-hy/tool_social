@@ -6,13 +6,15 @@ import {
   PLATFORM_LABELS,
   type Platform,
 } from '@socialhub/shared';
-import { Edit3, ExternalLink, Eye, RefreshCw, Trash2, X } from 'lucide-react';
+import { Edit3, ExternalLink, Eye, MessageSquare, RefreshCw, Trash2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { Fragment } from 'react';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { BulkPostCommentModal } from '@/components/bulk-post-comment-modal';
 import { DeletePostDialog } from '@/components/delete-post-dialog';
+import { PostCommentsDrawer } from '@/components/post-comments-drawer';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
 import {
   FallbackImage,
   mediaPreviewSources,
@@ -20,7 +22,7 @@ import {
 } from '@/components/media-preview';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
 import { useToast } from '@/components/toast-provider';
-import { commentsApi, platformsApi, postsApi } from '@/lib/api-client';
+import { ApiClientError, commentsApi, platformsApi, postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
@@ -71,24 +73,119 @@ export default function PostDetailPage() {
   const [platformAction, setPlatformAction] = useState<string | null>(null);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [expandedPlatformPostId, setExpandedPlatformPostId] = useState<string | null>(null);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [bulkCommentOpen, setBulkCommentOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const reloadTimerRef = useRef<number | null>(null);
+  const pendingInlineCommentIdsRef = useRef<Set<string>>(new Set());
+  const pendingAsyncDeleteRef = useRef(false);
 
-  async function loadPost() {
+  async function loadPost(options?: { silent?: boolean }) {
     if (!workspace) return;
-    setLoading(true);
+    if (!options?.silent) setLoading(true);
     setError(null);
     try {
-      setPost(await postsApi.get(workspace.id, params.id));
+      const loaded = await postsApi.get(workspace.id, params.id);
+      const hasActiveAsyncDelete = loaded.platformPosts.some((pp) => {
+        const sub = readPlatformSubState(pp.platformState, 'pendingDelete');
+        return sub?.state === 'QUEUED' || sub?.state === 'PROCESSING';
+      });
+      if (hasActiveAsyncDelete) {
+        pendingAsyncDeleteRef.current = true;
+      }
+      setPost(loaded);
     } catch (loadError) {
-      setError(getErrorMessage(loadError));
+      if (
+        options?.silent &&
+        pendingAsyncDeleteRef.current &&
+        loadError instanceof ApiClientError &&
+        loadError.status === 404
+      ) {
+        pendingAsyncDeleteRef.current = false;
+        toast.success('Đã xóa hoàn tất bài viết khỏi mạng xã hội và workspace.');
+        router.push('/posts');
+        return;
+      }
+      if (!options?.silent) {
+        setError(getErrorMessage(loadError));
+      }
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
+  }
+
+  function scheduleSilentReload(delayMs = 350) {
+    if (reloadTimerRef.current !== null) {
+      window.clearTimeout(reloadTimerRef.current);
+    }
+    reloadTimerRef.current = window.setTimeout(() => {
+      reloadTimerRef.current = null;
+      void loadPost({ silent: true });
+    }, delayMs);
   }
 
   useEffect(() => {
     void loadPost();
+    return () => {
+      if (reloadTimerRef.current !== null) {
+        window.clearTimeout(reloadTimerRef.current);
+      }
+    };
   }, [workspace, params.id]);
+
+  useWorkspaceEventSubscription((event) => {
+    const matchesContentPost = event.contentPostId === params.id;
+    const matchesPlatformPost = Boolean(
+      event.platformPostId && post?.platformPosts.some((pp) => pp.id === event.platformPostId),
+    );
+    const isRelevant =
+      matchesContentPost || matchesPlatformPost || (!event.contentPostId && !event.platformPostId);
+
+    if (event.type === 'comment.created' && matchesPlatformPost && event.platformPostId) {
+      const targetId = event.platformPostId;
+      setPost((current) =>
+        current
+          ? {
+              ...current,
+              platformPosts: current.platformPosts.map((pp) =>
+                pp.id === targetId ? { ...pp, commentCount: (pp.commentCount ?? 0) + 1 } : pp,
+              ),
+            }
+          : current,
+      );
+      if (event.jobId && pendingInlineCommentIdsRef.current.has(event.jobId)) {
+        pendingInlineCommentIdsRef.current.delete(event.jobId);
+        toast.success('Đã đăng bình luận chính chủ lên nền tảng thành công!');
+      }
+      scheduleSilentReload(700);
+      return;
+    }
+
+    if (
+      event.type === 'comment.create_failed' &&
+      event.jobId &&
+      pendingInlineCommentIdsRef.current.has(event.jobId)
+    ) {
+      pendingInlineCommentIdsRef.current.delete(event.jobId);
+    }
+
+    if (
+      event.type === 'stream.reconnected' ||
+      (isRelevant &&
+        (event.type === 'posts.changed' ||
+          event.type === 'comments.synced' ||
+          event.type === 'comment.replied' ||
+          event.type === 'metrics.synced' ||
+          event.type === 'job.active' ||
+          event.type === 'job.completed' ||
+          event.type === 'job.failed')) ||
+      (event.type === 'media.updated' &&
+        event.mediaAssetId &&
+        post?.media.some((m) => m.id === event.mediaAssetId))
+    ) {
+      scheduleSilentReload(300);
+    }
+  });
 
   useEffect(() => {
     if (!post) return;
@@ -166,6 +263,12 @@ export default function PostDetailPage() {
       if (result.deleted) {
         toast.success(message);
         router.push('/posts');
+      } else if (result.queued) {
+        if (!result.platformOnlyDelete) {
+          pendingAsyncDeleteRef.current = true;
+        }
+        await loadPost();
+        toast.info(message);
       } else {
         await loadPost();
         if (deleteResultFailures(result).length > 0) {
@@ -237,9 +340,16 @@ export default function PostDetailPage() {
     setPlatformAction(`comment:${platformPost.id}`);
     setError(null);
     try {
-      await commentsApi.createPlatformComment(workspace.id, platformPost.id, message);
+      const queued = await commentsApi.createPlatformComment(
+        workspace.id,
+        platformPost.id,
+        message,
+      );
+      if (queued.jobId) {
+        pendingInlineCommentIdsRef.current.add(queued.jobId);
+      }
       setCommentDrafts((current) => ({ ...current, [platformPost.id]: '' }));
-      toast.info(`${PLATFORM_LABELS[platformPost.platform]}: đã đưa comment vào queue.`);
+      toast.info(`${PLATFORM_LABELS[platformPost.platform]}: đang gửi bình luận ngầm...`);
     } catch (commentError) {
       toast.error(`${PLATFORM_LABELS[platformPost.platform]}: ${getErrorMessage(commentError)}`);
     } finally {
@@ -285,6 +395,21 @@ export default function PostDetailPage() {
           <IconButton disabled={loading} label="Làm mới" onClick={() => void loadPost()}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </IconButton>
+          {post &&
+          post.platformPosts.some(
+            (pp) => pp.status === 'PUBLISHED' && Boolean(pp.externalPostId),
+          ) ? (
+            <>
+              <SecondaryButton onClick={() => setBulkCommentOpen(true)} type="button">
+                <MessageSquare className="h-4 w-4 text-indigo-600" />
+                Comment gắn {'{link}'}
+              </SecondaryButton>
+              <SecondaryButton onClick={() => setCommentsOpen(true)} type="button">
+                <MessageSquare className="h-4 w-4 text-brand-600" />
+                Bình luận & Phản hồi
+              </SecondaryButton>
+            </>
+          ) : null}
           {post && canUpdate ? (
             <IconLink href={`/posts/${post.id}/edit`} label="Sửa">
               <Edit3 className="h-4 w-4" />
@@ -522,6 +647,27 @@ export default function PostDetailPage() {
         onConfirm={(input) => void deletePost(input)}
       />
       <MediaPreviewDialog asset={previewAsset} onClose={() => setPreviewAsset(null)} />
+      {workspace ? (
+        <>
+          <PostCommentsDrawer
+            capabilityByPlatform={capabilityByPlatform}
+            post={commentsOpen ? post : null}
+            workspaceId={workspace.id}
+            onClose={() => setCommentsOpen(false)}
+            onPostUpdated={() => void loadPost({ silent: true })}
+          />
+          {bulkCommentOpen && post ? (
+            <BulkPostCommentModal
+              capabilityByPlatform={capabilityByPlatform}
+              isExplicitSelection
+              posts={[post]}
+              workspaceId={workspace.id}
+              onClose={() => setBulkCommentOpen(false)}
+              onSubmitted={() => void loadPost({ silent: true })}
+            />
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -854,17 +1000,24 @@ function canPublishPostStatus(status: ContentPostView['status']) {
 }
 
 function deleteResultFailures(result: DeletePostResult) {
-  return result.remoteDeleteResults?.filter((item) => !item.deleted) ?? [];
+  return result.remoteDeleteResults?.filter((item) => !item.deleted && !item.queued) ?? [];
 }
 
 function deleteResultMessage(result: DeletePostResult) {
   const failures = deleteResultFailures(result);
+  const queuedTargetItems = result.remoteDeleteResults?.filter((item) => item.queued) ?? [];
   const deletedTargetItems = result.remoteDeleteResults?.filter((item) => item.deleted) ?? [];
   const deletedTargetsText = summarizeDeleteTargets(deletedTargetItems);
   if (result.deleted) {
     return deletedTargetsText
       ? `Đã xóa bài viết khỏi workspace và xóa trên ${deletedTargetsText}.`
       : 'Đã xóa bài viết khỏi workspace.';
+  }
+  if (result.queued || queuedTargetItems.length > 0) {
+    const queuedTargetsText = summarizeDeleteTargets(queuedTargetItems);
+    return queuedTargetsText
+      ? `Đã đưa yêu cầu xóa trên ${queuedTargetsText} vào hàng đợi chạy ngầm.`
+      : 'Đã đưa yêu cầu xóa bài viết vào hàng đợi chạy ngầm.';
   }
   if (failures.length > 0) {
     const failedReasons = failures.map(formatDeleteFailure).slice(0, 2).join('; ');
@@ -1098,7 +1251,45 @@ function MediaPreviewDialog({
   );
 }
 
+function readPlatformSubState(
+  state: PlatformPostView['platformState'],
+  key: 'pendingDelete' | 'pendingUpdate',
+): { state?: string; errorCode?: string; errorMessage?: string } | null {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return null;
+  const sub = (state as Record<string, unknown>)[key];
+  if (!sub || typeof sub !== 'object' || Array.isArray(sub)) return null;
+  return sub as { state?: string; errorCode?: string; errorMessage?: string };
+}
+
 function PlatformPostNote({ platformPost }: { platformPost: PlatformPostView }) {
+  const pendingDelete = readPlatformSubState(platformPost.platformState, 'pendingDelete');
+  if (pendingDelete?.state === 'QUEUED' || pendingDelete?.state === 'PROCESSING') {
+    return <span className="font-medium text-amber-700">Đang xóa trên nền tảng...</span>;
+  }
+  if (pendingDelete?.state === 'FAILED') {
+    return (
+      <span className="text-red-700">
+        Xóa thất bại ({pendingDelete.errorCode ?? 'ERROR'}):{' '}
+        {pendingDelete.errorMessage ?? 'Không thể xóa trên nền tảng.'}
+      </span>
+    );
+  }
+
+  const pendingUpdate = readPlatformSubState(platformPost.platformState, 'pendingUpdate');
+  if (pendingUpdate?.state === 'QUEUED' || pendingUpdate?.state === 'PROCESSING') {
+    return (
+      <span className="font-medium text-sky-700">Đang đồng bộ bản cập nhật lên nền tảng...</span>
+    );
+  }
+  if (pendingUpdate?.state === 'FAILED') {
+    return (
+      <span className="text-red-700">
+        Cập nhật thất bại ({pendingUpdate.errorCode ?? 'ERROR'}):{' '}
+        {pendingUpdate.errorMessage ?? 'Không thể cập nhật bài trên nền tảng.'}
+      </span>
+    );
+  }
+
   const metrics = extractPlatformPostMetrics(platformPost);
   const thumbnailSummary = platformThumbnailSummary(platformPost);
   if (platformPost.errorMessage) {
@@ -1447,7 +1638,7 @@ function DetailText({
 
 function PublishNetworkPanel({ state }: { state: PlatformPostView['platformState'] }) {
   const network = getPublishNetworkProof(state);
-  if (!network) return null;
+  if (!network || (!network.proxyEnabled && !network.proxyActive)) return null;
   const location = [network.city, network.country].filter(Boolean).join(', ') || '-';
   const tone =
     network.proxyActive && network.countryLockSatisfied !== false && network.checkOk !== false

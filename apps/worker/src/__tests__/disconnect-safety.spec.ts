@@ -161,7 +161,6 @@ describe('Worker disconnect safety (P1-13)', () => {
       socialAccount: {
         findUnique: vi
           .fn()
-          .mockResolvedValueOnce({ status: 'CONNECTED', disconnectGeneration: 1 })
           .mockResolvedValueOnce({ status: 'DISCONNECTING', disconnectGeneration: 2 }),
       },
       outboundOperation: {
@@ -311,9 +310,15 @@ describe('Worker disconnect safety (P1-13)', () => {
           operationId: 'operation_1',
         },
       }),
-    ).rejects.toThrow('ACCOUNT_DISCONNECTED');
+    ).resolves.toEqual({ created: false, reason: 'account_disconnected' });
 
     expect(createComment).not.toHaveBeenCalled();
+    expect(prisma.outboundOperation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'operation_1', state: 'DISPATCHING' }),
+        data: expect.objectContaining({ state: 'PREPARED' }),
+      }),
+    );
   });
 
   it('reply refuses provider mutation when disconnect begins before dispatch', async () => {
@@ -400,8 +405,14 @@ describe('Worker disconnect safety (P1-13)', () => {
           operationId: 'operation_1',
         },
       }),
-    ).rejects.toThrow('ACCOUNT_DISCONNECTED');
+    ).resolves.toEqual({ replied: false, reason: 'account_disconnected' });
 
     expect(replyToComment).not.toHaveBeenCalled();
+    expect(prisma.outboundOperation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'operation_1', state: 'DISPATCHING' }),
+        data: expect.objectContaining({ state: 'PREPARED' }),
+      }),
+    );
   });
 });

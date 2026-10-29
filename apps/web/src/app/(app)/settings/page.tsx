@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { hasPermission } from '@socialhub/shared';
 import {
   ChevronLeft,
@@ -23,10 +24,12 @@ import {
 } from '@/components/form-controls';
 import { FallbackImage, mediaThumbnailSources } from '@/components/media-preview';
 import { useToast } from '@/components/toast-provider';
-import { authApi, mediaApi, systemApi, workspaceApi } from '@/lib/api-client';
+import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
+import { authApi, mediaApi, workspaceApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import type { AuditLogItem, MediaLibraryItem, StorageUsageView } from '@/lib/types';
+import { workspaceQueryKeys, type MediaListCacheParams } from '@/lib/workspace-queries';
 
 const TIMEZONE_OPTIONS = [
   { value: 'UTC', label: 'UTC - Giờ chuẩn' },
@@ -49,40 +52,40 @@ const TIMEZONE_OPTIONS = [
   { value: 'Australia/Sydney', label: 'Australia/Sydney - Úc' },
 ] as const;
 
-const DEFAULT_TIMEZONE_BY_COUNTRY: Record<string, string> = {
-  AU: 'Australia/Sydney',
-  CA: 'America/Toronto',
-  DE: 'Europe/Berlin',
-  FR: 'Europe/Paris',
-  GB: 'Europe/London',
-  ID: 'Asia/Jakarta',
-  JP: 'Asia/Tokyo',
-  KR: 'Asia/Seoul',
-  MY: 'Asia/Kuala_Lumpur',
-  PH: 'Asia/Manila',
-  SG: 'Asia/Singapore',
-  TH: 'Asia/Bangkok',
-  US: 'America/New_York',
-  VN: 'Asia/Ho_Chi_Minh',
-};
-
 export default function SettingsPage() {
   const auth = useAuth();
+  const queryClient = useQueryClient();
   const toast = useToast();
   const workspace = auth.activeWorkspace;
+  const initialMediaCache = workspace
+    ? queryClient.getQueryData<{ items: MediaLibraryItem[]; nextCursor: string | null }>(
+        workspaceQueryKeys.mediaList(workspace.id, { limit: 20 }),
+      )
+    : undefined;
   const [name, setName] = useState('');
   const [timezone, setTimezone] = useState('UTC');
-  const [timezoneSuggestion, setTimezoneSuggestion] = useState<{
-    countryCode: string;
-    source: 'proxy' | 'current';
-  } | null>(null);
-  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
-  const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(() =>
+    workspace
+      ? (queryClient.getQueryData<{ items: AuditLogItem[] }>(
+          workspaceQueryKeys.auditLogs(workspace.id),
+        )?.items ?? [])
+      : [],
+  );
+  const [storageUsage, setStorageUsage] = useState<StorageUsageView | null>(() =>
+    workspace
+      ? (queryClient.getQueryData<StorageUsageView>(workspaceQueryKeys.mediaUsage(workspace.id)) ??
+        null)
+      : null,
+  );
   const [selectedMediaIds, setSelectedMediaIds] = useState<Set<string>>(new Set());
   const [deletingMultiple, setDeletingMultiple] = useState(false);
-  const [mediaItems, setMediaItems] = useState<MediaLibraryItem[]>([]);
+  const [mediaItems, setMediaItems] = useState<MediaLibraryItem[]>(
+    () => initialMediaCache?.items ?? [],
+  );
   const [mediaCursorStack, setMediaCursorStack] = useState<string[]>([]);
-  const [mediaNextCursor, setMediaNextCursor] = useState<string | null>(null);
+  const [mediaNextCursor, setMediaNextCursor] = useState<string | null>(
+    () => initialMediaCache?.nextCursor ?? null,
+  );
   const [mediaQuery, setMediaQuery] = useState('');
   const [mediaType, setMediaType] = useState('');
   const [mediaStatus, setMediaStatus] = useState('');
@@ -116,77 +119,76 @@ export default function SettingsPage() {
   const canViewAudit = workspace ? hasPermission(workspace.role, 'audit_log:view') : false;
   const canRenameMedia = canUploadMedia;
 
-  useEffect(() => {
-    if (!workspace || !canUpdate) {
-      setTimezoneSuggestion(null);
-      return;
-    }
-
-    let cancelled = false;
-    systemApi
-      .getNetworkStatus(workspace.id)
-      .then((status) => {
-        if (cancelled) return;
-        const proxyCountry = normalizeCountryCode(
-          status.proxyConfig.enabled ? status.proxyConfig.countryLock : null,
-        );
-        const currentCountry = normalizeCountryCode(status.countryCode);
-        const countryCode = proxyCountry ?? currentCountry;
-        setTimezoneSuggestion(
-          countryCode
-            ? {
-                countryCode,
-                source: proxyCountry ? 'proxy' : 'current',
-              }
-            : null,
-        );
-      })
-      .catch(() => {
-        if (!cancelled) setTimezoneSuggestion(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [canUpdate, workspace]);
-
-  const loadAuditLogs = useCallback(async () => {
-    if (!workspace || !canViewAudit) return;
-    setAuditLoading(true);
-    setError(null);
-    try {
-      const result = await workspaceApi.auditLogs(workspace.id);
-      setAuditLogs(result.items);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError));
-    } finally {
-      setAuditLoading(false);
-    }
-  }, [canViewAudit, workspace]);
+  const loadAuditLogs = useCallback(
+    async (options?: { useCache?: boolean }) => {
+      if (!workspace || !canViewAudit) return;
+      const key = workspaceQueryKeys.auditLogs(workspace.id);
+      const cached = queryClient.getQueryData<{ items: AuditLogItem[] }>(key);
+      if (cached) setAuditLogs(cached.items);
+      if (!cached) setAuditLoading(true);
+      setError(null);
+      try {
+        const result = await queryClient.fetchQuery({
+          queryKey: key,
+          queryFn: () => workspaceApi.auditLogs(workspace.id),
+          staleTime: options?.useCache ? 60_000 : 0,
+        });
+        setAuditLogs(result.items);
+      } catch (loadError) {
+        setError(getErrorMessage(loadError));
+      } finally {
+        setAuditLoading(false);
+      }
+    },
+    [canViewAudit, queryClient, workspace],
+  );
 
   useEffect(() => {
     if (!workspace || !canViewAudit) {
       setAuditLogs([]);
       return;
     }
+    if (activeSection !== 'audit') return;
 
-    void loadAuditLogs();
-  }, [canViewAudit, loadAuditLogs, workspace]);
+    void loadAuditLogs({ useCache: true });
+  }, [activeSection, canViewAudit, loadAuditLogs, workspace]);
 
   const loadStoragePage = useCallback(
-    async (cursor?: string) => {
+    async (cursor?: string, options?: { useCache?: boolean }) => {
       if (!workspace || !canViewMedia) return;
-      setMediaLoading(true);
+      const mediaParams: MediaListCacheParams = {
+        limit: 20,
+        cursor,
+        q: mediaQuery || undefined,
+        type: mediaType || undefined,
+        status: mediaStatus || undefined,
+      };
+      const usageKey = workspaceQueryKeys.mediaUsage(workspace.id);
+      const listKey = workspaceQueryKeys.mediaList(workspace.id, mediaParams);
+      const cachedUsage = queryClient.getQueryData<StorageUsageView>(usageKey);
+      const cachedList = queryClient.getQueryData<{
+        items: MediaLibraryItem[];
+        nextCursor: string | null;
+      }>(listKey);
+      if (cachedUsage) setStorageUsage(cachedUsage);
+      if (cachedList) {
+        setMediaItems(cachedList.items);
+        setMediaNextCursor(cachedList.nextCursor);
+      }
+      if (!cachedUsage || !cachedList) setMediaLoading(true);
       setError(null);
       try {
+        const staleTime = options?.useCache ? 60_000 : 0;
         const [usage, response] = await Promise.all([
-          mediaApi.usage(workspace.id),
-          mediaApi.list(workspace.id, {
-            limit: 20,
-            cursor,
-            q: mediaQuery || undefined,
-            type: mediaType || undefined,
-            status: mediaStatus || undefined,
+          queryClient.fetchQuery({
+            queryKey: usageKey,
+            queryFn: () => mediaApi.usage(workspace.id),
+            staleTime,
+          }),
+          queryClient.fetchQuery({
+            queryKey: listKey,
+            queryFn: () => mediaApi.list(workspace.id, mediaParams),
+            staleTime,
           }),
         ]);
         setStorageUsage(usage);
@@ -199,7 +201,7 @@ export default function SettingsPage() {
         setMediaLoading(false);
       }
     },
-    [canViewMedia, mediaQuery, mediaStatus, mediaType, workspace],
+    [canViewMedia, mediaQuery, mediaStatus, mediaType, queryClient, workspace],
   );
 
   useEffect(() => {
@@ -210,8 +212,26 @@ export default function SettingsPage() {
       setMediaNextCursor(null);
       return;
     }
-    void loadStoragePage();
+    void loadStoragePage(undefined, { useCache: true });
   }, [canViewMedia, loadStoragePage]);
+
+  useWorkspaceEventSubscription((event) => {
+    if (event.type === 'media.updated' || event.type === 'stream.reconnected') {
+      if (canViewMedia) {
+        void loadStoragePage(mediaCursorStack.at(-1));
+      }
+    }
+    if (
+      canViewAudit &&
+      activeSection === 'audit' &&
+      (event.type === 'posts.changed' ||
+        event.type === 'accounts.changed' ||
+        event.type === 'network.changed' ||
+        event.type === 'stream.reconnected')
+    ) {
+      void loadAuditLogs();
+    }
+  });
 
   useEffect(() => {
     if (activeSection === 'storage' && !canViewMedia && canViewAudit) {
@@ -416,18 +436,6 @@ export default function SettingsPage() {
     void loadStoragePage(mediaNextCursor);
   }
 
-  function applySuggestedTimezone() {
-    const suggestedTimezone = timezoneSuggestion
-      ? DEFAULT_TIMEZONE_BY_COUNTRY[timezoneSuggestion.countryCode]
-      : null;
-    if (!suggestedTimezone) {
-      toast.warning('Vị trí mạng hiện tại chưa có timezone mặc định để áp dụng.');
-      return;
-    }
-    setTimezone(suggestedTimezone);
-    toast.info(`Đã chọn timezone ${suggestedTimezone}. Bấm Lưu để áp dụng.`);
-  }
-
   async function handleDeleteMultiple() {
     if (!workspace || selectedMediaIds.size === 0) return;
     const confirmed = window.confirm(
@@ -501,29 +509,6 @@ export default function SettingsPage() {
                 </option>
               ))}
             </SelectInput>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <SecondaryButton
-                disabled={
-                  !canUpdate ||
-                  !timezoneSuggestion ||
-                  !DEFAULT_TIMEZONE_BY_COUNTRY[timezoneSuggestion.countryCode]
-                }
-                type="button"
-                onClick={applySuggestedTimezone}
-              >
-                Dùng theo vị trí mạng
-              </SecondaryButton>
-              <span className="text-xs text-slate-500">
-                {timezoneSuggestion
-                  ? `${
-                      timezoneSuggestion.source === 'proxy' ? 'Proxy target' : 'Vị trí hiện tại'
-                    } ${timezoneSuggestion.countryCode} -> ${
-                      DEFAULT_TIMEZONE_BY_COUNTRY[timezoneSuggestion.countryCode] ??
-                      'chưa map timezone'
-                    }`
-                  : 'Chưa xác minh được vị trí mạng'}
-              </span>
-            </div>
           </div>
           <PrimaryButton busy={submitting} className="self-end" disabled={!canUpdate} type="submit">
             Lưu
@@ -1113,11 +1098,6 @@ function formatAuditAction(action: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
     .join(' ');
-}
-
-function normalizeCountryCode(value: string | null | undefined): string | null {
-  const normalized = value?.trim().toUpperCase();
-  return normalized && /^[A-Z]{2}$/.test(normalized) ? normalized : null;
 }
 
 function formatBytes(bytes: number): string {

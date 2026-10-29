@@ -202,8 +202,11 @@ enum SocialEgressPolicy {
 
 enum OutboundOperationType {
   PUBLISH_POST
+  UPDATE_POST
+  DELETE_POST
   CREATE_COMMENT
   REPLY_COMMENT
+  MODERATE_COMMENT
 }
 
 enum OutboundOperationState {
@@ -335,6 +338,7 @@ model Workspace {
 
   members               WorkspaceMember[]
   invitations           WorkspaceInvitation[]
+  stores                Store[]
   socialAccounts        SocialAccount[]
   contentPosts          ContentPost[]
   platformPosts         PlatformPost[]
@@ -421,11 +425,36 @@ model WorkspaceInvitation {
   @@index([email])
 }
 
+// ============================================================ STORES (BRANDS)
+
+model Store {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  slug        String
+  description String? @db.Text
+  color       String?
+  avatarUrl   String?
+  isDefault   Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  socialAccounts SocialAccount[]
+  contentPosts   ContentPost[]
+
+  @@unique([workspaceId, slug])
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
 // ============================================================ SOCIAL ACCOUNTS
 
 model SocialAccount {
   id          String   @id @default(cuid())
   workspaceId String
+  storeId     String?
   platform    Platform
 
   /// ID tài khoản/user trên nền tảng.
@@ -451,6 +480,7 @@ model SocialAccount {
   deletedAt DateTime?
 
   workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  store                Store?                @relation(fields: [storeId], references: [id], onDelete: SetNull)
   token                SocialToken?
   platformPosts        PlatformPost[]
   comments             Comment[]
@@ -461,6 +491,7 @@ model SocialAccount {
   // để hỗ trợ trường hợp externalPageId là NULL
   // @@unique([workspaceId, platform, externalAccountId, externalPageId])
   @@index([workspaceId])
+  @@index([workspaceId, storeId])
   @@index([workspaceId, platform])
   @@index([status])
   @@index([deletedAt])
@@ -543,6 +574,7 @@ model MediaAsset {
 model ContentPost {
   id          String     @id @default(cuid())
   workspaceId String
+  storeId     String?
   status      PostStatus @default(DRAFT)
 
   /// Nội dung mặc định, dùng cho nền tảng nào không có caption riêng.
@@ -566,12 +598,14 @@ model ContentPost {
   deletedAt DateTime?
 
   workspace     Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  store         Store?             @relation(fields: [storeId], references: [id], onDelete: SetNull)
   createdBy     User               @relation("PostCreator", fields: [createdById], references: [id])
   platformPosts PlatformPost[]
   media         ContentPostMedia[]
   schedule      PostSchedule?
 
   @@index([workspaceId])
+  @@index([workspaceId, storeId])
   @@index([workspaceId, status])
   @@index([workspaceId, scheduledAt])
   @@index([workspaceId, createdAt])

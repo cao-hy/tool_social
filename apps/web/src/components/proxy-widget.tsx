@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Globe, ShieldCheck } from 'lucide-react';
+import { Globe, RefreshCw, ShieldCheck } from 'lucide-react';
 import { systemApi } from '@/lib/api-client';
 import { getErrorMessage } from '@/lib/errors';
 import { PrimaryButton } from './form-controls';
+import { useWorkspaceEventSubscription } from './workspace-events-provider';
 
 type NetworkStatus = {
   ip: string;
@@ -69,10 +70,14 @@ export function ProxyWidget({
   const [proxyUrlDraft, setProxyUrlDraft] = useState('');
   const [clearProxyUrl, setClearProxyUrl] = useState(false);
 
-  async function fetchStatus(options: { syncDraft?: boolean; silent?: boolean } = {}) {
+  async function fetchStatus(
+    options: { syncDraft?: boolean; silent?: boolean; forceRefresh?: boolean } = {},
+  ) {
     if (!options.silent) setLoading(true);
     try {
-      const data = await systemApi.getNetworkStatus(workspaceId);
+      const data = await systemApi.getNetworkStatus(workspaceId, {
+        refresh: options.forceRefresh,
+      });
       setStatus(data);
       setLoadError(null);
       if (options.syncDraft) {
@@ -88,10 +93,13 @@ export function ProxyWidget({
 
   useEffect(() => {
     void fetchStatus({ syncDraft: true });
-    // Refresh periodically just in case
-    const interval = setInterval(() => void fetchStatus({ silent: true }), 30000);
-    return () => clearInterval(interval);
   }, [workspaceId]);
+
+  useWorkspaceEventSubscription((event) => {
+    if (event.type === 'network.changed' || event.type === 'stream.reconnected') {
+      void fetchStatus({ silent: true, syncDraft: !open });
+    }
+  });
 
   function toggleOpen() {
     setOpen((previous) => {
@@ -129,7 +137,7 @@ export function ProxyWidget({
         configVersion: configVer,
         version: configVer,
       });
-      await fetchStatus({ syncDraft: true });
+      await fetchStatus({ syncDraft: true, forceRefresh: true });
       setOpen(false);
     } catch (e) {
       setLoadError(getErrorMessage(e));
@@ -175,6 +183,9 @@ export function ProxyWidget({
   const isProxyEnabled = status.proxyConfig.enabled;
   const isProxyActive = status.proxyActive;
   const isProxyMissing = isProxyEnabled && !status.proxyAvailable;
+  const isCountryMismatch =
+    isProxyEnabled && status.proxyAvailable && status.checkOk && !status.countryLockSatisfied;
+  const isProxyConnectionError = isProxyEnabled && status.proxyAvailable && !status.checkOk;
   const isNetworkUnknown = !status.checkOk;
   const isActiveLocked = isProxyEnabled && !!status.proxyConfig.countryLock;
   const savedCountryLock = status.proxyConfig.countryLock;
@@ -191,16 +202,22 @@ export function ProxyWidget({
     ? isNetworkUnknown
       ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
       : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-    : isProxyMissing
-      ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
-      : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100';
+    : isCountryMismatch || isProxyConnectionError
+      ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+      : isProxyMissing
+        ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+        : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100';
   const statusLabel = isProxyActive
     ? isNetworkUnknown
       ? 'PROXY CHƯA XÁC MINH'
       : 'PROXY'
-    : isProxyMissing
-      ? 'THIẾU PROXY URL'
-      : 'DIRECT';
+    : isCountryMismatch
+      ? 'SAI QUỐC GIA'
+      : isProxyConnectionError
+        ? 'LỖI PROXY'
+        : isProxyMissing
+          ? 'THIẾU PROXY URL'
+          : 'DIRECT';
 
   return (
     <div className="relative">
@@ -238,7 +255,19 @@ export function ProxyWidget({
         <div
           className={`absolute z-50 rounded-md border border-slate-200 bg-white p-3 shadow-lg ${isCollapsed ? 'left-full top-0 ml-4 w-72 mt-0' : 'top-full mt-1 w-full'}`}
         >
-          <div className="mb-2 text-xs font-semibold text-slate-500">THÔNG TIN MẠNG</div>
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-semibold text-slate-500">THÔNG TIN MẠNG</span>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void fetchStatus({ forceRefresh: true })}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+              title="Kiểm tra lại địa chỉ IP"
+            >
+              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+              Kiểm tra lại
+            </button>
+          </div>
           {loadError ? (
             <div className="mb-3 rounded-md bg-rose-50 px-2 py-2 text-xs text-rose-700">
               {loadError}
@@ -297,10 +326,10 @@ export function ProxyWidget({
               />
               <span className="mt-1 block text-xs text-slate-500">
                 {status.proxyConfig.source === 'WORKSPACE'
-                  ? `Đang dùng proxy riêng của workspace: ${status.proxyConfig.proxyUrlMasked}`
+                  ? `Đang lưu proxy riêng của workspace: ${status.proxyConfig.proxyUrlMasked}`
                   : status.proxyConfig.source === 'ENV'
-                    ? 'Workspace chưa có proxy riêng; bật proxy sẽ dùng proxy fallback trong env.'
-                    : 'Chưa cấu hình proxy cho workspace này.'}
+                    ? 'Đang dùng proxy cấu hình sẵn trong môi trường (.env).'
+                    : 'Nhập HTTP/HTTPS Proxy URL để ẩn IP máy chủ khi gọi API mạng xã hội.'}
               </span>
             </label>
             {status.proxyConfig.source === 'WORKSPACE' ? (
@@ -373,17 +402,17 @@ export function ProxyWidget({
           <div className="mt-3 text-xs text-slate-500">
             {isProxyMissing
               ? 'Đã bật proxy nhưng chưa có Proxy URL. Các request tới mạng xã hội sẽ bị chặn để tránh lộ IP máy chủ.'
-              : isNetworkUnknown
-                ? `Không kiểm tra được IP hiện tại${
-                    status.checkError ? `: ${status.checkError}` : ''
-                  }. Nếu đang bật khóa quốc gia, worker sẽ từ chối publish khi không xác minh được IP.`
-                : isActiveLocked && !status.countryLockSatisfied
-                  ? `IP hiện tại không khớp khóa ${status.proxyConfig.countryLock}; worker sẽ từ chối đăng bài.`
-                  : isActiveLocked
-                    ? `Nếu IP bị đổi khỏi ${status.proxyConfig.countryLock}, hệ thống sẽ từ chối đăng bài.`
-                    : savedCountryLock
-                      ? `Proxy đang tắt; ${savedCountryLock} chỉ là target đã lưu cho lần bật sau.`
-                      : 'Khóa quốc gia chỉ kiểm tra IP hiện tại; nó không tự đổi vị trí proxy.'}
+              : isCountryMismatch
+                ? `IP của Proxy đang ở ${status.countryCode ?? 'quốc gia khác'}, không khớp khóa ${status.proxyConfig.countryLock}. Hệ thống đang chặn request để bảo vệ tài khoản.`
+                : isProxyConnectionError
+                  ? `Không kết nối được tới Proxy${status.checkError ? `: ${status.checkError}` : ''}. Kiểm tra lại host/port/user/pass của Proxy.`
+                  : isNetworkUnknown
+                    ? `Không kiểm tra được IP hiện tại${status.checkError ? `: ${status.checkError}` : ''}.`
+                    : isActiveLocked
+                      ? `Đang khóa quốc gia ${status.proxyConfig.countryLock}. Nếu IP bị đổi sang nước khác, hệ thống sẽ tự động chặn đăng bài.`
+                      : status.proxyConfig.enabled
+                        ? 'Proxy đang hoạt động. Bạn có thể bật thêm Khóa quốc gia để chặn nếu Proxy nhảy sai vùng.'
+                        : 'Đang dùng kết nối trực tiếp (Direct IP của máy chủ).'}
           </div>
           {isNetworkUnknown && (status.checkErrors?.length ?? 0) > 0 ? (
             <div className="mt-2 rounded-md bg-amber-50 px-2 py-2 text-[11px] text-amber-800">

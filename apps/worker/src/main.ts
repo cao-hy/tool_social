@@ -8,13 +8,16 @@ import {
   TIKTOK_OAUTH_SCOPES,
 } from '@socialhub/platform-adapters';
 import { Keyring } from '@socialhub/security';
+import { buildJobId, buildQueueJobOptions } from '@socialhub/shared';
 import { RedisTokenRefreshLock } from '@socialhub/social-runtime';
 
 import Redis from 'ioredis';
 import { logger } from './logger';
 import { WorkerAdapterFactory } from './utils/adapter-factory';
 import { createCreatePlatformCommentProcessor } from './processors/create-platform-comment';
+import { createDeletePlatformPostProcessor } from './processors/delete-platform-post';
 import { createGenerateThumbnailProcessor } from './processors/generate-thumbnail';
+import { createModeratePlatformCommentProcessor } from './processors/moderate-platform-comment';
 import { createProcessWebhookProcessor } from './processors/process-webhook';
 import { createPublishPostProcessor } from './processors/publish-post';
 import {
@@ -28,6 +31,7 @@ import { createSyncExternalPostsProcessor } from './processors/sync-external-pos
 import { createSyncPostMetricsProcessor } from './processors/sync-post-metrics';
 import { createCleanupUnusedMediaProcessor } from './processors/cleanup-unused-media';
 import { createReconciliationProcessor } from './processors/reconciliation.processor';
+import { createUpdatePlatformPostProcessor } from './processors/update-platform-post';
 import { setWorkerTokenRefreshLock } from './processors/token-refresh';
 import { JobLockService } from './queue/job-lock';
 import { QueueRegistry } from './queue/queue-registry';
@@ -70,10 +74,25 @@ async function main(): Promise<void> {
   const storage = createStorageClient(env);
 
   const reconcileQueue = registry.getQueue('reconcile-platform-post');
+  const cleanupMediaQueue = registry.getQueue('cleanup-unused-media');
 
   registry.registerWorker(
     'publish-post',
     createPublishPostProcessor({ prisma, keyring, adapterFactory, locks, storage, reconcileQueue }),
+  );
+  registry.registerWorker(
+    'update-platform-post',
+    createUpdatePlatformPostProcessor({ prisma, keyring, adapterFactory, locks }),
+  );
+  registry.registerWorker(
+    'delete-platform-post',
+    createDeletePlatformPostProcessor({
+      prisma,
+      keyring,
+      adapterFactory,
+      locks,
+      cleanupMediaQueue,
+    }),
   );
   registry.registerWorker(
     'retry-failed-post',
@@ -106,6 +125,10 @@ async function main(): Promise<void> {
     createReplyPlatformCommentProcessor({ prisma, keyring, adapterFactory }),
   );
   registry.registerWorker(
+    'moderate-platform-comment',
+    createModeratePlatformCommentProcessor({ prisma, keyring, adapterFactory, locks }),
+  );
+  registry.registerWorker(
     'sync-external-posts',
     createSyncExternalPostsProcessor({ prisma, keyring, adapterFactory }),
   );
@@ -123,6 +146,15 @@ async function main(): Promise<void> {
       prisma,
       adapters: defaultAdapters,
       syncCommentsQueue: registry.getQueue('sync-comments'),
+      onJobQueued: (info) => {
+        registry.publishRealtime(info.workspaceId, {
+          type: 'job.queued',
+          queueName: 'sync-comments',
+          jobId: info.jobId,
+          socialAccountId: info.socialAccountId,
+          platformPostId: info.platformPostId,
+        });
+      },
     }),
   );
   registry.registerWorker(
@@ -137,6 +169,22 @@ async function main(): Promise<void> {
     prisma,
     publishQueue: registry.getQueue('publish-post'),
     enabled: env.SCHEDULER_ENABLED,
+    onJobQueued: (info) => {
+      registry.publishRealtime(info.workspaceId, {
+        type: 'job.queued',
+        queueName: 'publish-post',
+        jobId: info.jobId,
+        contentPostId: info.contentPostId,
+        platformPostId: info.platformPostId,
+      });
+      registry.publishRealtime(info.workspaceId, {
+        type: 'posts.changed',
+        queueName: 'publish-post',
+        jobId: info.jobId,
+        contentPostId: info.contentPostId,
+        platformPostId: info.platformPostId,
+      });
+    },
   });
   const outboxDispatcher = startOutboxDispatcher({
     prisma,
@@ -144,6 +192,10 @@ async function main(): Promise<void> {
     batchSize: env.OUTBOX_BATCH_SIZE,
     pollIntervalMs: env.OUTBOX_POLL_INTERVAL_MS,
     claimLeaseMs: env.OUTBOX_CLAIM_LEASE_MS,
+  });
+  const mediaCleanupScheduler = startMediaCleanupScheduler({
+    cleanupMediaQueue,
+    enabled: env.SCHEDULER_ENABLED,
   });
   logger.info({ workers: registry.getWorkerCount() }, 'Đã đăng ký processor Phase 3');
 
@@ -156,6 +208,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Nhận tín hiệu dừng');
     scheduledPostScanner.stop();
     outboxDispatcher.stop();
+    mediaCleanupScheduler.stop();
     healthServer.close();
     await registry.shutdown(30_000);
     await adapterFactory.close();
@@ -182,6 +235,38 @@ async function main(): Promise<void> {
   });
 
   logger.info({ port: env.WORKER_HEALTH_PORT }, 'Worker sẵn sàng');
+}
+
+function startMediaCleanupScheduler(input: {
+  cleanupMediaQueue: ReturnType<QueueRegistry['getQueue']>;
+  enabled: boolean;
+}): { stop: () => void } {
+  if (!input.enabled) {
+    return { stop: () => undefined };
+  }
+
+  const enqueue = () => {
+    const bucketKey = `periodic-${Math.floor(Date.now() / (6 * 60 * 60 * 1000))}`;
+    const payload = { olderThanDays: 1, triggerKey: bucketKey };
+    const jobId = buildJobId('cleanup-unused-media', payload);
+    void input.cleanupMediaQueue
+      .add('cleanup-unused-media', payload, buildQueueJobOptions('cleanup-unused-media', jobId))
+      .catch((err: unknown) => {
+        logger.warn({ err }, 'Không thể enqueue lịch định kỳ cleanup-unused-media');
+      });
+  };
+
+  const initialTimer = setTimeout(enqueue, 30_000);
+  const intervalTimer = setInterval(enqueue, 6 * 60 * 60 * 1000);
+  initialTimer.unref();
+  intervalTimer.unref();
+
+  return {
+    stop: () => {
+      clearTimeout(initialTimer);
+      clearInterval(intervalTimer);
+    },
+  };
 }
 
 function createStorageClient(env: WorkerEnv): {

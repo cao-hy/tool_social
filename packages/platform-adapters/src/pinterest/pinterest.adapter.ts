@@ -306,7 +306,7 @@ export class PinterestAdapter implements SocialPlatformAdapter {
 
   async getPosts(ctx: AdapterContext, params: SyncPostsParams): Promise<ExternalPostPage> {
     const limit = clampPageSize(params.limit);
-    const response = ctx.externalPageId
+    let response = ctx.externalPageId
       ? await this.client.listPinsOnBoard({
           accessToken: ctx.accessToken,
           boardId: ctx.externalPageId,
@@ -320,6 +320,15 @@ export class PinterestAdapter implements SocialPlatformAdapter {
           pageSize: limit,
           pinMetrics: true,
         });
+
+    if (ctx.externalPageId && !params.cursor && response.items.length === 0) {
+      response = await this.client.listPins({
+        accessToken: ctx.accessToken,
+        bookmark: params.cursor,
+        pageSize: limit,
+        pinMetrics: true,
+      });
+    }
 
     return {
       items: response.items.map(mapPinterestPin),

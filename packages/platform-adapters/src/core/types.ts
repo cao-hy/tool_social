@@ -62,6 +62,12 @@ export interface TokenSet {
    * Service dùng field này để tránh gọi thêm mạng trong OAuth callback.
    */
   accountProfile?: SocialAccountProfile;
+  /**
+   * Khi một lần ủy quyền trả về nhiều tài khoản con (ví dụ: nhiều Facebook Pages
+   * hoặc nhiều Instagram Business Accounts từ `/me/accounts`), các tài khoản từ thứ 2
+   * trở đi được đính kèm tại đây để `SocialAccountsService` đồng bộ đầy đủ.
+   */
+  additionalAccounts?: TokenSet[];
 }
 
 export interface AuthUrlInput {
@@ -244,6 +250,8 @@ export interface ExternalPost {
   description?: string;
   permalink?: string;
   publishedAt: Date;
+  scheduledAt?: Date;
+  privacyStatus?: 'public' | 'private' | 'unlisted';
   updatedAt?: Date;
   media: ExternalPostMedia[];
   metrics?: Record<string, number | null>;

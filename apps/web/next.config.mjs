@@ -58,6 +58,7 @@ const csp = [
   isDevelopment ? `media-src ${devMediaSources}` : "media-src 'self' blob: https:",
   isDevelopment ? "font-src 'self' data: https:" : "font-src 'self' data: https:",
   isDevelopment ? `connect-src ${devConnectSources}` : "connect-src 'self' https:",
+  "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://www.facebook.com https://www.instagram.com https://www.tiktok.com https://assets.pinterest.com",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -84,6 +85,9 @@ const nextConfig = {
     NEXT_PUBLIC_API_BASE_URL: apiBaseUrl,
   },
   transpilePackages: ['@socialhub/shared'],
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'date-fns', 'recharts', '@socialhub/shared'],
+  },
   devIndicators: {
     buildActivityPosition: 'top-right',
   },

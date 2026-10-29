@@ -32,7 +32,7 @@ import {
   mapFacebookComment,
   mapFacebookPageProfile,
   mapFacebookPageToken,
-  selectFacebookPage,
+  selectFacebookPages,
   mapFacebookPagePost,
 } from './facebook.mapper';
 import { validateFacebookPost } from './facebook.validator';
@@ -79,13 +79,63 @@ export class FacebookPagesAdapter implements SocialPlatformAdapter {
     const shortLivedUserToken = await this.client.exchangeCodeForUserToken(code, redirectUri);
     const userToken = await this.client.extendUserToken(shortLivedUserToken.access_token);
     const pages = await this.client.getManagedPages(userToken.access_token);
-    const page = selectFacebookPage(pages);
-
-    return mapFacebookPageToken({
-      page,
+    const validPages = selectFacebookPages(pages);
+    const primary = mapFacebookPageToken({
+      page: validPages[0],
       userToken,
       scopes: this.scopes,
     });
+
+    if (validPages.length > 1) {
+      primary.additionalAccounts = validPages.slice(1).map((page) =>
+        mapFacebookPageToken({
+          page,
+          userToken,
+          scopes: this.scopes,
+        }),
+      );
+    }
+
+    return primary;
+  }
+
+  async discoverAccountsFromToken(accessToken: string): Promise<TokenSet[]> {
+    let tokenToUse = accessToken;
+    try {
+      const extended = await this.client.extendUserToken(accessToken);
+      if (extended.access_token) {
+        tokenToUse = extended.access_token;
+      }
+    } catch {
+      // Nếu appSecret chưa khớp hoặc token đã là Page/System-User token thì dùng trực tiếp
+    }
+
+    try {
+      const pages = await this.client.getManagedPages(tokenToUse);
+      const validPages = pages.filter((item) => item.access_token);
+      if (validPages.length > 0) {
+        return validPages.map((page) =>
+          mapFacebookPageToken({
+            page,
+            userToken: { access_token: page.access_token, token_type: 'Bearer' },
+            scopes: this.scopes,
+          }),
+        );
+      }
+    } catch {
+      // Nếu token truyền vào là Page Access Token trực tiếp (không có edge /me/accounts),
+      // fallback xuống đọc trực tiếp /me của Page bên dưới.
+    }
+
+    const profile = await this.client.getPageProfile(tokenToUse);
+    return [
+      {
+        accessToken: tokenToUse,
+        scopes: this.scopes,
+        tokenType: 'Bearer',
+        accountProfile: mapFacebookPageProfile(profile),
+      },
+    ];
   }
 
   async getAccountProfile(ctx: AdapterContext): Promise<SocialAccountProfile> {

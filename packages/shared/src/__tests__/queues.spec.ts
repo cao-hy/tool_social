@@ -10,8 +10,8 @@ describe('cấu hình queue', () => {
     }
   });
 
-  it('đủ 14 queue theo roadmap hiện tại (bao gồm reconcile-platform-post)', () => {
-    expect(QUEUE_NAMES).toHaveLength(14);
+  it('đủ 17 queue theo kiến trúc async toàn diện (bao gồm update/delete post & moderate comment)', () => {
+    expect(QUEUE_NAMES).toHaveLength(17);
   });
 
   it('publish-post có nhiều lần thử nhất — đây là job người dùng nhìn thấy', () => {
@@ -68,6 +68,40 @@ describe('buildJobId — transport dedupe key', () => {
     });
     expect(create).toContain('outbound-op_comment_1');
     expect(reply).toContain('outbound-op_reply_1');
+  });
+
+  it('update/delete post & moderate comment job IDs are operation-scoped', () => {
+    const updatePost = buildJobId('update-platform-post', {
+      platformPostId: 'pp_1',
+      contentPostId: 'cp_1',
+      workspaceId: 'ws_1',
+      requestedByUserId: 'user_1',
+      correlationId: 'req_u1',
+      operationId: 'op_upd_1',
+      desired: { caption: 'updated' },
+    });
+    const deletePost = buildJobId('delete-platform-post', {
+      platformPostId: 'pp_1',
+      contentPostId: 'cp_1',
+      workspaceId: 'ws_1',
+      requestedByUserId: 'user_1',
+      correlationId: 'req_d1',
+      operationId: 'op_del_1',
+      deleteContentPostWhenDone: true,
+    });
+    const moderateComment = buildJobId('moderate-platform-comment', {
+      commentId: 'c_1',
+      platformPostId: 'pp_1',
+      socialAccountId: 'sa_1',
+      workspaceId: 'ws_1',
+      requestedByUserId: 'user_1',
+      action: 'DELETE_COMMENT',
+      correlationId: 'req_m1',
+      operationId: 'op_mod_1',
+    });
+    expect(updatePost).toContain('outbound-op_upd_1');
+    expect(deletePost).toContain('outbound-op_del_1');
+    expect(moderateComment).toContain('outbound-op_mod_1');
   });
 
   it('reconciliation job IDs prefer operation identity over legacy attempt identity', () => {

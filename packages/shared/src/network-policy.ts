@@ -40,8 +40,8 @@ export const NETWORK_PROXY_POLICIES: readonly NetworkProxyPolicyItem[] = [
     category: 'SYSTEM_CHECK',
     proxyMode: 'PROXY',
     owner: '@socialhub/worker',
-    operations: ['Force re-attest IP ngay sát trước khi gọi API publish'],
-    source: 'PreparedProxyContext.reAttest()',
+    operations: ['Xác thực attestation IP qua proxy trước khi gọi API publish'],
+    source: 'ProxyRuntimeService.prepareWorkspace()',
     note: 'Dùng cùng proxy-aware dispatcher với social adapter để ghi nhận proof gần nhất trước publish.',
   },
   {

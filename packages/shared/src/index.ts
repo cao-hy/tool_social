@@ -12,3 +12,4 @@ export * from './network-policy';
 export * from './social-text';
 export * from './remote-request-error';
 export * from './publish-network-proof';
+export * from './realtime-events';

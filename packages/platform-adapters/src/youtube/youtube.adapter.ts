@@ -237,8 +237,27 @@ export class YouTubeAdapter implements SocialPlatformAdapter {
       maxResults: params.limit,
     });
 
+    const videoIds = response.items
+      .map((item) => item.snippet?.resourceId?.videoId)
+      .filter((id): id is string => Boolean(id));
+    let videoById = new Map<string, Awaited<ReturnType<typeof this.client.getVideoStatus>>>();
+    if (videoIds.length > 0) {
+      try {
+        const videos = await this.client.getVideosByIds(ctx.accessToken, videoIds);
+        videoById = new Map(videos.map((v) => [v.id, v]));
+      } catch (error) {
+        ctx.logger?.warn('YouTube getVideosByIds enrichment failed during getPosts', {
+          correlationId: ctx.correlationId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     return {
-      items: response.items.map(mapYouTubePlaylistItem),
+      items: response.items.map((item) => {
+        const videoId = item.snippet?.resourceId?.videoId;
+        return mapYouTubePlaylistItem(item, videoId ? videoById.get(videoId) : undefined);
+      }),
       nextCursor: response.nextPageToken ?? undefined,
       hasMore: Boolean(response.nextPageToken),
     };

@@ -6,7 +6,12 @@ import {
   getVerificationProgress,
   POLICY_EXCLUDED_ACTIONS,
 } from '../capabilities/matrix';
-import { countVerified, findStaleCapabilities, isSupported } from '../core/capability-table';
+import {
+  countVerified,
+  createUnverifiedCapabilityTable,
+  findStaleCapabilities,
+  isSupported,
+} from '../core/capability-table';
 
 describe('CAPABILITY_MATRIX — trạng thái xác minh (prompt §7, §21)', () => {
   const verifiedCounts = {
@@ -178,7 +183,7 @@ describe('hành động bị chính sách dự án loại trừ (prompt §3)', (
 
 describe('findStaleCapabilities — kết luận cũ phải được rà lại', () => {
   it('bảng chưa xác minh thì không có gì cũ', () => {
-    expect(findStaleCapabilities(CAPABILITY_MATRIX.TIKTOK)).toEqual([]);
+    expect(findStaleCapabilities(createUnverifiedCapabilityTable('TIKTOK'))).toEqual([]);
   });
 
   it('phát hiện capability xác minh quá 90 ngày', () => {

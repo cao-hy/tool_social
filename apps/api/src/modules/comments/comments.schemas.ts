@@ -13,10 +13,13 @@ export const listCommentsQuerySchema = z.object({
   status: commentStatusSchema.optional(),
   platform: platformSchema.optional(),
   socialAccountId: z.string().min(1).optional(),
+  storeId: z.string().trim().min(1).optional(),
+  contentPostId: z.string().min(1).optional(),
+  platformPostId: z.string().min(1).optional(),
   assignedToId: z.string().min(1).optional(),
   tagId: z.string().min(1).optional(),
   q: optionalText,
-  limit: z.coerce.number().int().min(1).max(100).default(30),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
 export const updateCommentStatusSchema = z.object({

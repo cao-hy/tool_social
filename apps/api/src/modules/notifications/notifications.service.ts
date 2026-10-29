@@ -1,10 +1,14 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { EventsService } from '../events/events.service';
 import type { ListNotificationsQuery } from './notifications.schemas';
 
 @Injectable()
 export class NotificationsService {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional() @Inject(EventsService) private readonly events?: EventsService,
+  ) {}
 
   async list(workspaceId: string, userId: string, query: ListNotificationsQuery) {
     const items = await this.prisma.notification.findMany({
@@ -26,6 +30,13 @@ export class NotificationsService {
       data: { readAt: new Date() },
     });
 
+    if (notification.count > 0) {
+      this.events?.publish(workspaceId, {
+        type: 'notifications.changed',
+        notificationId,
+      });
+    }
+
     return { updated: notification.count };
   }
 
@@ -34,6 +45,12 @@ export class NotificationsService {
       where: { workspaceId, userId, readAt: null },
       data: { readAt: new Date() },
     });
+
+    if (notification.count > 0) {
+      this.events?.publish(workspaceId, {
+        type: 'notifications.changed',
+      });
+    }
 
     return { updated: notification.count };
   }

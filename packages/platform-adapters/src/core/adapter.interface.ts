@@ -54,6 +54,7 @@ export interface SocialPlatformAdapter {
 
   buildAuthorizationUrl(input: AuthUrlInput): string;
   exchangeCodeForToken(code: string, redirectUri: string, codeVerifier?: string): Promise<TokenSet>;
+  discoverAccountsFromToken?(accessToken: string): Promise<TokenSet[]>;
   refreshToken?(refreshToken: string): Promise<TokenSet>;
   revokeToken?(token: string): Promise<void>;
 

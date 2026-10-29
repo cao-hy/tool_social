@@ -1,7 +1,14 @@
+import dynamic from 'next/dynamic';
 import { TrendingUp, TrendingDown, Minus, BarChart2 } from 'lucide-react';
 import type { AnalyticsDashboardView } from '@/lib/types';
-import { DashboardCharts } from '../charts';
 import { formatMetricNumber } from '@/lib/post-metrics';
+
+const DashboardCharts = dynamic(() => import('../charts').then((m) => m.DashboardCharts), {
+  ssr: false,
+  loading: () => (
+    <div className="h-72 animate-pulse rounded-xl border border-slate-200 bg-slate-50" />
+  ),
+});
 
 export function OverviewTab({ dashboard }: { dashboard: AnalyticsDashboardView }) {
   // Compute totals for KPI

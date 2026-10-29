@@ -1,9 +1,11 @@
 import {
+  Body,
   Controller,
   Delete,
   Get,
   Inject,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -11,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
 import { platformSchema, type Platform } from '@socialhub/shared';
 import { isPlatformError } from '@socialhub/platform-adapters';
 import { scrubSecretsFromText } from '@socialhub/security';
@@ -20,12 +23,64 @@ import { RequirePermissions } from '../../common/decorators/require-permissions.
 import { AuthGuard } from '../../common/guards/auth.guard';
 import { RoleGuard } from '../../common/guards/role.guard';
 import { WorkspaceGuard } from '../../common/guards/workspace.guard';
+import { zodPipe } from '../../common/pipes/zod-validation.pipe';
 import { getRequestId } from '../../common/request-context';
 import { logger } from '../../common/logger';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { SocialAccountsService } from './social-accounts.service';
 
 const OAUTH_CALLBACK_TIMEOUT_MS = 20_000;
+
+const syncMetaTokenSchema = z.object({
+  accessToken: z.string().trim().optional(),
+  platforms: z
+    .array(z.enum(['FACEBOOK', 'INSTAGRAM']))
+    .min(1)
+    .optional(),
+  pageIds: z.array(z.string().trim().min(1)).optional(),
+  storeId: z.string().trim().min(1).nullable().optional(),
+  autoCreateStores: z.boolean().optional(),
+});
+type SyncMetaTokenInput = z.infer<typeof syncMetaTokenSchema>;
+
+const completeOAuthCallbackUrlSchema = z.object({
+  callbackUrl: z.string().trim().min(1, 'Vui lòng dán đường link Callback OAuth.'),
+});
+type CompleteOAuthCallbackUrlInput = z.infer<typeof completeOAuthCallbackUrlSchema>;
+
+const syncPostsByFilterSchema = z.object({
+  storeId: z.string().trim().min(1).optional(),
+  platform: platformSchema.optional(),
+  socialAccountId: z.string().trim().min(1).optional(),
+  socialAccountIds: z.array(z.string().trim().min(1)).optional(),
+  cutoffDays: z.coerce.number().int().min(1).max(1825).optional(),
+  sinceDate: z.string().trim().optional(),
+  force: z.boolean().optional(),
+});
+type SyncPostsByFilterInput = z.infer<typeof syncPostsByFilterSchema>;
+
+const createStoreSchema = z.object({
+  name: z.string().trim().min(1, 'Tên Store không được để trống.').max(120),
+  description: z.string().trim().max(500).nullable().optional(),
+  color: z.string().trim().max(32).nullable().optional(),
+  isDefault: z.boolean().optional(),
+  socialAccountIds: z.array(z.string().trim().min(1)).optional(),
+});
+type CreateStoreInput = z.infer<typeof createStoreSchema>;
+
+const updateStoreSchema = z.object({
+  name: z.string().trim().min(1, 'Tên Store không được để trống.').max(120).optional(),
+  description: z.string().trim().max(500).nullable().optional(),
+  color: z.string().trim().max(32).nullable().optional(),
+  isDefault: z.boolean().optional(),
+  socialAccountIds: z.array(z.string().trim().min(1)).optional(),
+});
+type UpdateStoreInput = z.infer<typeof updateStoreSchema>;
+
+const assignAccountStoreSchema = z.object({
+  storeId: z.string().trim().min(1).nullable(),
+});
+type AssignAccountStoreInput = z.infer<typeof assignAccountStoreSchema>;
 
 @Controller()
 export class SocialAccountsController {
@@ -37,8 +92,97 @@ export class SocialAccountsController {
   @Get('workspaces/:workspaceId/social-accounts')
   @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
   @RequirePermissions('social_account:view')
-  list(@Param('workspaceId') workspaceId: string) {
-    return this.socialAccounts.list(workspaceId);
+  list(@Param('workspaceId') workspaceId: string, @Query('storeId') storeId?: string) {
+    return this.socialAccounts.list(workspaceId, storeId?.trim() || undefined);
+  }
+
+  @Get('workspaces/:workspaceId/stores')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:view')
+  listStores(@Param('workspaceId') workspaceId: string) {
+    return this.socialAccounts.listStores(workspaceId);
+  }
+
+  @Post('workspaces/:workspaceId/stores')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  createStore(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(createStoreSchema)) body: CreateStoreInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.createStore(
+      workspaceId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Patch('workspaces/:workspaceId/stores/:storeId')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  updateStore(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Body(zodPipe(updateStoreSchema)) body: UpdateStoreInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.updateStore(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Delete('workspaces/:workspaceId/stores/:storeId')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  deleteStore(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.deleteStore(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
+  @Post('workspaces/:workspaceId/stores/auto-group')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  autoGroupStores(
+    @Param('workspaceId') workspaceId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.autoGroupStores(
+      workspaceId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
+  @Patch('workspaces/:workspaceId/social-accounts/:socialAccountId/store')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  assignAccountStore(
+    @Param('workspaceId') workspaceId: string,
+    @Param('socialAccountId') socialAccountId: string,
+    @Body(zodPipe(assignAccountStoreSchema)) body: AssignAccountStoreInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.assignAccountStore(
+      workspaceId,
+      socialAccountId,
+      body.storeId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
   }
 
   @Post('workspaces/:workspaceId/social-accounts/oauth/:platform/authorize')
@@ -47,13 +191,51 @@ export class SocialAccountsController {
   authorize(
     @Param('workspaceId') workspaceId: string,
     @Param('platform') platform: string,
+    @Query('storeId') storeId: string | undefined,
     @Req() request: FastifyRequest & AuthenticatedRequest,
   ) {
     return this.socialAccounts.startOAuth(
       requireUser(request).id,
       workspaceId,
       this.parsePlatform(platform),
+      storeId?.trim() || undefined,
     );
+  }
+
+  @Post('workspaces/:workspaceId/social-accounts/oauth/complete-callback')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  completeCallbackFromUrl(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(completeOAuthCallbackUrlSchema)) body: CompleteOAuthCallbackUrlInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.completeOAuthFromCallbackUrl({
+      workspaceId,
+      actorUserId: requireUser(request).id,
+      callbackUrl: body.callbackUrl,
+      auditContext: this.auditContext(request),
+    });
+  }
+
+  @Post('workspaces/:workspaceId/social-accounts/meta/sync-token')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  syncMetaToken(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(syncMetaTokenSchema)) body: SyncMetaTokenInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.socialAccounts.syncMetaToken({
+      workspaceId,
+      actorUserId: requireUser(request).id,
+      accessToken: body.accessToken,
+      platforms: body.platforms,
+      pageIds: body.pageIds,
+      storeId: body.storeId,
+      autoCreateStores: body.autoCreateStores,
+      auditContext: this.auditContext(request),
+    });
   }
 
   @Delete('workspaces/:workspaceId/social-accounts/:socialAccountId')
@@ -210,9 +392,43 @@ export class SocialAccountsController {
       );
 
       logger.info(
-        { requestId, platform: result.platform, workspaceId: result.workspaceId },
-        'OAuth callback hoàn tất, redirect về web',
+        {
+          requestId,
+          platform: result.platform,
+          workspaceId: result.workspaceId,
+          crossBrowser: result.crossBrowser,
+        },
+        'OAuth callback hoàn tất',
       );
+
+      if (result.crossBrowser) {
+        const safeAccountName = escapeHtml(result.accountName || result.platform);
+        const safePlatform = escapeHtml(result.platform);
+        return reply.code(200).type('text/html; charset=utf-8').send(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Đã kết nối ${safePlatform}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f8fafc; color: #0f172a; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 16px; }
+    .card { max-width: 440px; width: 100%; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px; box-shadow: 0 4px 12px rgba(15,23,42,0.05); text-align: center; }
+    .badge { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 9999px; background: #ecfdf5; color: #059669; font-size: 24px; margin-bottom: 12px; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { font-size: 14px; color: #475569; line-height: 1.5; margin: 0; }
+    .hint { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: #f1f5f9; font-size: 12px; color: #334155; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">✓</div>
+    <h1>Đã kết nối thành công!</h1>
+    <p>Kênh <strong>${safeAccountName}</strong> (${safePlatform}) đã được lưu vào SocialHub.</p>
+    <div class="hint">Bạn có thể đóng tab này trên trình duyệt Multilogin và quay lại cửa sổ quản trị chính.</div>
+  </div>
+</body>
+</html>`);
+      }
 
       return this.redirectToAccounts(reply, {
         connected: result.platform,
@@ -343,6 +559,23 @@ export class SocialAccountsController {
     );
   }
 
+  @Post('workspaces/:workspaceId/social-accounts/sync-posts')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:sync')
+  syncExternalPostsByFilter(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(syncPostsByFilterSchema)) body: SyncPostsByFilterInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    const user = requireUser(request);
+    return this.socialAccounts.triggerSyncExternalPostsByFilter(
+      workspaceId,
+      user.id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
   @Post('workspaces/:workspaceId/social-accounts/:accountId/sync-posts')
   @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
   @RequirePermissions('social_account:sync')
@@ -381,4 +614,13 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
