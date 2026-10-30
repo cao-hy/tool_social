@@ -528,6 +528,8 @@ export interface CommentView {
   store?: StoreSummary | null;
   externalCommentId: string;
   parentId: string | null;
+  childCommentCount?: number;
+  customerReplyCount?: number;
   authorExternalId: string | null;
   authorName: string | null;
   authorAvatarUrl: string | null;
@@ -553,4 +555,33 @@ export interface ReplyTemplateView {
   body: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type BulkModerateCommentAction =
+  'DELETE_FROM_PLATFORM' | 'DELETE_LOCAL_ONLY' | 'HIDE_ON_PLATFORM' | 'UNHIDE_ON_PLATFORM';
+
+export interface BulkModerateCommentItemResult {
+  id: string;
+  processed: boolean;
+  queued: boolean;
+  localOnly?: boolean;
+  skippedByParent?: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+export interface BulkModerateCommentsResult {
+  requested: number;
+  processed: number;
+  queued: number;
+  localOnly: number;
+  skippedByParent: number;
+  failed: number;
+  results: BulkModerateCommentItemResult[];
+}
+
+export interface BulkSyncCommentsResult {
+  requested: number;
+  queued: number;
+  skipped: number;
 }

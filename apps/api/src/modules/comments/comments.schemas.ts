@@ -9,6 +9,15 @@ const optionalText = z
   .transform((value) => (value.length === 0 ? undefined : value))
   .optional();
 
+export const commentAuthorSourceSchema = z.enum(['ALL', 'PAGE', 'VIEWER']);
+
+export const bulkModerateCommentActionSchema = z.enum([
+  'DELETE_FROM_PLATFORM',
+  'DELETE_LOCAL_ONLY',
+  'HIDE_ON_PLATFORM',
+  'UNHIDE_ON_PLATFORM',
+]);
+
 export const listCommentsQuerySchema = z.object({
   status: commentStatusSchema.optional(),
   platform: platformSchema.optional(),
@@ -16,10 +25,12 @@ export const listCommentsQuerySchema = z.object({
   storeId: z.string().trim().min(1).optional(),
   contentPostId: z.string().min(1).optional(),
   platformPostId: z.string().min(1).optional(),
+  platformPostIds: optionalText,
+  authorSource: commentAuthorSourceSchema.optional(),
   assignedToId: z.string().min(1).optional(),
   tagId: z.string().min(1).optional(),
   q: optionalText,
-  limit: z.coerce.number().int().min(1).max(200).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
 });
 
 export const updateCommentStatusSchema = z.object({
@@ -78,6 +89,15 @@ export const bulkReplyToCommentsSchema = z.object({
   message: z.string().trim().min(1).max(2000),
 });
 
+export const bulkModerateCommentsSchema = z.object({
+  commentIds: z.array(z.string().min(1)).min(1).max(200),
+  action: bulkModerateCommentActionSchema,
+});
+
+export const bulkSyncCommentsSchema = z.object({
+  platformPostIds: z.array(z.string().min(1)).min(1).max(100),
+});
+
 export const listReplyTemplatesQuerySchema = z.object({
   storeId: z.string().trim().min(1).optional(),
 });
@@ -113,3 +133,6 @@ export type ListReplyTemplatesQuery = z.infer<typeof listReplyTemplatesQuerySche
 export type CreateReplyTemplateInput = z.infer<typeof createReplyTemplateSchema>;
 export type UpdateReplyTemplateInput = z.infer<typeof updateReplyTemplateSchema>;
 export type SyncCommentsInput = z.infer<typeof syncCommentsSchema>;
+export type BulkModerateCommentAction = z.infer<typeof bulkModerateCommentActionSchema>;
+export type BulkModerateCommentsInput = z.infer<typeof bulkModerateCommentsSchema>;
+export type BulkSyncCommentsInput = z.infer<typeof bulkSyncCommentsSchema>;

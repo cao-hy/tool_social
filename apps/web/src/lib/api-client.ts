@@ -3,6 +3,9 @@ import type {
   AuditLogItem,
   AnalyticsDashboardView,
   AuthPayload,
+  BulkModerateCommentAction,
+  BulkModerateCommentsResult,
+  BulkSyncCommentsResult,
   JobActivityView,
   JobStatusListView,
   OAuthStartResult,
@@ -789,6 +792,8 @@ export const commentsApi = {
       storeId?: string;
       contentPostId?: string;
       platformPostId?: string;
+      platformPostIds?: string[];
+      authorSource?: 'ALL' | 'PAGE' | 'VIEWER';
       assignedToId?: string;
       tagId?: string;
       q?: string;
@@ -802,6 +807,10 @@ export const commentsApi = {
     if (query?.storeId) params.set('storeId', query.storeId);
     if (query?.contentPostId) params.set('contentPostId', query.contentPostId);
     if (query?.platformPostId) params.set('platformPostId', query.platformPostId);
+    if (query?.platformPostIds && query.platformPostIds.length > 0) {
+      params.set('platformPostIds', query.platformPostIds.join(','));
+    }
+    if (query?.authorSource) params.set('authorSource', query.authorSource);
     if (query?.assignedToId) params.set('assignedToId', query.assignedToId);
     if (query?.tagId) params.set('tagId', query.tagId);
     if (query?.q) params.set('q', query.q);
@@ -885,6 +894,19 @@ export const commentsApi = {
     input: { socialAccountId: string; platformPostId?: string; since?: string },
   ) =>
     apiFetch<{ queued: true; jobId: string }>(`/workspaces/${workspaceId}/comments/sync`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  bulkSync: (workspaceId: string, platformPostIds: string[]) =>
+    apiFetch<BulkSyncCommentsResult>(`/workspaces/${workspaceId}/comments/sync/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({ platformPostIds }),
+    }),
+  bulkModerate: (
+    workspaceId: string,
+    input: { commentIds: string[]; action: BulkModerateCommentAction },
+  ) =>
+    apiFetch<BulkModerateCommentsResult>(`/workspaces/${workspaceId}/comments/moderate/bulk`, {
       method: 'POST',
       body: JSON.stringify(input),
     }),

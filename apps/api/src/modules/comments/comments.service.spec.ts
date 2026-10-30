@@ -286,4 +286,256 @@ describe('CommentsService', () => {
     });
     expect(res.items.map((item) => item.id)).toEqual(['tpl_store', 'tpl_shared']);
   });
+
+  it('bulkModerateComments chặn khi danh sách bình luận thuộc nhiều Store khác nhau', async () => {
+    const prismaForBulk = {
+      comment: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'c_1',
+            parentId: null,
+            isFromPage: true,
+            isHidden: false,
+            platform: 'FACEBOOK',
+            socialAccountId: 'acc_a',
+            socialAccount: { storeId: 'store_a' },
+          },
+          {
+            id: 'c_2',
+            parentId: null,
+            isFromPage: true,
+            isHidden: false,
+            platform: 'FACEBOOK',
+            socialAccountId: 'acc_b',
+            socialAccount: { storeId: 'store_b' },
+          },
+        ]),
+      },
+    };
+    const service = new CommentsService(
+      prismaForBulk as never,
+      redis,
+      audit,
+      adapterFactory,
+      keyring,
+    );
+
+    await expect(
+      service.bulkModerateComments(
+        'workspace_1',
+        'user_1',
+        { commentIds: ['c_1', 'c_2'], action: 'DELETE_FROM_PLATFORM' },
+        { requestId: 'req_bulk_mod_1' },
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('bulkModerateComments khử trùng bình luận con khi bình luận cha đã xóa và giãn nhịp delay theo từng kênh', async () => {
+    const outboxEvents = new Map<
+      string,
+      { id: string; payload: { options: { delay?: number } } }
+    >();
+    const fullComments: Record<string, unknown> = {
+      parent_1: {
+        id: 'parent_1',
+        workspaceId: 'workspace_1',
+        platformPostId: 'pp_1',
+        socialAccountId: 'acc_1',
+        platform: 'FACEBOOK',
+        externalCommentId: 'ext_parent_1',
+        parentId: null,
+        isFromPage: true,
+        isHidden: false,
+        status: 'OPEN',
+        socialAccount: {
+          id: 'acc_1',
+          storeId: 'store_a',
+          status: 'CONNECTED',
+          token: { accessToken: 'enc' },
+          scopes: ['pages_manage_engagement'],
+        },
+        platformPost: { id: 'pp_1', contentPostId: 'post_1', contentPost: { title: 'Post 1' } },
+        assignment: null,
+        tags: [],
+        notes: [],
+        replies: [],
+      },
+      parent_2: {
+        id: 'parent_2',
+        workspaceId: 'workspace_1',
+        platformPostId: 'pp_2',
+        socialAccountId: 'acc_1',
+        platform: 'FACEBOOK',
+        externalCommentId: 'ext_parent_2',
+        parentId: null,
+        isFromPage: true,
+        isHidden: false,
+        status: 'OPEN',
+        socialAccount: {
+          id: 'acc_1',
+          storeId: 'store_a',
+          status: 'CONNECTED',
+          token: { accessToken: 'enc' },
+          scopes: ['pages_manage_engagement'],
+        },
+        platformPost: { id: 'pp_2', contentPostId: 'post_2', contentPost: { title: 'Post 2' } },
+        assignment: null,
+        tags: [],
+        notes: [],
+        replies: [],
+      },
+    };
+
+    const tx = {
+      comment: { updateMany: vi.fn(async () => ({ count: 1 })) },
+      outboundOperation: {
+        findFirst: vi.fn(async () => null),
+        upsert: vi.fn(async ({ create }) => ({ id: `op_${create.resourceId}`, ...create })),
+      },
+      backgroundJob: {
+        upsert: vi.fn(async ({ create }) => ({ id: `bg_${create.jobId}`, ...create })),
+      },
+      outboxEvent: {
+        create: vi.fn(async ({ data }) => {
+          const id = `outbox_${data.aggregateId}`;
+          const ev = { id, ...data };
+          outboxEvents.set(id, ev);
+          return ev;
+        }),
+      },
+    };
+
+    const prismaForBulk = {
+      comment: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'child_of_1',
+            parentId: 'parent_1',
+            isFromPage: false,
+            isHidden: false,
+            platform: 'FACEBOOK',
+            socialAccountId: 'acc_1',
+            socialAccount: { storeId: 'store_a' },
+          },
+          {
+            id: 'parent_1',
+            parentId: null,
+            isFromPage: true,
+            isHidden: false,
+            platform: 'FACEBOOK',
+            socialAccountId: 'acc_1',
+            socialAccount: { storeId: 'store_a' },
+          },
+          {
+            id: 'parent_2',
+            parentId: null,
+            isFromPage: true,
+            isHidden: false,
+            platform: 'FACEBOOK',
+            socialAccountId: 'acc_1',
+            socialAccount: { storeId: 'store_a' },
+          },
+        ]),
+        findFirst: vi.fn(async ({ where }) => fullComments[where.id]),
+      },
+      outboxEvent: {
+        findUnique: vi.fn(async ({ where }) => outboxEvents.get(where.id)),
+        update: vi.fn(async () => ({})),
+      },
+      $transaction: vi.fn(async (fn) => fn(tx)),
+    };
+
+    const adapter = { deleteComment: vi.fn() };
+    const service = new CommentsService(
+      prismaForBulk as never,
+      redis,
+      audit,
+      {
+        offlineAdapters: () => ({ requireCapability: vi.fn(() => adapter) }),
+      } as never,
+      keyring,
+    );
+
+    const summary = await service.bulkModerateComments(
+      'workspace_1',
+      'user_1',
+      {
+        commentIds: ['child_of_1', 'parent_1', 'parent_2'],
+        action: 'DELETE_FROM_PLATFORM',
+      },
+      { requestId: 'req_dedup_stagger' },
+    );
+
+    expect(summary.requested).toBe(3);
+    expect(summary.processed).toBe(3);
+    expect(summary.queued).toBe(2);
+    expect(summary.skippedByParent).toBe(1);
+    expect(summary.failed).toBe(0);
+    expect(summary.results.find((r) => r.id === 'child_of_1')?.skippedByParent).toBe(true);
+
+    // Kiểm tra job thứ 1 trên acc_1 không delay, job thứ 2 trên cùng acc_1 có delay = 900ms
+    const delays = Array.from(outboxEvents.values()).map((e) => e.payload.options.delay);
+    expect(delays).toEqual([undefined, 900]);
+  });
+
+  it('bulkModerateComments chặn ẩn (HIDE_ON_PLATFORM) đối với bình luận do chính Facebook Page đăng', async () => {
+    const pageComment = {
+      id: 'page_cmt_1',
+      workspaceId: 'workspace_1',
+      platformPostId: 'pp_1',
+      socialAccountId: 'acc_1',
+      platform: 'FACEBOOK',
+      externalCommentId: 'ext_1',
+      parentId: null,
+      isFromPage: true,
+      isHidden: false,
+      status: 'OPEN',
+      socialAccount: {
+        id: 'acc_1',
+        storeId: 'store_a',
+        status: 'CONNECTED',
+        token: { accessToken: 'enc' },
+        scopes: ['pages_manage_engagement'],
+      },
+      platformPost: { id: 'pp_1', contentPostId: 'post_1', contentPost: { title: 'Post 1' } },
+      assignment: null,
+      tags: [],
+      notes: [],
+      replies: [],
+    };
+    const prismaForHide = {
+      comment: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'page_cmt_1',
+            parentId: null,
+            isFromPage: true,
+            isHidden: false,
+            platform: 'FACEBOOK',
+            socialAccountId: 'acc_1',
+            socialAccount: { storeId: 'store_a' },
+          },
+        ]),
+        findFirst: vi.fn().mockResolvedValue(pageComment),
+      },
+    };
+    const service = new CommentsService(
+      prismaForHide as never,
+      redis,
+      audit,
+      adapterFactory,
+      keyring,
+    );
+
+    const summary = await service.bulkModerateComments(
+      'workspace_1',
+      'user_1',
+      { commentIds: ['page_cmt_1'], action: 'HIDE_ON_PLATFORM' },
+      { requestId: 'req_hide_page' },
+    );
+
+    expect(summary.failed).toBe(1);
+    expect(summary.queued).toBe(0);
+    expect(summary.results[0]?.errorCode).toBe('VALIDATION_ERROR');
+  });
 });

@@ -23,7 +23,9 @@ import type {
   AddCommentNoteInput,
   AssignCommentInput,
   BulkCreatePlatformCommentInput,
+  BulkModerateCommentsInput,
   BulkReplyToCommentsInput,
+  BulkSyncCommentsInput,
   CreateCommentTagInput,
   CreatePlatformCommentInput,
   CreateReplyTemplateInput,
@@ -46,6 +48,19 @@ export interface BulkQueueResult {
   errorCode?: string;
   errorMessage?: string;
 }
+
+export interface BulkModerateCommentItemResult {
+  id: string;
+  processed: boolean;
+  queued: boolean;
+  localOnly?: boolean;
+  skippedByParent?: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+const BULK_MODERATE_ACCOUNT_STAGGER_MS = 900;
+const BULK_SYNC_ACCOUNT_STAGGER_MS = 400;
 
 @Injectable()
 export class CommentsService implements OnModuleDestroy {
@@ -82,13 +97,32 @@ export class CommentsService implements OnModuleDestroy {
   }
 
   async list(workspaceId: string, query: ListCommentsQuery) {
+    const parsedPostIds = query.platformPostIds
+      ? [
+          ...new Set(
+            query.platformPostIds
+              .split(',')
+              .map((id) => id.trim())
+              .filter(Boolean),
+          ),
+        ].slice(0, 200)
+      : [];
+    const mergedPostIds =
+      parsedPostIds.length > 0
+        ? query.platformPostId
+          ? [...new Set([...parsedPostIds, query.platformPostId])]
+          : parsedPostIds
+        : null;
+
     const where: Prisma.CommentWhereInput = {
       workspaceId,
       deletedAt: null,
       status: query.status,
       platform: query.platform,
       socialAccountId: query.socialAccountId,
-      platformPostId: query.platformPostId,
+      platformPostId: mergedPostIds ? { in: mergedPostIds } : query.platformPostId,
+      isFromPage:
+        query.authorSource === 'PAGE' ? true : query.authorSource === 'VIEWER' ? false : undefined,
       platformPost: query.contentPostId ? { contentPostId: query.contentPostId } : undefined,
       socialAccount:
         query.storeId === 'UNASSIGNED'
@@ -361,8 +395,14 @@ export class CommentsService implements OnModuleDestroy {
     actorUserId: string,
     input: UpdateCommentVisibilityInput,
     auditContext: AuditContext,
+    options?: { delayMs?: number },
   ) {
     const comment = await this.findComment(workspaceId, commentId);
+    if (comment.isFromPage && comment.platform !== 'YOUTUBE') {
+      throw AppError.validation(
+        'Bình luận do chính Page/Kênh đăng không hỗ trợ Ẩn trên MXH (hãy chọn chế độ Xóa).',
+      );
+    }
     await this.ensureOfflineCommentCapability(workspaceId, comment, 'hideComment');
 
     const correlationId = auditContext.requestId ?? `comment-hide:${comment.id}:${Date.now()}`;
@@ -381,6 +421,7 @@ export class CommentsService implements OnModuleDestroy {
         action: 'SET_VISIBILITY',
         hidden: input.hidden,
         previousHidden: comment.isHidden,
+        delayMs: options?.delayMs,
       });
 
       return { updated, outboxEventId };
@@ -414,6 +455,7 @@ export class CommentsService implements OnModuleDestroy {
     actorUserId: string,
     input: DeleteCommentQuery,
     auditContext: AuditContext,
+    options?: { delayMs?: number },
   ) {
     const comment = await this.findComment(workspaceId, commentId);
 
@@ -474,6 +516,7 @@ export class CommentsService implements OnModuleDestroy {
         actorUserId,
         correlationId,
         action: 'DELETE_COMMENT',
+        delayMs: options?.delayMs,
       });
     });
 
@@ -835,6 +878,193 @@ export class CommentsService implements OnModuleDestroy {
     return this.toBulkQueueSummary(commentIds.length, results);
   }
 
+  async bulkModerateComments(
+    workspaceId: string,
+    actorUserId: string,
+    input: BulkModerateCommentsInput,
+    auditContext: AuditContext,
+  ) {
+    const commentIds = [...new Set(input.commentIds)];
+    const targetComments = await this.prisma.comment.findMany({
+      where: { id: { in: commentIds }, workspaceId, deletedAt: null },
+      select: {
+        id: true,
+        parentId: true,
+        isFromPage: true,
+        isHidden: true,
+        platform: true,
+        socialAccountId: true,
+        socialAccount: { select: { storeId: true } },
+      },
+    });
+
+    if (targetComments.length > 1) {
+      const resolvedStoreKeys = new Set(
+        targetComments.map((item) => item.socialAccount?.storeId ?? '__UNASSIGNED__'),
+      );
+      if (resolvedStoreKeys.size > 1) {
+        throw AppError.validation(
+          'Mỗi thao tác dọn/xóa bình luận hàng loạt chỉ được thực hiện trên 1 Store duy nhất.',
+        );
+      }
+    }
+
+    const foundById = new Map(targetComments.map((item) => [item.id, item]));
+    const isDeleteAction =
+      input.action === 'DELETE_FROM_PLATFORM' || input.action === 'DELETE_LOCAL_ONLY';
+
+    // Ưu tiên xử lý comment gốc (parentId == null) trước để khử trùng comment con chính xác
+    const orderedIds = [...commentIds].sort((a, b) => {
+      const ca = foundById.get(a);
+      const cb = foundById.get(b);
+      const aIsChild = Boolean(ca?.parentId);
+      const bIsChild = Boolean(cb?.parentId);
+      if (aIsChild === bIsChild) return 0;
+      return aIsChild ? 1 : -1;
+    });
+
+    const deletedOrQueuedParentIds = new Set<string>();
+    const accountSlotByAccountId = new Map<string, number>();
+    const resultById = new Map<string, BulkModerateCommentItemResult>();
+
+    for (const commentId of orderedIds) {
+      const meta = foundById.get(commentId);
+      if (!meta) {
+        resultById.set(commentId, {
+          id: commentId,
+          processed: false,
+          queued: false,
+          errorCode: 'NOT_FOUND',
+          errorMessage: 'Bình luận không tồn tại hoặc đã được xóa trước đó.',
+        });
+        continue;
+      }
+
+      if (isDeleteAction && meta.parentId && deletedOrQueuedParentIds.has(meta.parentId)) {
+        resultById.set(commentId, {
+          id: commentId,
+          processed: true,
+          queued: false,
+          skippedByParent: true,
+        });
+        continue;
+      }
+
+      const currentSlot = accountSlotByAccountId.get(meta.socialAccountId) ?? 0;
+      const delayMs = currentSlot * BULK_MODERATE_ACCOUNT_STAGGER_MS;
+      const itemAudit: AuditContext = {
+        ...auditContext,
+        requestId: `${auditContext.requestId ?? 'bulk-moderate'}:${commentId}`,
+      };
+
+      try {
+        if (input.action === 'DELETE_FROM_PLATFORM') {
+          const res = await this.deleteComment(
+            workspaceId,
+            commentId,
+            actorUserId,
+            { deleteFromPlatform: true },
+            itemAudit,
+            { delayMs },
+          );
+          if (res.queued) {
+            accountSlotByAccountId.set(meta.socialAccountId, currentSlot + 1);
+          }
+          if (!meta.parentId) {
+            deletedOrQueuedParentIds.add(commentId);
+          }
+          resultById.set(commentId, {
+            id: commentId,
+            processed: true,
+            queued: Boolean(res.queued),
+          });
+        } else if (input.action === 'DELETE_LOCAL_ONLY') {
+          await this.deleteComment(
+            workspaceId,
+            commentId,
+            actorUserId,
+            { deleteFromPlatform: false },
+            itemAudit,
+          );
+          if (!meta.parentId) {
+            deletedOrQueuedParentIds.add(commentId);
+          }
+          resultById.set(commentId, {
+            id: commentId,
+            processed: true,
+            queued: false,
+            localOnly: true,
+          });
+        } else {
+          const targetHidden = input.action === 'HIDE_ON_PLATFORM';
+          if (meta.isHidden === targetHidden) {
+            resultById.set(commentId, {
+              id: commentId,
+              processed: true,
+              queued: false,
+              localOnly: true,
+            });
+            continue;
+          }
+          await this.updateVisibility(
+            workspaceId,
+            commentId,
+            actorUserId,
+            { hidden: targetHidden },
+            itemAudit,
+            { delayMs },
+          );
+          accountSlotByAccountId.set(meta.socialAccountId, currentSlot + 1);
+          resultById.set(commentId, {
+            id: commentId,
+            processed: true,
+            queued: true,
+          });
+        }
+      } catch (error) {
+        resultById.set(commentId, {
+          id: commentId,
+          processed: false,
+          queued: false,
+          errorCode:
+            error instanceof AppError
+              ? error.code
+              : error instanceof Error
+                ? error.name
+                : 'UNKNOWN',
+          errorMessage: error instanceof Error ? error.message : 'Không thể xử lý bình luận này.',
+        });
+      }
+    }
+
+    const results = commentIds.map(
+      (id) =>
+        resultById.get(id) ?? {
+          id,
+          processed: false,
+          queued: false,
+          errorCode: 'UNKNOWN',
+          errorMessage: 'Không tìm thấy kết quả xử lý.',
+        },
+    );
+
+    const processed = results.filter((r) => r.processed).length;
+    const queued = results.filter((r) => r.queued).length;
+    const localOnly = results.filter((r) => r.localOnly).length;
+    const skippedByParent = results.filter((r) => r.skippedByParent).length;
+    const failed = results.length - processed;
+
+    return {
+      requested: commentIds.length,
+      processed,
+      queued,
+      localOnly,
+      skippedByParent,
+      failed,
+      results,
+    };
+  }
+
   private async queueReplyToComment(
     workspaceId: string,
     commentId: string,
@@ -989,6 +1219,7 @@ export class CommentsService implements OnModuleDestroy {
       previousMessage?: string | null;
       hidden?: boolean;
       previousHidden?: boolean;
+      delayMs?: number;
     },
   ): Promise<string> {
     const latest = await tx.outboundOperation.findFirst({
@@ -1023,7 +1254,9 @@ export class CommentsService implements OnModuleDestroy {
       previousHidden: input.previousHidden,
     };
     const jobId = buildJobId('moderate-platform-comment', payload);
-    const opts = buildQueueJobOptions('moderate-platform-comment', jobId);
+    const baseOpts = buildQueueJobOptions('moderate-platform-comment', jobId);
+    const opts =
+      input.delayMs && input.delayMs > 0 ? { ...baseOpts, delay: input.delayMs } : baseOpts;
     await tx.backgroundJob.upsert({
       where: { queueName_jobId: { queueName: 'moderate-platform-comment', jobId } },
       create: {
@@ -1274,6 +1507,79 @@ export class CommentsService implements OnModuleDestroy {
     return { queued: true, jobId };
   }
 
+  async bulkSync(workspaceId: string, input: BulkSyncCommentsInput, requestId: string) {
+    const platformPostIds = [...new Set(input.platformPostIds)];
+    const platformPosts = await this.prisma.platformPost.findMany({
+      where: { id: { in: platformPostIds }, workspaceId },
+      include: {
+        socialAccount: {
+          select: { id: true, status: true, deletedAt: true, storeId: true, platform: true },
+        },
+        contentPost: { select: { storeId: true } },
+      },
+    });
+
+    if (platformPosts.length > 1) {
+      const resolvedStoreKeys = new Set(
+        platformPosts.map(
+          (item) => item.socialAccount?.storeId ?? item.contentPost?.storeId ?? '__UNASSIGNED__',
+        ),
+      );
+      if (resolvedStoreKeys.size > 1) {
+        throw AppError.validation(
+          'Mỗi thao tác đồng bộ bình luận hàng loạt chỉ được thực hiện trên 1 Store duy nhất.',
+        );
+      }
+    }
+
+    const supportedReadPlatforms = new Set<Platform>(['FACEBOOK', 'INSTAGRAM', 'YOUTUBE']);
+    const accountSlotMap = new Map<string, number>();
+    let queued = 0;
+
+    for (const pp of platformPosts) {
+      if (
+        pp.status !== 'PUBLISHED' ||
+        !pp.externalPostId ||
+        pp.socialAccount.deletedAt !== null ||
+        pp.socialAccount.status !== 'CONNECTED' ||
+        !supportedReadPlatforms.has(pp.platform)
+      ) {
+        continue;
+      }
+
+      const slot = accountSlotMap.get(pp.socialAccount.id) ?? 0;
+      accountSlotMap.set(pp.socialAccount.id, slot + 1);
+      const delay = slot * BULK_SYNC_ACCOUNT_STAGGER_MS;
+
+      const payload = {
+        socialAccountId: pp.socialAccount.id,
+        workspaceId,
+        platformPostId: pp.id,
+      };
+      const jobId = `${buildJobId('sync-comments', payload)}-${requestId}-${pp.id}`;
+      const baseOpts = buildQueueJobOptions('sync-comments', jobId);
+      await this.syncQueue.add(
+        'sync-comments',
+        { ...payload, correlationId: `${requestId}:${pp.id}` },
+        delay > 0 ? { ...baseOpts, delay } : baseOpts,
+      );
+      this.events?.publish(workspaceId, {
+        type: 'job.queued',
+        queueName: 'sync-comments',
+        jobId,
+        socialAccountId: pp.socialAccount.id,
+        platformPostId: pp.id,
+      });
+      queued += 1;
+    }
+
+    return {
+      requested: platformPostIds.length,
+      queued,
+      skipped: platformPostIds.length - queued,
+    };
+  }
+
   async listTemplates(workspaceId: string, storeId?: string) {
     const where: Prisma.ReplyTemplateWhereInput =
       storeId === 'UNASSIGNED'
@@ -1392,6 +1698,7 @@ export class CommentsService implements OnModuleDestroy {
       },
       platformPost: { include: { contentPost: true } },
       parent: { select: { externalCommentId: true } },
+      children: { where: { deletedAt: null }, select: { id: true, isFromPage: true } },
       assignment: { include: { assignedTo: true, assignedBy: true, member: true } },
       tags: { include: { tag: true }, orderBy: { createdAt: 'asc' } },
       notes: { include: { author: true }, orderBy: { createdAt: 'desc' } },
@@ -1400,6 +1707,11 @@ export class CommentsService implements OnModuleDestroy {
   }
 
   private toCommentView(comment: Awaited<ReturnType<typeof this.findComment>>) {
+    const activeChildren =
+      (comment as { children?: Array<{ id: string; isFromPage: boolean }> }).children ?? [];
+    const childCommentCount = activeChildren.length;
+    const customerReplyCount = activeChildren.filter((child) => !child.isFromPage).length;
+
     return {
       id: comment.id,
       workspaceId: comment.workspaceId,
@@ -1418,6 +1730,8 @@ export class CommentsService implements OnModuleDestroy {
         ).store ?? null,
       externalCommentId: comment.externalCommentId,
       parentId: comment.parentId,
+      childCommentCount,
+      customerReplyCount,
       authorExternalId: comment.authorExternalId,
       authorName: comment.authorName,
       authorAvatarUrl: comment.authorAvatarUrl,

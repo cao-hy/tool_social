@@ -24,7 +24,9 @@ import {
   addCommentNoteSchema,
   assignCommentSchema,
   bulkCreatePlatformCommentSchema,
+  bulkModerateCommentsSchema,
   bulkReplyToCommentsSchema,
+  bulkSyncCommentsSchema,
   createCommentTagSchema,
   createPlatformCommentSchema,
   createReplyTemplateSchema,
@@ -41,7 +43,9 @@ import {
   type AddCommentNoteInput,
   type AssignCommentInput,
   type BulkCreatePlatformCommentInput,
+  type BulkModerateCommentsInput,
   type BulkReplyToCommentsInput,
+  type BulkSyncCommentsInput,
   type CreateCommentTagInput,
   type CreatePlatformCommentInput,
   type CreateReplyTemplateInput,
@@ -80,6 +84,31 @@ export class CommentsController {
     @Req() request: FastifyRequest,
   ) {
     return this.comments.sync(workspaceId, body, getRequestId(request));
+  }
+
+  @Post('sync/bulk')
+  @RequirePermissions('comment:moderate')
+  bulkSync(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(bulkSyncCommentsSchema)) body: BulkSyncCommentsInput,
+    @Req() request: FastifyRequest,
+  ) {
+    return this.comments.bulkSync(workspaceId, body, getRequestId(request));
+  }
+
+  @Post('moderate/bulk')
+  @RequirePermissions('comment:moderate')
+  bulkModerateComments(
+    @Param('workspaceId') workspaceId: string,
+    @Body(zodPipe(bulkModerateCommentsSchema)) body: BulkModerateCommentsInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.comments.bulkModerateComments(
+      workspaceId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
   }
 
   @Post('platform-posts/bulk')

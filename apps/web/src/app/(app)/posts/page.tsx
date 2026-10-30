@@ -12,6 +12,7 @@ import {
   Download,
   Eye,
   MessageSquare,
+  MessageSquareOff,
   MessageSquarePlus,
   Pencil,
   Plus,
@@ -37,6 +38,10 @@ import {
   BulkPostCommentModal,
   isCreateCommentSupportedPlatform,
 } from '@/components/bulk-post-comment-modal';
+import {
+  BulkDeleteCommentsModal,
+  isModerateCommentSupportedPlatform,
+} from '@/components/bulk-delete-comments-modal';
 import { DeletePostDialog } from '@/components/delete-post-dialog';
 import { PostCommentsDrawer } from '@/components/post-comments-drawer';
 import {
@@ -185,6 +190,8 @@ export default function PostsPage() {
   const [commentModalPosts, setCommentModalPosts] = useState<ContentPostView[]>([]);
   const [commentModalExplicitSelection, setCommentModalExplicitSelection] = useState(false);
   const [loadingCommentModal, setLoadingCommentModal] = useState(false);
+  const [cleanCommentsModalPosts, setCleanCommentsModalPosts] = useState<ContentPostView[]>([]);
+  const [loadingCleanCommentsModal, setLoadingCleanCommentsModal] = useState(false);
   const [activeCommentsPost, setActiveCommentsPost] = useState<ContentPostView | null>(null);
 
   const activeFilters = useMemo(
@@ -657,6 +664,7 @@ export default function PostsPage() {
   const canCreate = hasPermission(workspace.role, 'post:create');
   const canSync = hasPermission(workspace.role, 'social_account:sync');
   const canComment = hasPermission(workspace.role, 'comment:reply');
+  const canModerateComments = hasPermission(workspace.role, 'comment:moderate');
 
   const syncCandidateAccounts = useMemo(() => {
     return accounts.filter((acc) => {
@@ -844,6 +852,77 @@ export default function PostsPage() {
       setLoadingCommentModal(false);
     }
   }
+
+  async function openCleanCommentsModal(explicitPosts?: ContentPostView[]) {
+    if (!workspace) return;
+
+    if (explicitPosts && explicitPosts.length > 0) {
+      const supportedTargets = explicitPosts.flatMap((post) =>
+        post.platformPosts.filter(
+          (pp) =>
+            pp.status === 'PUBLISHED' &&
+            Boolean(pp.externalPostId) &&
+            isModerateCommentSupportedPlatform(pp.platform, capabilityByPlatform),
+        ),
+      );
+      if (supportedTargets.length === 0) {
+        toast.warning(
+          'Các bài đang chọn chưa có bản đăng Đã đăng nào hỗ trợ quản lý bình luận (Facebook, Instagram, YouTube).',
+        );
+        return;
+      }
+      setCleanCommentsModalPosts(explicitPosts);
+      return;
+    }
+
+    setLoadingCleanCommentsModal(true);
+    try {
+      const collectedById = new Map<string, ContentPostView>();
+      let cursor: string | undefined;
+      for (let page = 0; page < 3; page += 1) {
+        const res = await postsApi.list(workspace.id, {
+          storeId: storeId || undefined,
+          platform: platform || undefined,
+          mediaType: mediaType || undefined,
+          q: activeFilters.q,
+          dateFrom: activeFilters.dateFrom,
+          dateTo: activeFilters.dateTo,
+          sortBy: activeFilters.sortBy,
+          direction: activeFilters.direction,
+          limit: 100,
+          cursor,
+        });
+        for (const item of res.items) {
+          collectedById.set(item.id, item);
+        }
+        if (!res.nextCursor) break;
+        cursor = res.nextCursor;
+      }
+
+      const collected = Array.from(collectedById.values());
+      const supportedTargets = collected.flatMap((post) =>
+        post.platformPosts.filter(
+          (pp) =>
+            pp.status === 'PUBLISHED' &&
+            Boolean(pp.externalPostId) &&
+            isModerateCommentSupportedPlatform(pp.platform, capabilityByPlatform),
+        ),
+      );
+
+      if (supportedTargets.length === 0) {
+        toast.warning(
+          'Không tìm thấy bài viết Đã đăng nào hỗ trợ dọn/xóa bình luận (Facebook, Instagram, YouTube) trong bộ lọc hiện tại.',
+        );
+        return;
+      }
+
+      setCleanCommentsModalPosts(collected);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setLoadingCleanCommentsModal(false);
+    }
+  }
   const activeAdvancedFilterCount = [
     dateFrom,
     dateTo,
@@ -995,6 +1074,23 @@ export default function PostsPage() {
                 : selectedCommentableTargets.length > 0
                   ? `Comment hàng loạt (${selectedCommentableTargets.length})`
                   : 'Comment hàng loạt'}
+            </SecondaryButton>
+          ) : null}
+          {canModerateComments ? (
+            <SecondaryButton
+              className="h-11 gap-2 border-rose-200 text-rose-700 hover:bg-rose-50"
+              disabled={loadingCleanCommentsModal || !canOpenBulkCommentFromFilter}
+              onClick={() =>
+                void openCleanCommentsModal(selectedPosts.length > 0 ? selectedPosts : undefined)
+              }
+              type="button"
+            >
+              <MessageSquareOff className="h-4 w-4 text-rose-600" />
+              {loadingCleanCommentsModal
+                ? 'Đang quét bài...'
+                : selectedCommentableTargets.length > 0
+                  ? `Dọn comment (${selectedCommentableTargets.length})`
+                  : 'Dọn / Xóa comment'}
             </SecondaryButton>
           ) : null}
           {canSync ? (
@@ -1249,7 +1345,7 @@ export default function PostsPage() {
               </span>
             ) : null}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {canComment && canOpenBulkCommentFromFilter ? (
               <SecondaryButton
                 className="h-9 gap-2 border-brand-200 text-brand-700 hover:bg-brand-50"
@@ -1267,6 +1363,23 @@ export default function PostsPage() {
                     : 'Comment nhiều bài / Gắn link SP'}
               </SecondaryButton>
             ) : null}
+            {canModerateComments && canOpenBulkCommentFromFilter ? (
+              <SecondaryButton
+                className="h-9 gap-2 border-rose-200 text-rose-700 hover:bg-rose-50"
+                disabled={loadingCleanCommentsModal}
+                onClick={() =>
+                  void openCleanCommentsModal(selectedPosts.length > 0 ? selectedPosts : undefined)
+                }
+                type="button"
+              >
+                <MessageSquareOff className="h-4 w-4" />
+                {loadingCleanCommentsModal
+                  ? 'Đang quét...'
+                  : selectedCommentableTargets.length > 0
+                    ? `Dọn comment đã chọn (${selectedCommentableTargets.length})`
+                    : 'Dọn / Xóa comment nhiều bài'}
+              </SecondaryButton>
+            ) : null}
             {selectedDeletablePosts.length > 0 ? (
               <SecondaryButton
                 className="h-9 gap-2 border-red-200 text-red-700 hover:bg-red-50"
@@ -1278,7 +1391,7 @@ export default function PostsPage() {
                 type="button"
               >
                 <Trash2 className="h-4 w-4" />
-                Xóa đã chọn
+                Xóa bài đã chọn
               </SecondaryButton>
             ) : null}
             <p className="text-xs text-slate-500">Trang {cursorStack.length + 1}</p>
@@ -1295,7 +1408,10 @@ export default function PostsPage() {
                       deletablePosts.length > 0 &&
                       deletablePosts.every((post) => selectedPostIds.includes(post.id))
                     }
-                    disabled={(!canDelete && !canComment) || deletablePosts.length === 0}
+                    disabled={
+                      (!canDelete && !canComment && !canModerateComments) ||
+                      deletablePosts.length === 0
+                    }
                     type="checkbox"
                     onChange={toggleAllVisiblePosts}
                   />
@@ -1336,7 +1452,10 @@ export default function PostsPage() {
                     <input
                       aria-label={`Chọn bài ${post.title ?? post.id}`}
                       checked={selectedPostIds.includes(post.id)}
-                      disabled={(!canDelete && !canComment) || !canDeletePostStatus(post.status)}
+                      disabled={
+                        (!canDelete && !canComment && !canModerateComments) ||
+                        !canDeletePostStatus(post.status)
+                      }
                       type="checkbox"
                       onChange={() => togglePostSelection(post)}
                     />
@@ -1691,6 +1810,19 @@ export default function PostsPage() {
         stores={stores}
         workspaceId={workspace.id}
         onClose={() => setCommentModalPosts([])}
+        onSubmitted={() => {
+          setSelectedPostIds([]);
+          scheduleSilentReload(1500);
+        }}
+      />
+
+      <BulkDeleteCommentsModal
+        activeStoreColor={activeStore?.color}
+        activeStoreName={activeStore?.name}
+        capabilityByPlatform={capabilityByPlatform}
+        posts={cleanCommentsModalPosts}
+        workspaceId={workspace.id}
+        onClose={() => setCleanCommentsModalPosts([])}
         onSubmitted={() => {
           setSelectedPostIds([]);
           scheduleSilentReload(1500);
