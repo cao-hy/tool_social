@@ -76,163 +76,170 @@ export function createReconciliationProcessor(input: {
       return { status: 'MANUAL_REVIEW_REQUIRED' };
     }
 
-    return await input.platformResolver.withWorkspace(payload.workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get(post.platform);
-      if (!adapter || !adapter.reconcilePublish) {
-        const attempts = operation.reconciliationAttempts + 1;
-        await recordIndeterminateReconciliation(input.prisma, operation, post.id, {
-          attempts,
-          reason: 'Platform adapter chưa hỗ trợ đối soát tự động.',
-        });
-        if (attempts < 5) {
-          throw new ReconciliationIndeterminateError(
-            'Platform adapter chưa hỗ trợ đối soát tự động.',
-          );
+    return await input.platformResolver.withWorkspace(
+      payload.workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(post.platform);
+        if (!adapter || !adapter.reconcilePublish) {
+          const attempts = operation.reconciliationAttempts + 1;
+          await recordIndeterminateReconciliation(input.prisma, operation, post.id, {
+            attempts,
+            reason: 'Platform adapter chưa hỗ trợ đối soát tự động.',
+          });
+          if (attempts < 5) {
+            throw new ReconciliationIndeterminateError(
+              'Platform adapter chưa hỗ trợ đối soát tự động.',
+            );
+          }
+          return { status: 'MANUAL_REVIEW_REQUIRED' };
         }
-        return { status: 'MANUAL_REVIEW_REQUIRED' };
-      }
 
-      const accessToken = await getFreshAccessToken({
-        prisma: input.prisma,
-        keyring: input.keyring,
-        adapter,
-        account: {
-          id: post.socialAccount.id,
-          workspaceId: post.socialAccount.workspaceId,
-          platform: post.socialAccount.platform,
-          token: post.socialAccount.token,
-        },
-      });
+        const accessToken = await getFreshAccessToken({
+          prisma: input.prisma,
+          keyring: input.keyring,
+          adapter,
+          account: {
+            id: post.socialAccount.id,
+            workspaceId: post.socialAccount.workspaceId,
+            platform: post.socialAccount.platform,
+            token: post.socialAccount.token,
+          },
+        });
 
-      const ctx = {
-        accessToken,
-        externalAccountId: post.socialAccount.externalAccountId,
-        externalPageId: post.socialAccount.externalPageId ?? undefined,
-        correlationId: `reconcile:${post.id}:${payload.publishAttemptId}`,
-      };
+        const ctx = {
+          accessToken,
+          externalAccountId: post.socialAccount.externalAccountId,
+          externalPageId: post.socialAccount.externalPageId ?? undefined,
+          correlationId: `reconcile:${post.id}:${payload.publishAttemptId}`,
+        };
 
-      const remoteCheckpoint = remoteCheckpointFromOperation(operation.remoteCheckpoint);
-      const result = await adapter
-        .reconcilePublish(ctx, {
-          platformPostId: post.id,
-          publishAttemptId: payload.publishAttemptId,
-          providerRequestId: remoteCheckpoint?.providerRequestId,
-          remoteCheckpoint,
-        })
-        .catch((error) => ({
-          result: 'INDETERMINATE' as const,
-          reason:
-            error instanceof Error
-              ? error.message
-              : 'Provider reconciliation failed with an unknown error.',
-        }));
+        const remoteCheckpoint = remoteCheckpointFromOperation(operation.remoteCheckpoint);
+        const result = await adapter
+          .reconcilePublish(ctx, {
+            platformPostId: post.id,
+            publishAttemptId: payload.publishAttemptId,
+            providerRequestId: remoteCheckpoint?.providerRequestId,
+            remoteCheckpoint,
+          })
+          .catch((error) => ({
+            result: 'INDETERMINATE' as const,
+            reason:
+              error instanceof Error
+                ? error.message
+                : 'Provider reconciliation failed with an unknown error.',
+          }));
 
-      if (result.result === 'FOUND') {
-        const committedAt = new Date();
-        const updated = await input.prisma.$transaction(async (tx) => {
-          const remoteConfirmed = await tx.outboundOperation.updateMany({
-            where: {
-              id: operation.id,
-              state: 'REMOTE_UNKNOWN',
-              attemptId: operation.attemptId,
-              fence: operation.fence,
-            },
-            data: {
-              state: 'LOCAL_COMMITTED',
-              remoteId: result.remotePostId,
-              remoteCheckpoint: {
-                externalPostId: result.remotePostId,
-                externalUrl: result.remoteUrl,
-                publishedAt: committedAt.toISOString(),
-                reconciledBy: 'automatic',
-                operationId: operation.id,
+        if (result.result === 'FOUND') {
+          const committedAt = new Date();
+          const updated = await input.prisma.$transaction(async (tx) => {
+            const remoteConfirmed = await tx.outboundOperation.updateMany({
+              where: {
+                id: operation.id,
+                state: 'REMOTE_UNKNOWN',
                 attemptId: operation.attemptId,
                 fence: operation.fence,
-                recordedAt: committedAt.toISOString(),
-              } as Prisma.InputJsonValue,
-              remoteConfirmedAt: committedAt,
-              completedAt: committedAt,
-              requiresManualReview: false,
-              reconciliationAttempts: { increment: 1 },
-              lastReconciledAt: committedAt,
-              lastErrorCode: null,
-              lastErrorMessage: null,
-            },
+              },
+              data: {
+                state: 'LOCAL_COMMITTED',
+                remoteId: result.remotePostId,
+                remoteCheckpoint: {
+                  externalPostId: result.remotePostId,
+                  externalUrl: result.remoteUrl,
+                  publishedAt: committedAt.toISOString(),
+                  reconciledBy: 'automatic',
+                  operationId: operation.id,
+                  attemptId: operation.attemptId,
+                  fence: operation.fence,
+                  recordedAt: committedAt.toISOString(),
+                } as Prisma.InputJsonValue,
+                remoteConfirmedAt: committedAt,
+                completedAt: committedAt,
+                requiresManualReview: false,
+                reconciliationAttempts: { increment: 1 },
+                lastReconciledAt: committedAt,
+                lastErrorCode: null,
+                lastErrorMessage: null,
+              },
+            });
+            if (remoteConfirmed.count !== 1) return false;
+            await tx.platformPost.update({
+              where: { id: post.id },
+              data: {
+                status: 'PUBLISHED',
+                externalPostId: result.remotePostId,
+                externalUrl: result.remoteUrl,
+                publishedAt: committedAt,
+                errorCode: null,
+                errorMessage: null,
+                reconciliationAttempts: { increment: 1 },
+                lastReconciledAt: committedAt,
+                requiresManualReview: false,
+              },
+            });
+            return true;
           });
-          if (remoteConfirmed.count !== 1) return false;
-          await tx.platformPost.update({
-            where: { id: post.id },
-            data: {
-              status: 'PUBLISHED',
-              externalPostId: result.remotePostId,
-              externalUrl: result.remoteUrl,
-              publishedAt: committedAt,
-              errorCode: null,
-              errorMessage: null,
-              reconciliationAttempts: { increment: 1 },
-              lastReconciledAt: committedAt,
-              requiresManualReview: false,
-            },
+          if (!updated) return { status: 'STALE_OPERATION' };
+          await updateParentStatus(input.prisma, post.contentPostId);
+          return { status: 'RESOLVED_PUBLISHED', externalPostId: result.remotePostId };
+        }
+
+        if (result.result === 'CONFIRMED_ABSENT') {
+          const reconciledAt = new Date();
+          const updated = await input.prisma.$transaction(async (tx) => {
+            const absent = await tx.outboundOperation.updateMany({
+              where: {
+                id: operation.id,
+                state: 'REMOTE_UNKNOWN',
+                attemptId: operation.attemptId,
+                fence: operation.fence,
+              },
+              data: {
+                state: 'CONFIRMED_ABSENT',
+                fence: { increment: 1 },
+                requiresManualReview: false,
+                reconciliationAttempts: { increment: 1 },
+                lastReconciledAt: reconciledAt,
+                lastErrorCode: 'CONFIRMED_ABSENT',
+                lastErrorMessage: 'Đối soát xác nhận bài chưa được đăng lên nền tảng.',
+              },
+            });
+            if (absent.count !== 1) return false;
+            await tx.platformPost.update({
+              where: { id: post.id },
+              data: {
+                status: 'FAILED',
+                errorCode: 'CONFIRMED_ABSENT',
+                errorMessage: 'Đối soát xác nhận bài chưa được đăng lên nền tảng.',
+                reconciliationAttempts: { increment: 1 },
+                lastReconciledAt: reconciledAt,
+                requiresManualReview: false,
+              },
+            });
+            return true;
           });
-          return true;
+          if (!updated) return { status: 'STALE_OPERATION' };
+          await updateParentStatus(input.prisma, post.contentPostId);
+          return { status: 'RESOLVED_FAILED' };
+        }
+
+        const nextAttempts = operation.reconciliationAttempts + 1;
+        const updated = await recordIndeterminateReconciliation(input.prisma, operation, post.id, {
+          attempts: nextAttempts,
+          reason: result.reason,
         });
         if (!updated) return { status: 'STALE_OPERATION' };
-        await updateParentStatus(input.prisma, post.contentPostId);
-        return { status: 'RESOLVED_PUBLISHED', externalPostId: result.remotePostId };
-      }
-
-      if (result.result === 'CONFIRMED_ABSENT') {
-        const reconciledAt = new Date();
-        const updated = await input.prisma.$transaction(async (tx) => {
-          const absent = await tx.outboundOperation.updateMany({
-            where: {
-              id: operation.id,
-              state: 'REMOTE_UNKNOWN',
-              attemptId: operation.attemptId,
-              fence: operation.fence,
-            },
-            data: {
-              state: 'CONFIRMED_ABSENT',
-              fence: { increment: 1 },
-              requiresManualReview: false,
-              reconciliationAttempts: { increment: 1 },
-              lastReconciledAt: reconciledAt,
-              lastErrorCode: 'CONFIRMED_ABSENT',
-              lastErrorMessage: 'Đối soát xác nhận bài chưa được đăng lên nền tảng.',
-            },
-          });
-          if (absent.count !== 1) return false;
-          await tx.platformPost.update({
-            where: { id: post.id },
-            data: {
-              status: 'FAILED',
-              errorCode: 'CONFIRMED_ABSENT',
-              errorMessage: 'Đối soát xác nhận bài chưa được đăng lên nền tảng.',
-              reconciliationAttempts: { increment: 1 },
-              lastReconciledAt: reconciledAt,
-              requiresManualReview: false,
-            },
-          });
-          return true;
-        });
-        if (!updated) return { status: 'STALE_OPERATION' };
-        await updateParentStatus(input.prisma, post.contentPostId);
-        return { status: 'RESOLVED_FAILED' };
-      }
-
-      const nextAttempts = operation.reconciliationAttempts + 1;
-      const updated = await recordIndeterminateReconciliation(input.prisma, operation, post.id, {
-        attempts: nextAttempts,
-        reason: result.reason,
-      });
-      if (!updated) return { status: 'STALE_OPERATION' };
-      if (nextAttempts < 5) {
-        throw new ReconciliationIndeterminateError(
-          result.reason ?? 'Không thể xác định kết quả publish phía nền tảng.',
-        );
-      }
-      return { status: 'MANUAL_REVIEW_REQUIRED', reason: result.reason };
-    });
+        if (nextAttempts < 5) {
+          throw new ReconciliationIndeterminateError(
+            result.reason ?? 'Không thể xác định kết quả publish phía nền tảng.',
+          );
+        }
+        return { status: 'MANUAL_REVIEW_REQUIRED', reason: result.reason };
+      },
+      {
+        storeId: post.socialAccount.storeId ?? null,
+        target: post.platform,
+      },
+    );
   };
 }
 

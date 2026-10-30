@@ -2,7 +2,7 @@ import { isPlatformError, type SocialPlatformAdapter } from '@socialhub/platform
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import type { PlatformComment } from '@socialhub/platform-adapters';
 import { z } from 'zod';
 
@@ -21,7 +21,12 @@ const syncCommentsPayloadSchema = z.object({
 export function createSyncCommentsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+  adapterFactory: {
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
+  };
 }) {
   return async (job: {
     data: unknown;
@@ -66,7 +71,12 @@ async function syncComments(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+    adapterFactory: {
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
+    };
   },
   payload: z.infer<typeof syncCommentsPayloadSchema>,
 ) {
@@ -76,7 +86,10 @@ async function syncComments(
   });
   if (!account) return { synced: 0, reason: 'account_not_found' };
 
-  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId, {
+    storeId: account.storeId ?? null,
+    target: account.platform,
+  });
   try {
     const { adapters } = adapterCtx;
     const adapter = adapters.get(account.platform);

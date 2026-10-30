@@ -33,6 +33,7 @@ import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
 import { AuditService, type AuditContext } from '../audit/audit.service';
 import { EventsService } from '../events/events.service';
+import { formatStoreProxySummary, formatStoreShopifySummary } from './store-integrations.service';
 
 const OAUTH_STATE_TTL_SECONDS = 60 * 60;
 
@@ -152,6 +153,8 @@ export class SocialAccountsService implements OnModuleDestroy {
     const stores = await this.prisma.store.findMany({
       where: { workspaceId },
       include: {
+        proxySetting: true,
+        shopifySetting: true,
         socialAccounts: {
           where: { deletedAt: null },
           select: {
@@ -182,6 +185,8 @@ export class SocialAccountsService implements OnModuleDestroy {
         isDefault: store.isDefault,
         accountCount: store.socialAccounts.length,
         accounts: store.socialAccounts,
+        proxy: formatStoreProxySummary(store.proxySetting),
+        shopify: formatStoreShopifySummary(store.shopifySetting),
         createdAt: store.createdAt,
         updatedAt: store.updatedAt,
       })),
@@ -620,18 +625,22 @@ export class SocialAccountsService implements OnModuleDestroy {
               developmentFixture: adapter instanceof DevelopmentFixtureAdapter,
             };
           })()
-        : await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-            const adapter = adapters.get(platform);
-            return {
-              authorizationUrl: adapter.buildAuthorizationUrl({
-                redirectUri,
-                state,
-                scopes,
-                codeChallenge: pkce.challenge,
-              }),
-              developmentFixture: adapter instanceof DevelopmentFixtureAdapter,
-            };
-          });
+        : await this.adapterFactory.withWorkspace(
+            workspaceId,
+            async ({ adapters }) => {
+              const adapter = adapters.get(platform);
+              return {
+                authorizationUrl: adapter.buildAuthorizationUrl({
+                  redirectUri,
+                  state,
+                  scopes,
+                  codeChallenge: pkce.challenge,
+                }),
+                developmentFixture: adapter instanceof DevelopmentFixtureAdapter,
+              };
+            },
+            { storeId: cleanStoreId ?? null, target: platform },
+          );
 
     await this.redis.connect();
     await this.redis.getClient().set(
@@ -682,7 +691,10 @@ export class SocialAccountsService implements OnModuleDestroy {
     }
     const crossBrowser = !currentUserId;
 
-    const adapterCtx = await this.adapterFactory.forWorkspace(payload.workspaceId);
+    const adapterCtx = await this.adapterFactory.forWorkspace(payload.workspaceId, {
+      storeId: payload.storeId ?? null,
+      target: input.platform,
+    });
     try {
       const adapter = adapterCtx.adapters.get(input.platform);
       logger.debug(
@@ -940,78 +952,85 @@ export class SocialAccountsService implements OnModuleDestroy {
         ? new Set(input.pageIds.map((id) => id.trim()).filter(Boolean))
         : null;
 
-    return await this.adapterFactory.withWorkspace(input.workspaceId, async ({ adapters }) => {
-      const syncedAccounts: Array<
-        Awaited<ReturnType<typeof this.upsertSocialAccountFromTokenSet>>
-      > = [];
-      const errors: string[] = [];
+    return await this.adapterFactory.withWorkspace(
+      input.workspaceId,
+      async ({ adapters }) => {
+        const syncedAccounts: Array<
+          Awaited<ReturnType<typeof this.upsertSocialAccountFromTokenSet>>
+        > = [];
+        const errors: string[] = [];
 
-      for (const platform of platforms) {
-        const adapter = adapters.get(platform);
-        if (!adapter.discoverAccountsFromToken) continue;
+        for (const platform of platforms) {
+          const adapter = adapters.get(platform);
+          if (!adapter.discoverAccountsFromToken) continue;
 
-        try {
-          const discovered = await adapter.discoverAccountsFromToken(rawToken);
-          const filtered = pageIdFilter
-            ? discovered.filter((item) => {
-                const extId = item.accountProfile?.externalAccountId;
-                const pageId = item.accountProfile?.externalPageId;
-                return (extId && pageIdFilter.has(extId)) || (pageId && pageIdFilter.has(pageId));
-              })
-            : discovered;
+          try {
+            const discovered = await adapter.discoverAccountsFromToken(rawToken);
+            const filtered = pageIdFilter
+              ? discovered.filter((item) => {
+                  const extId = item.accountProfile?.externalAccountId;
+                  const pageId = item.accountProfile?.externalPageId;
+                  return (extId && pageIdFilter.has(extId)) || (pageId && pageIdFilter.has(pageId));
+                })
+              : discovered;
 
-          for (const tokenSet of filtered) {
-            const saved = await this.upsertSocialAccountFromTokenSet({
-              workspaceId: input.workspaceId,
-              platform,
-              actorUserId: input.actorUserId,
-              tokenSet,
-              adapter,
-              auditContext: input.auditContext,
-              source: 'META_TOKEN_SYNC',
-              storeId: input.storeId ?? undefined,
-            });
-            syncedAccounts.push(saved);
+            for (const tokenSet of filtered) {
+              const saved = await this.upsertSocialAccountFromTokenSet({
+                workspaceId: input.workspaceId,
+                platform,
+                actorUserId: input.actorUserId,
+                tokenSet,
+                adapter,
+                auditContext: input.auditContext,
+                source: 'META_TOKEN_SYNC',
+                storeId: input.storeId ?? undefined,
+              });
+              syncedAccounts.push(saved);
+            }
+          } catch (err) {
+            errors.push(
+              `${platform}: ${err instanceof Error ? err.message : 'Không thể đọc tài khoản từ token'}`,
+            );
           }
-        } catch (err) {
-          errors.push(
-            `${platform}: ${err instanceof Error ? err.message : 'Không thể đọc tài khoản từ token'}`,
+        }
+
+        if (syncedAccounts.length === 0) {
+          throw AppError.validation(
+            errors.length > 0
+              ? `Không đồng bộ được tài khoản nào từ Meta Token (${errors.join(' | ')}).`
+              : 'Không tìm thấy Facebook Page hoặc Instagram Business nào khớp với token và bộ lọc.',
           );
         }
-      }
 
-      if (syncedAccounts.length === 0) {
-        throw AppError.validation(
-          errors.length > 0
-            ? `Không đồng bộ được tài khoản nào từ Meta Token (${errors.join(' | ')}).`
-            : 'Không tìm thấy Facebook Page hoặc Instagram Business nào khớp với token và bộ lọc.',
-        );
-      }
+        if (!input.storeId && input.autoCreateStores !== false && this.prisma.store) {
+          await this.autoGroupStores(input.workspaceId, input.actorUserId, input.auditContext);
+        }
 
-      if (!input.storeId && input.autoCreateStores !== false && this.prisma.store) {
-        await this.autoGroupStores(input.workspaceId, input.actorUserId, input.auditContext);
-      }
-
-      return {
-        syncedCount: syncedAccounts.length,
-        items: syncedAccounts.map((account) => ({
-          id: account.id,
-          storeId: account.storeId ?? null,
-          platform: account.platform,
-          name: account.name,
-          username: account.username,
-          avatarUrl: account.avatarUrl,
-          profileUrl: account.profileUrl,
-          status: account.status,
-          scopes: account.scopes,
-          lastSyncedAt: account.lastSyncedAt,
-          lastErrorAt: account.lastErrorAt,
-          lastErrorMessage: account.lastErrorMessage,
-          createdAt: account.createdAt,
-          updatedAt: account.updatedAt,
-        })),
-      };
-    });
+        return {
+          syncedCount: syncedAccounts.length,
+          items: syncedAccounts.map((account) => ({
+            id: account.id,
+            storeId: account.storeId ?? null,
+            platform: account.platform,
+            name: account.name,
+            username: account.username,
+            avatarUrl: account.avatarUrl,
+            profileUrl: account.profileUrl,
+            status: account.status,
+            scopes: account.scopes,
+            lastSyncedAt: account.lastSyncedAt,
+            lastErrorAt: account.lastErrorAt,
+            lastErrorMessage: account.lastErrorMessage,
+            createdAt: account.createdAt,
+            updatedAt: account.updatedAt,
+          })),
+        };
+      },
+      {
+        storeId: input.storeId ?? null,
+        target: platforms.length === 1 ? platforms[0] : undefined,
+      },
+    );
   }
 
   private async upsertSocialAccountFromTokenSet(input: {
@@ -1151,23 +1170,27 @@ export class SocialAccountsService implements OnModuleDestroy {
     });
 
     try {
-      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-        const adapter = adapters.get(account.platform);
-        if (account.token && adapter.revokeToken) {
-          try {
-            const accessToken = decryptToken(account.token.accessToken, this.keyring);
-            await adapter.revokeToken(accessToken);
-          } catch (error) {
-            logger.warn(
-              {
-                socialAccountId,
-                error: error instanceof Error ? error.message : String(error),
-              },
-              'Failed to revoke token during disconnection. Proceeding to delete account anyway.',
-            );
+      await this.adapterFactory.withWorkspace(
+        workspaceId,
+        async ({ adapters }) => {
+          const adapter = adapters.get(account.platform);
+          if (account.token && adapter.revokeToken) {
+            try {
+              const accessToken = decryptToken(account.token.accessToken, this.keyring);
+              await adapter.revokeToken(accessToken);
+            } catch (error) {
+              logger.warn(
+                {
+                  socialAccountId,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+                'Failed to revoke token during disconnection. Proceeding to delete account anyway.',
+              );
+            }
           }
-        }
-      });
+        },
+        { storeId: account.storeId ?? null, target: account.platform },
+      );
     } catch (error) {
       logger.warn(
         {
@@ -1207,16 +1230,20 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (!account) throw AppError.notFound('social account');
     if (!account.token) throw AppError.conflict('Social account chưa có token để kiểm tra.');
 
-    const profile = await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get(account.platform);
-      const accessToken = await this.getFreshAccessToken(account, adapter);
-      return await adapter.getAccountProfile({
-        accessToken,
-        externalAccountId: account.externalAccountId,
-        externalPageId: account.externalPageId ?? undefined,
-        correlationId: auditContext.requestId ?? 'test-connection',
-      });
-    });
+    const profile = await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(account.platform);
+        const accessToken = await this.getFreshAccessToken(account, adapter);
+        return await adapter.getAccountProfile({
+          accessToken,
+          externalAccountId: account.externalAccountId,
+          externalPageId: account.externalPageId ?? undefined,
+          correlationId: auditContext.requestId ?? 'test-connection',
+        });
+      },
+      { storeId: account.storeId ?? null, target: account.platform },
+    );
 
     const updated = await this.prisma.socialAccount.update({
       where: { id: account.id },
@@ -1280,6 +1307,7 @@ export class SocialAccountsService implements OnModuleDestroy {
           correlationId: auditContext.requestId ?? 'tiktok-creator-info',
         });
       },
+      { storeId: account.storeId ?? null, target: account.platform },
     );
 
     return { ...creatorInfo, fetchedAt: new Date().toISOString() };
@@ -1305,22 +1333,26 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const items = await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get(account.platform);
-      if (!hasPinterestBoardBrowser(adapter)) {
-        throw AppError.conflict(
-          'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
-        );
-      }
+    const items = await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(account.platform);
+        if (!hasPinterestBoardBrowser(adapter)) {
+          throw AppError.conflict(
+            'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
+          );
+        }
 
-      const accessToken = await this.getFreshAccessToken(account, adapter);
-      return await adapter.listBoards({
-        accessToken,
-        externalAccountId: account.externalAccountId,
-        externalPageId: account.externalPageId ?? undefined,
-        correlationId: auditContext.requestId ?? 'pinterest-list-boards',
-      });
-    });
+        const accessToken = await this.getFreshAccessToken(account, adapter);
+        return await adapter.listBoards({
+          accessToken,
+          externalAccountId: account.externalAccountId,
+          externalPageId: account.externalPageId ?? undefined,
+          correlationId: auditContext.requestId ?? 'pinterest-list-boards',
+        });
+      },
+      { storeId: account.storeId ?? null, target: account.platform },
+    );
     return {
       items,
       fetchedAt: new Date().toISOString(),
@@ -1348,25 +1380,29 @@ export class SocialAccountsService implements OnModuleDestroy {
       );
     }
 
-    const items = await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get(account.platform);
-      if (!hasPinterestBoardBrowser(adapter)) {
-        throw AppError.conflict(
-          'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
-        );
-      }
+    const items = await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(account.platform);
+        if (!hasPinterestBoardBrowser(adapter)) {
+          throw AppError.conflict(
+            'Pinterest API có hỗ trợ đọc board/section, nhưng adapter đang chạy chưa có chức năng này. Hãy kiểm tra app đang dùng Pinterest adapter thật và build/deploy đã cập nhật.',
+          );
+        }
 
-      const accessToken = await this.getFreshAccessToken(account, adapter);
-      return await adapter.listBoardSections(
-        {
-          accessToken,
-          externalAccountId: account.externalAccountId,
-          externalPageId: account.externalPageId ?? undefined,
-          correlationId: auditContext.requestId ?? 'pinterest-list-board-sections',
-        },
-        boardId,
-      );
-    });
+        const accessToken = await this.getFreshAccessToken(account, adapter);
+        return await adapter.listBoardSections(
+          {
+            accessToken,
+            externalAccountId: account.externalAccountId,
+            externalPageId: account.externalPageId ?? undefined,
+            correlationId: auditContext.requestId ?? 'pinterest-list-board-sections',
+          },
+          boardId,
+        );
+      },
+      { storeId: account.storeId ?? null, target: account.platform },
+    );
     return {
       items,
       fetchedAt: new Date().toISOString(),
@@ -1391,32 +1427,36 @@ export class SocialAccountsService implements OnModuleDestroy {
     }
     if (!account.token) throw AppError.conflict('Instagram account chưa có token để kiểm tra.');
 
-    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get(account.platform);
+    return await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(account.platform);
 
-      // Kiểm tra xem adapter có phương thức searchLocations không
-      if (
-        !('searchLocations' in adapter) ||
-        typeof (adapter as unknown as { searchLocations: unknown }).searchLocations !== 'function'
-      ) {
-        throw AppError.conflict('Instagram adapter chưa hỗ trợ tính năng tìm kiếm vị trí.');
-      }
-
-      const accessToken = await this.getFreshAccessToken(account, adapter);
-      return await (
-        adapter as unknown as {
-          searchLocations: (ctx: unknown, query: string) => Promise<unknown[]>;
+        // Kiểm tra xem adapter có phương thức searchLocations không
+        if (
+          !('searchLocations' in adapter) ||
+          typeof (adapter as unknown as { searchLocations: unknown }).searchLocations !== 'function'
+        ) {
+          throw AppError.conflict('Instagram adapter chưa hỗ trợ tính năng tìm kiếm vị trí.');
         }
-      ).searchLocations(
-        {
-          accessToken,
-          externalAccountId: account.externalAccountId,
-          externalPageId: account.externalPageId ?? undefined,
-          correlationId: auditContext.requestId ?? 'instagram-search-locations',
-        },
-        query,
-      );
-    });
+
+        const accessToken = await this.getFreshAccessToken(account, adapter);
+        return await (
+          adapter as unknown as {
+            searchLocations: (ctx: unknown, query: string) => Promise<unknown[]>;
+          }
+        ).searchLocations(
+          {
+            accessToken,
+            externalAccountId: account.externalAccountId,
+            externalPageId: account.externalPageId ?? undefined,
+            correlationId: auditContext.requestId ?? 'instagram-search-locations',
+          },
+          query,
+        );
+      },
+      { storeId: account.storeId ?? null, target: account.platform },
+    );
   }
 
   private tokenCreateData(
@@ -1603,9 +1643,13 @@ export class SocialAccountsService implements OnModuleDestroy {
     if (typeof this.adapterFactory.offlineAdapters === 'function') {
       this.adapterFactory.offlineAdapters().requireCapability(account.platform, 'getPosts');
     } else {
-      await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-        adapters.requireCapability(account.platform, 'getPosts');
-      });
+      await this.adapterFactory.withWorkspace(
+        workspaceId,
+        async ({ adapters }) => {
+          adapters.requireCapability(account.platform, 'getPosts');
+        },
+        { storeId: account.storeId ?? null, target: account.platform },
+      );
     }
 
     const activeJob = await this.prisma.externalPostSyncJob.findFirst({

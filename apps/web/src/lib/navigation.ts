@@ -23,10 +23,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     description: 'Quản lý bài viết, bình luận và trạng thái publish',
   },
   { label: 'Analytics', href: '/analytics', phase: 8, description: 'Phân tích chi tiết' },
-  { label: 'Social Accounts', href: '/accounts', phase: 3, description: 'Kết nối tài khoản' },
+  {
+    label: 'Social Accounts',
+    href: '/accounts',
+    phase: 3,
+    description: 'Stores, kênh MXH, Shopify /s/ & Proxy',
+  },
   { label: 'Team', href: '/team', phase: 2, description: 'Thành viên và phân quyền' },
   { label: 'Notifications', href: '/notifications', phase: 2, description: 'Thông báo' },
-  { label: 'Network Policy', href: '/network', phase: 7, description: 'Proxy và direct API' },
   { label: 'Settings', href: '/settings', phase: 2, description: 'Cấu hình workspace' },
 ];
 

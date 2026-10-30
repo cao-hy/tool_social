@@ -121,15 +121,19 @@ async function main(): Promise<void> {
     create: { workspaceId: workspace.id, name: 'Cần xử lý gấp', color: '#dc2626' },
   });
 
-  await prisma.replyTemplate.upsert({
-    where: { workspaceId_name: { workspaceId: workspace.id, name: 'Cảm ơn' } },
-    update: {},
-    create: {
-      workspaceId: workspace.id,
-      name: 'Cảm ơn',
-      body: 'Cảm ơn bạn đã quan tâm! Chúng tôi sẽ phản hồi sớm nhất có thể.',
-    },
+  const existingTemplate = await prisma.replyTemplate.findFirst({
+    where: { workspaceId: workspace.id, storeId: null, name: 'Cảm ơn' },
   });
+  if (!existingTemplate) {
+    await prisma.replyTemplate.create({
+      data: {
+        workspaceId: workspace.id,
+        storeId: null,
+        name: 'Cảm ơn',
+        body: 'Cảm ơn bạn đã quan tâm! Chúng tôi sẽ phản hồi sớm nhất có thể.',
+      },
+    });
+  }
 
   console.warn('✔ Seed xong.');
   console.warn('');

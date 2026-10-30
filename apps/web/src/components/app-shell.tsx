@@ -15,14 +15,17 @@ import {
   Circle,
   Clock,
   FileText,
-  Globe,
+  Globe2,
   LayoutDashboard,
   Link2,
   LogOut,
   MessageSquare,
   PenSquare,
+  Plus,
   RefreshCw,
   Settings,
+  Shield,
+  Store as StoreIcon,
   Users,
   X,
 } from 'lucide-react';
@@ -35,6 +38,7 @@ import {
   notificationDisplayMeta,
   platformBadgeClass,
 } from '@/lib/notification-format';
+import { StoreContextProvider, useActiveStore } from '@/lib/store-context';
 import type { NotificationView } from '@/lib/types';
 import {
   prefetchWorkspaceSharedMeta,
@@ -53,7 +57,6 @@ const ICONS: Record<string, React.ElementType> = {
   '/accounts': Link2,
   '/team': Users,
   '/notifications': Bell,
-  '/network': Globe,
   '/settings': Settings,
 };
 const LOGO_PATH = '/logo_b6.png';
@@ -76,7 +79,6 @@ import {
   JobActivityTransientBar,
 } from './job-activity-panel';
 import { RoleBadge } from './role-badge';
-import { ProxyWidget } from './proxy-widget';
 import {
   useWorkspaceEventSubscription,
   WorkspaceEventsProvider,
@@ -86,13 +88,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const auth = useAuth();
   return (
     <WorkspaceEventsProvider workspaceId={auth.activeWorkspaceId}>
-      <AppShellInner>{children}</AppShellInner>
+      <StoreContextProvider workspaceId={auth.activeWorkspaceId}>
+        <AppShellInner>{children}</AppShellInner>
+      </StoreContextProvider>
     </WorkspaceEventsProvider>
+  );
+}
+
+function isWorkspaceGlobalRoute(pathname: string): boolean {
+  return (
+    pathname === '/analytics' ||
+    pathname === '/accounts' ||
+    pathname === '/team' ||
+    pathname === '/settings' ||
+    pathname === '/notifications'
   );
 }
 
 function AppShellInner({ children }: { children: ReactNode }) {
   const auth = useAuth();
+  const storeCtx = useActiveStore();
   const queryClient = useQueryClient();
   const toast = useToast();
   const router = useRouter();
@@ -100,6 +115,8 @@ function AppShellInner({ children }: { children: ReactNode }) {
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
+  const [isStoreMenuOpen, setIsStoreMenuOpen] = useState(false);
+  const [isHeaderStoreMenuOpen, setIsHeaderStoreMenuOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notificationItems, setNotificationItems] = useState<NotificationView[]>([]);
   const [notificationsUnreadOnly, setNotificationsUnreadOnly] = useState(false);
@@ -284,11 +301,8 @@ function AppShellInner({ children }: { children: ReactNode }) {
 
   if (!auth.user) return null;
 
-  const canManageProxy =
-    auth.activeWorkspace?.role === 'OWNER' || auth.activeWorkspace?.role === 'ADMIN';
   const navItems = NAV_ITEMS.filter(
-    (item) =>
-      item.href !== '/notifications' && item.href !== '/settings' && item.href !== '/network',
+    (item) => item.href !== '/notifications' && item.href !== '/settings',
   );
 
   return (
@@ -324,33 +338,39 @@ function AppShellInner({ children }: { children: ReactNode }) {
             )}
           </div>
 
-          <div className="relative mb-5 shrink-0">
+          <div className="relative mb-2.5 shrink-0">
             {!isCollapsed ? (
               <button
                 type="button"
-                onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
-                className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                onClick={() => {
+                  setIsStoreMenuOpen(false);
+                  setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen);
+                }}
+                className="flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500"
               >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-sm font-bold text-brand-700 ring-1 ring-inset ring-brand-200/70">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-xs font-bold text-brand-700 ring-1 ring-inset ring-brand-200/70">
                   {auth.activeWorkspace?.name?.charAt(0).toUpperCase() ?? 'W'}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-900">
+                  <p className="truncate text-xs font-semibold text-slate-900">
                     {auth.activeWorkspace?.name ?? 'Chưa có workspace'}
                   </p>
-                  <p className="truncate text-xs font-medium capitalize text-slate-500">
+                  <p className="truncate text-[11px] font-medium capitalize text-slate-500">
                     {auth.activeWorkspace
                       ? auth.activeWorkspace.role.toLowerCase()
                       : 'Tài khoản cá nhân'}
                   </p>
                 </div>
-                <ChevronsUpDown className="h-4 w-4 shrink-0 text-slate-400" />
+                <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
               </button>
             ) : (
               <div className="flex justify-center">
                 <button
                   type="button"
-                  onClick={() => setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen)}
+                  onClick={() => {
+                    setIsStoreMenuOpen(false);
+                    setIsWorkspaceMenuOpen(!isWorkspaceMenuOpen);
+                  }}
                   className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 font-bold text-brand-700 ring-1 ring-inset ring-brand-200/70 transition hover:bg-brand-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   title={auth.activeWorkspace?.name ?? 'Workspace'}
                 >
@@ -436,9 +456,105 @@ function AppShellInner({ children }: { children: ReactNode }) {
             )}
           </div>
 
-          {canManageProxy && auth.activeWorkspaceId ? (
-            <div className="mb-5 shrink-0">
-              <ProxyWidget workspaceId={auth.activeWorkspaceId} isCollapsed={isCollapsed} />
+          {auth.activeWorkspaceId ? (
+            <div className="relative mb-5 shrink-0">
+              {!isCollapsed ? (
+                storeCtx.stores.length === 0 && !storeCtx.loading ? (
+                  <button
+                    type="button"
+                    onClick={() => storeCtx.openCreateStoreModal()}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-brand-300 bg-brand-50/60 px-3 py-2.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-50"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Tạo Store đầu tiên
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsWorkspaceMenuOpen(false);
+                      setIsStoreMenuOpen((prev) => !prev);
+                    }}
+                    className="flex w-full items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-left transition hover:border-brand-300 hover:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  >
+                    <span
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white shadow-sm"
+                      style={{ backgroundColor: storeCtx.activeStore?.color || '#2563eb' }}
+                    >
+                      {storeCtx.activeStore?.name?.charAt(0).toUpperCase() ?? 'S'}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Store đang chọn
+                        </span>
+                        {storeCtx.unassignedAccounts.length > 0 ? (
+                          <span
+                            className="rounded-full bg-amber-100 px-1.5 py-0.2 text-[9px] font-bold text-amber-800"
+                            title={`${storeCtx.unassignedAccounts.length} kênh chưa gán Store`}
+                          >
+                            +{storeCtx.unassignedAccounts.length} chưa gán
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {storeCtx.activeStore?.name ??
+                          (storeCtx.loading ? 'Đang tải Store...' : 'Chọn Store')}
+                      </p>
+                      {storeCtx.activeStore ? (
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                          <span>{storeCtx.activeStore.accountCount} kênh</span>
+                          {storeCtx.activeStore.shopify?.connected &&
+                          storeCtx.activeStore.shopify.enabled ? (
+                            <span className="rounded bg-emerald-50 px-1 font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                              /s/
+                            </span>
+                          ) : null}
+                          {storeCtx.activeStore.proxy?.enabled &&
+                          (storeCtx.activeStore.proxy.targets?.length ?? 0) > 0 ? (
+                            <span className="rounded bg-indigo-50 px-1 font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200">
+                              Proxy ({storeCtx.activeStore.proxy.targets.length})
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                    <ChevronsUpDown className="h-4 w-4 shrink-0 text-slate-400" />
+                  </button>
+                )
+              ) : (
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsWorkspaceMenuOpen(false);
+                      if (storeCtx.stores.length === 0 && !storeCtx.loading) {
+                        storeCtx.openCreateStoreModal();
+                      } else {
+                        setIsStoreMenuOpen((prev) => !prev);
+                      }
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-lg text-sm font-bold text-white shadow-sm ring-2 ring-white transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    style={{ backgroundColor: storeCtx.activeStore?.color || '#2563eb' }}
+                    title={
+                      storeCtx.activeStore
+                        ? `Store đang chọn: ${storeCtx.activeStore.name}`
+                        : 'Chọn hoặc tạo Store'
+                    }
+                  >
+                    {storeCtx.activeStore?.name?.charAt(0).toUpperCase() ?? (
+                      <StoreIcon className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {isStoreMenuOpen ? (
+                <StoreSwitcherMenu
+                  isCollapsed={isCollapsed}
+                  onClose={() => setIsStoreMenuOpen(false)}
+                />
+              ) : null}
             </div>
           ) : null}
 
@@ -481,11 +597,21 @@ function AppShellInner({ children }: { children: ReactNode }) {
                   title={isCollapsed ? item.label : undefined}
                   onMouseEnter={() => {
                     router.prefetch(item.href);
-                    prefetchWorkspaceTabData(queryClient, auth.activeWorkspaceId, item.href);
+                    prefetchWorkspaceTabData(
+                      queryClient,
+                      auth.activeWorkspaceId,
+                      item.href,
+                      storeCtx.activeStoreId,
+                    );
                   }}
                   onFocus={() => {
                     router.prefetch(item.href);
-                    prefetchWorkspaceTabData(queryClient, auth.activeWorkspaceId, item.href);
+                    prefetchWorkspaceTabData(
+                      queryClient,
+                      auth.activeWorkspaceId,
+                      item.href,
+                      storeCtx.activeStoreId,
+                    );
                   }}
                   onClick={(event) => {
                     if (
@@ -541,13 +667,49 @@ function AppShellInner({ children }: { children: ReactNode }) {
           >
             <div className="flex items-center justify-between gap-3">
               <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm">
-                <span className="truncate font-medium text-slate-500">
+                <span className="hidden truncate font-medium text-slate-500 sm:inline">
                   {auth.activeWorkspace?.name ?? 'Workspace'}
                 </span>
-                <span className="select-none text-slate-300">/</span>
+                <span className="hidden select-none text-slate-300 sm:inline">/</span>
                 <span className="truncate font-semibold text-slate-900">
                   {resolveCurrentPageLabel(pendingHref ?? pathname)}
                 </span>
+
+                {auth.activeWorkspaceId ? (
+                  isWorkspaceGlobalRoute(pendingHref ?? pathname) ? (
+                    <span
+                      className="ml-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600"
+                      title="Trang này hiển thị phạm vi toàn bộ Workspace"
+                    >
+                      <Globe2 className="h-3.5 w-3.5 text-slate-500" />
+                      {(pendingHref ?? pathname) === '/analytics'
+                        ? 'Toàn bộ Stores'
+                        : 'Cấp Workspace'}
+                    </span>
+                  ) : storeCtx.activeStore ? (
+                    <div className="relative ml-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setIsHeaderStoreMenuOpen((prev) => !prev)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-800 shadow-xs transition hover:border-brand-300 hover:bg-brand-50/40"
+                        title="Đổi nhanh Store đang thao tác (độc lập trên từng tab trình duyệt)"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: storeCtx.activeStore.color || '#2563eb' }}
+                        />
+                        <span className="max-w-[140px] truncate">{storeCtx.activeStore.name}</span>
+                        <ChevronsUpDown className="h-3 w-3 text-slate-400" />
+                      </button>
+                      {isHeaderStoreMenuOpen ? (
+                        <StoreSwitcherMenu
+                          alignHeader
+                          onClose={() => setIsHeaderStoreMenuOpen(false)}
+                        />
+                      ) : null}
+                    </div>
+                  ) : null
+                ) : null}
               </nav>
 
               <div className="flex shrink-0 items-center gap-2">
@@ -638,6 +800,117 @@ function AppShellInner({ children }: { children: ReactNode }) {
         <NotificationToasts />
       </div>
     </JobActivityProvider>
+  );
+}
+
+function StoreSwitcherMenu({
+  isCollapsed = false,
+  alignHeader = false,
+  onClose,
+}: {
+  isCollapsed?: boolean;
+  alignHeader?: boolean;
+  onClose: () => void;
+}) {
+  const storeCtx = useActiveStore();
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        className={`absolute z-50 rounded-xl border border-slate-200 bg-white p-2 shadow-xl ${
+          alignHeader
+            ? 'left-0 top-full mt-1.5 w-72'
+            : isCollapsed
+              ? 'left-full top-0 ml-3 w-72'
+              : 'left-0 top-full mt-1.5 w-full min-w-[264px]'
+        }`}
+      >
+        <div className="mb-1.5 flex items-center justify-between px-2 pt-1">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Chuyển Store thao tác
+          </span>
+          <span className="text-[10px] font-medium text-slate-400">Độc lập theo Tab</span>
+        </div>
+
+        <div className="max-h-64 space-y-1 overflow-y-auto pr-0.5">
+          {storeCtx.stores.map((store) => {
+            const isSelected = store.id === storeCtx.activeStoreId;
+            const hasShopify = Boolean(store.shopify?.connected && store.shopify.enabled);
+            const proxyCount = store.proxy?.enabled ? (store.proxy.targets?.length ?? 0) : 0;
+
+            return (
+              <button
+                key={store.id}
+                type="button"
+                onClick={() => {
+                  storeCtx.setActiveStoreId(store.id);
+                  onClose();
+                }}
+                className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${
+                  isSelected
+                    ? 'bg-brand-50 font-semibold text-brand-800 ring-1 ring-inset ring-brand-200/80'
+                    : 'text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-bold text-white"
+                    style={{ backgroundColor: store.color || '#2563eb' }}
+                  >
+                    {store.name.charAt(0).toUpperCase()}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate">{store.name}</div>
+                    <div className="mt-0.5 flex items-center gap-1.5 text-[11px] font-normal text-slate-500">
+                      <span>{store.accountCount} kênh</span>
+                      {hasShopify ? (
+                        <span className="font-medium text-emerald-700">• /s/</span>
+                      ) : null}
+                      {proxyCount > 0 ? (
+                        <span className="inline-flex items-center gap-0.5 font-medium text-indigo-700">
+                          • <Shield className="h-2.5 w-2.5" /> {proxyCount}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+                {isSelected ? <Check className="h-4 w-4 shrink-0 text-brand-600" /> : null}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="my-2 border-t border-slate-100" />
+
+        <div className="space-y-1">
+          {storeCtx.activeStore ? (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                storeCtx.openStoreSettingsModal(storeCtx.activeStore, 'general');
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+            >
+              <Settings className="h-3.5 w-3.5 text-slate-500" />
+              Cài đặt Store &ldquo;{storeCtx.activeStore.name}&rdquo;
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              storeCtx.openCreateStoreModal();
+            }}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-semibold text-brand-700 transition hover:bg-brand-50"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Tạo Store mới
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 

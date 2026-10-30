@@ -28,6 +28,7 @@ interface PlatformComposerPanelsProps {
   disabled?: boolean;
   mediaLocked?: boolean;
   workspaceId?: string;
+  storeId?: string | null;
   common?: CommonComposerContent & {
     hashtags?: string;
   };
@@ -44,6 +45,7 @@ export function PlatformComposerPanels({
   disabled = false,
   mediaLocked = false,
   workspaceId,
+  storeId,
   common,
   onChange,
   onSelectCoverMedia,
@@ -315,6 +317,7 @@ export function PlatformComposerPanels({
                       tiktokCreatorInfoError={creatorErrors[account.id]}
                       tiktokCreatorInfoLoading={creatorLoadingIds.includes(account.id)}
                       workspaceId={workspaceId}
+                      storeId={storeId}
                       onLoadPinterestSections={(boardId) =>
                         loadPinterestBoardSections(account.id, boardId)
                       }
@@ -408,6 +411,7 @@ function PlatformFields({
   tiktokCreatorInfoError,
   tiktokCreatorInfoLoading,
   workspaceId,
+  storeId,
   onLoadPinterestSections,
   onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
@@ -431,6 +435,7 @@ function PlatformFields({
   tiktokCreatorInfoError?: string;
   tiktokCreatorInfoLoading?: boolean;
   workspaceId?: string;
+  storeId?: string | null;
   onLoadPinterestSections: (boardId: string) => void;
   onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
@@ -507,6 +512,7 @@ function PlatformFields({
         tiktokCreatorInfoError={tiktokCreatorInfoError}
         tiktokCreatorInfoLoading={tiktokCreatorInfoLoading ?? false}
         workspaceId={workspaceId}
+        storeId={storeId}
         onLoadPinterestSections={onLoadPinterestSections}
         onRefreshPinterestBoards={onRefreshPinterestBoards}
         onRefreshTikTokCreatorInfo={onRefreshTikTokCreatorInfo}
@@ -541,6 +547,7 @@ function PlatformOptions({
   tiktokCreatorInfoError,
   tiktokCreatorInfoLoading,
   workspaceId,
+  storeId,
   onLoadPinterestSections,
   onRefreshPinterestBoards,
   onRefreshTikTokCreatorInfo,
@@ -563,6 +570,7 @@ function PlatformOptions({
   tiktokCreatorInfoError?: string;
   tiktokCreatorInfoLoading: boolean;
   workspaceId?: string;
+  storeId?: string | null;
   onLoadPinterestSections: (boardId: string) => void;
   onRefreshPinterestBoards: () => void;
   onRefreshTikTokCreatorInfo: () => void;
@@ -579,6 +587,7 @@ function PlatformOptions({
         draft={draft}
         mediaAssets={mediaAssets}
         workspaceId={workspaceId}
+        storeId={storeId}
         onChange={onChange}
         onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
@@ -687,6 +696,7 @@ function PlatformOptions({
               mediaAssets={mediaAssets}
               platformLabel="Instagram Reels cover"
               workspaceId={workspaceId}
+              storeId={storeId}
               onChange={onChange}
               onSelectCoverMedia={onSelectCoverMedia}
               onUploadCoverMedia={onUploadCoverMedia}
@@ -712,6 +722,7 @@ function PlatformOptions({
         sectionsError={pinterestSectionsError}
         sectionsLoading={pinterestSectionsLoading}
         workspaceId={workspaceId}
+        storeId={storeId}
         onChange={onChange}
         onLoadSections={onLoadPinterestSections}
         onRefreshBoards={onRefreshPinterestBoards}
@@ -730,6 +741,7 @@ function PlatformOptions({
         draft={draft}
         mediaAssets={mediaAssets}
         workspaceId={workspaceId}
+        storeId={storeId}
         onChange={onChange}
         onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
@@ -763,6 +775,7 @@ function FacebookOptionsPanel({
   draft,
   mediaAssets,
   workspaceId,
+  storeId,
   onChange,
   onSelectCoverMedia,
   onUploadCoverMedia,
@@ -773,6 +786,7 @@ function FacebookOptionsPanel({
   draft: PlatformOverrideDraft;
   mediaAssets: MediaAssetView[];
   workspaceId?: string;
+  storeId?: string | null;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
   onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
@@ -840,6 +854,7 @@ function FacebookOptionsPanel({
         mediaAssets={mediaAssets}
         platformLabel="Facebook video thumbnail"
         workspaceId={workspaceId}
+        storeId={storeId}
         onChange={onChange}
         onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
@@ -861,6 +876,7 @@ function PinterestOptionsPanel({
   sectionsError,
   sectionsLoading,
   workspaceId,
+  storeId,
   onChange,
   onSelectCoverMedia,
   onLoadSections,
@@ -879,6 +895,7 @@ function PinterestOptionsPanel({
   sectionsError?: string;
   sectionsLoading: boolean;
   workspaceId?: string;
+  storeId?: string | null;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
   onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onLoadSections: (boardId: string) => void;
@@ -1024,6 +1041,7 @@ function PinterestOptionsPanel({
         mediaAssets={mediaAssets}
         platformLabel="Pinterest video cover"
         workspaceId={workspaceId}
+        storeId={storeId}
         onChange={onChange}
         onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
@@ -1049,6 +1067,7 @@ function YouTubeOptionsPanel({
   draft,
   mediaAssets,
   workspaceId,
+  storeId,
   onChange,
   onSelectCoverMedia,
   onUploadCoverMedia,
@@ -1059,6 +1078,7 @@ function YouTubeOptionsPanel({
   draft: PlatformOverrideDraft;
   mediaAssets: MediaAssetView[];
   workspaceId?: string;
+  storeId?: string | null;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
   onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
@@ -1234,6 +1254,7 @@ function YouTubeOptionsPanel({
         mediaAssets={mediaAssets}
         platformLabel="YouTube thumbnail"
         workspaceId={workspaceId}
+        storeId={storeId}
         onChange={onChange}
         onSelectCoverMedia={onSelectCoverMedia}
         onUploadCoverMedia={onUploadCoverMedia}
@@ -1250,6 +1271,7 @@ function CoverThumbnailSelector({
   mediaAssets,
   platformLabel,
   workspaceId,
+  storeId,
   onChange,
   onSelectCoverMedia,
   onUploadCoverMedia,
@@ -1261,6 +1283,7 @@ function CoverThumbnailSelector({
   mediaAssets: MediaAssetView[];
   platformLabel: string;
   workspaceId?: string;
+  storeId?: string | null;
   onChange: (accountId: string, patch: Partial<PlatformOverrideDraft>) => void;
   onSelectCoverMedia?: (asset: MediaAssetView) => void;
   onUploadCoverMedia?: (file: File) => Promise<MediaAssetView>;
@@ -1274,6 +1297,14 @@ function CoverThumbnailSelector({
   const [serverQuery, setServerQuery] = useState('');
   const [serverLoading, setServerLoading] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setServerImages([]);
+    setServerCursorStack([]);
+    setServerNextCursor(null);
+    setServerPickerOpen(false);
+  }, [storeId]);
+
   const videos = mediaAssets.filter((asset) => asset.type === 'VIDEO');
   const imageOptions = uniqueMediaAssets([...availableMediaAssets, ...serverImages]).filter(
     (asset) => asset.type === 'IMAGE' && asset.status === 'READY',
@@ -1291,6 +1322,7 @@ function CoverThumbnailSelector({
     setServerError(null);
     try {
       const response = await mediaApi.list(workspaceId, {
+        storeId: storeId ?? undefined,
         q: serverQuery.trim() || undefined,
         type: 'IMAGE',
         status: 'READY',

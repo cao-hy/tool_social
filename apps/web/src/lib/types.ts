@@ -1,8 +1,8 @@
-import type { Capability, CapabilityKey, WorkspaceRole } from '@socialhub/shared';
+import type { Capability, CapabilityKey, StoreProxyTarget, WorkspaceRole } from '@socialhub/shared';
 import type { Platform, SocialAccountStatus } from '@socialhub/shared';
 import type { MediaType, PlatformPostStatus, PostStatus } from '@socialhub/shared';
 import type { PublishNetworkProof } from '@socialhub/shared';
-export type { PublishNetworkProof } from '@socialhub/shared';
+export type { PublishNetworkProof, StoreProxyTarget } from '@socialhub/shared';
 
 export interface UserView {
   id: string;
@@ -65,6 +65,43 @@ export interface StoreSummary {
   isDefault?: boolean;
 }
 
+export interface StoreProxySummaryView {
+  enabled: boolean;
+  hasProxyUrl: boolean;
+  proxyUrlMasked: string | null;
+  countryLock: string | null;
+  targets: StoreProxyTarget[];
+  configVersion: number;
+  lastCheckedAt: string | null;
+  lastCheckStatus: string | null;
+  lastIp: string | null;
+  lastCountryCode: string | null;
+  lastCheckError: string | null;
+}
+
+export interface StoreShopifySummaryView {
+  connected: boolean;
+  enabled: boolean;
+  shopDomain: string | null;
+  publicDomain: string | null;
+  shortPathPrefix: string;
+  adminTokenMasked: string | null;
+  shopName: string | null;
+  lastCheckedAt: string | null;
+  lastCheckStatus: string | null;
+  lastCheckError: string | null;
+}
+
+export interface ShortenedLinkItemView {
+  inputUrl: string;
+  targetUrl: string;
+  shortUrl: string | null;
+  shortPath: string | null;
+  reused: boolean;
+  alreadyShort?: boolean;
+  error?: string;
+}
+
 export interface StoreView extends StoreSummary {
   workspaceId: string;
   description: string | null;
@@ -81,6 +118,8 @@ export interface StoreView extends StoreSummary {
     externalAccountId: string;
     externalPageId: string | null;
   }>;
+  proxy?: StoreProxySummaryView;
+  shopify?: StoreShopifySummaryView;
   createdAt: string;
   updatedAt: string;
 }
@@ -288,6 +327,7 @@ export interface PlatformCapabilitiesView {
 
 export interface MediaAssetView {
   id: string;
+  storeId?: string | null;
   type: MediaType;
   status: string;
   originalFileName: string | null;
@@ -508,6 +548,7 @@ export interface CommentView {
 export interface ReplyTemplateView {
   id: string;
   workspaceId: string;
+  storeId?: string | null;
   name: string;
   body: string;
   createdAt: string;

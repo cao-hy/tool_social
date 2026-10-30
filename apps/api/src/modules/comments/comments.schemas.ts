@@ -78,7 +78,12 @@ export const bulkReplyToCommentsSchema = z.object({
   message: z.string().trim().min(1).max(2000),
 });
 
+export const listReplyTemplatesQuerySchema = z.object({
+  storeId: z.string().trim().min(1).optional(),
+});
+
 export const createReplyTemplateSchema = z.object({
+  storeId: z.string().trim().min(1).nullable().optional(),
   name: z.string().trim().min(1).max(80),
   body: z.string().trim().min(1).max(2000),
 });
@@ -104,6 +109,7 @@ export type ReplyToCommentInput = z.infer<typeof replyToCommentSchema>;
 export type CreatePlatformCommentInput = z.infer<typeof createPlatformCommentSchema>;
 export type BulkCreatePlatformCommentInput = z.infer<typeof bulkCreatePlatformCommentSchema>;
 export type BulkReplyToCommentsInput = z.infer<typeof bulkReplyToCommentsSchema>;
+export type ListReplyTemplatesQuery = z.infer<typeof listReplyTemplatesQuerySchema>;
 export type CreateReplyTemplateInput = z.infer<typeof createReplyTemplateSchema>;
 export type UpdateReplyTemplateInput = z.infer<typeof updateReplyTemplateSchema>;
 export type SyncCommentsInput = z.infer<typeof syncCommentsSchema>;

@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { PLATFORM_LABELS, type Platform } from '@socialhub/shared';
 import {
   AlertCircle,
@@ -14,6 +15,7 @@ import {
   Send,
   Sparkles,
   X,
+  Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PrimaryButton, SecondaryButton } from '@/components/form-controls';
@@ -22,8 +24,10 @@ import {
   mediaPreviewSources,
   mediaThumbnailSources,
 } from '@/components/media-preview';
+import { StoreSettingsModal } from '@/components/store-settings-modal';
 import { useToast } from '@/components/toast-provider';
-import { commentsApi } from '@/lib/api-client';
+import { commentsApi, storesApi } from '@/lib/api-client';
+import { workspaceQueryKeys } from '@/lib/workspace-queries';
 import {
   AUTO_UTM_STORAGE_KEY,
   attachUtmToUrlsInText,
@@ -104,6 +108,22 @@ function resolveTargetStoreMeta(post: ContentPostView, target: PlatformPostView)
   };
 }
 
+function isStoreShortLink(urlStr: string, store?: StoreView | null): boolean {
+  const trimmed = urlStr.trim();
+  if (!trimmed || !store?.shopify?.publicDomain) return false;
+  try {
+    const parsed = new URL(trimmed);
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase();
+    const pub = store.shopify.publicDomain.replace(/^www\./i, '').toLowerCase();
+    const prefix = store.shopify.shortPathPrefix || '/s/';
+    return (
+      host === pub && parsed.pathname.startsWith(prefix) && parsed.pathname.length > prefix.length
+    );
+  } catch {
+    return false;
+  }
+}
+
 function targetMatchesStoreFilter(
   post: ContentPostView,
   target: PlatformPostView,
@@ -170,6 +190,7 @@ interface BulkPostCommentModalProps {
   capabilityByPlatform?: Partial<Record<Platform, PlatformCapabilitiesView>>;
   isExplicitSelection?: boolean;
   initialStoreId?: string;
+  lockedStoreId?: string;
   initialPlatform?: string;
   initialMediaType?: '' | 'VIDEO' | 'IMAGE' | 'NONE';
   onClose: () => void;
@@ -183,12 +204,44 @@ export function BulkPostCommentModal({
   capabilityByPlatform,
   isExplicitSelection = false,
   initialStoreId,
+  lockedStoreId,
   initialPlatform,
   initialMediaType,
   onClose,
   onSubmitted,
 }: BulkPostCommentModalProps) {
   const toast = useToast();
+  const queryClient = useQueryClient();
+  const [localStores, setLocalStores] = useState<StoreView[]>(stores);
+  const [shopifySetupStore, setShopifySetupStore] = useState<StoreView | null>(null);
+  const [shorteningAll, setShorteningAll] = useState(false);
+  const [shorteningShared, setShorteningShared] = useState(false);
+  const [shorteningPostId, setShorteningPostId] = useState<string | null>(null);
+  const [autoShortenBulkLines, setAutoShortenBulkLines] = useState(true);
+
+  useEffect(() => {
+    setLocalStores(stores);
+  }, [stores]);
+
+  // Ensure fresh StoreView list (with shopify & proxy summary) when modal opens
+  useEffect(() => {
+    if (posts.length === 0) return;
+    let cancelled = false;
+    void storesApi
+      .list(workspaceId)
+      .then((res) => {
+        if (cancelled) return;
+        setLocalStores(res.items);
+        queryClient.setQueryData(workspaceQueryKeys.stores(workspaceId), res);
+      })
+      .catch(() => {
+        // non-critical
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [posts.length, queryClient, workspaceId]);
+
   const [templates, setTemplates] = useState<ReplyTemplateView[]>([]);
   const [templateText, setTemplateText] = useState('');
   const [isCustomTypedTemplate, setIsCustomTypedTemplate] = useState(false);
@@ -257,7 +310,7 @@ export function BulkPostCommentModal({
   // Full store catalog combining workspace stores + any store present on candidate posts
   const storeCatalog = useMemo(() => {
     const byId = new Map<string, StoreOptionItem>();
-    for (const wsStore of stores) {
+    for (const wsStore of localStores) {
       byId.set(wsStore.id, {
         id: wsStore.id,
         name: wsStore.name,
@@ -282,7 +335,12 @@ export function BulkPostCommentModal({
       if (b.id === 'UNASSIGNED') return -1;
       return a.name.localeCompare(b.name);
     });
-  }, [allCandidateEntries, allTimeStoreCounts, stores]);
+  }, [allCandidateEntries, allTimeStoreCounts, localStores]);
+
+  const storeById = useMemo(
+    () => new Map(localStores.map((item) => [item.id, item])),
+    [localStores],
+  );
 
   const storesWithPosts = useMemo(
     () => storeCatalog.filter((item) => (allTimeStoreCounts.get(item.id) ?? 0) > 0),
@@ -513,12 +571,12 @@ export function BulkPostCommentModal({
     if (posts.length === 0) return;
 
     const requestedStore =
-      initialStoreId && storesWithPosts.some((item) => item.id === initialStoreId)
+      lockedStoreId ??
+      (initialStoreId && storesWithPosts.some((item) => item.id === initialStoreId)
         ? initialStoreId
-        : null;
+        : null);
 
-    // Brand-Safe Default: honor outer Store filter if it has commentable posts; otherwise if
-    // stores exist and user didn't hand-pick rows, default to the first store with posts.
+    // Brand-Safe Default: honor lockedStoreId or outer Store filter; otherwise default to the first store with posts.
     const defaultStore: ModalStoreFilter =
       requestedStore ??
       (storesWithPosts.length === 1
@@ -600,18 +658,23 @@ export function BulkPostCommentModal({
     initialMediaType,
     initialPlatform,
     initialStoreId,
+    lockedStoreId,
     isExplicitSelection,
     isPostWithinWindow,
     posts,
     storesWithPosts,
   ]);
 
-  // Load saved ReplyTemplates
+  const effectiveTemplateStoreId =
+    lockedStoreId ??
+    (storeFilter !== 'ALL' && storeFilter !== 'UNASSIGNED' ? storeFilter : undefined);
+
+  // Load saved ReplyTemplates (scoped to active store + shared templates)
   useEffect(() => {
     if (posts.length === 0) return;
     let cancelled = false;
     void commentsApi
-      .listTemplates(workspaceId)
+      .listTemplates(workspaceId, effectiveTemplateStoreId)
       .then((res) => {
         if (cancelled) return;
         setTemplates(res.items);
@@ -622,7 +685,7 @@ export function BulkPostCommentModal({
     return () => {
       cancelled = true;
     };
-  }, [posts.length, workspaceId]);
+  }, [effectiveTemplateStoreId, posts.length, workspaceId]);
 
   // Auto-pick preferred store pin-link template on open (or when switching Store before custom typing)
   useEffect(() => {
@@ -795,6 +858,185 @@ export function BulkPostCommentModal({
     }, 0);
   }
 
+  function resolvePostStore(post: ContentPostView, targets: PlatformPostView[]): StoreView | null {
+    const primaryTarget = targets[0];
+    const storeId =
+      (primaryTarget ? resolveTargetStoreMeta(post, primaryTarget).id : null) ??
+      post.storeId ??
+      post.store?.id ??
+      null;
+    if (!storeId || storeId === 'UNASSIGNED') return null;
+    return storeById.get(storeId) ?? null;
+  }
+
+  function resolveActiveSingleStore(): StoreView | null {
+    if (storeFilter !== 'ALL' && storeFilter !== 'UNASSIGNED') {
+      return storeById.get(storeFilter) ?? null;
+    }
+    const distinctIds = Array.from(
+      new Set(
+        displayedPosts
+          .map(({ post, targets }) => resolvePostStore(post, targets)?.id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    if (distinctIds.length === 1 && distinctIds[0]) {
+      return storeById.get(distinctIds[0]) ?? null;
+    }
+    return null;
+  }
+
+  async function shortenLinksMapByPost(
+    sourceMap: Record<string, string>,
+    targetEntries: Array<{ post: ContentPostView; targets: PlatformPostView[] }>,
+  ): Promise<{
+    updatedMap: Record<string, string>;
+    shortenedCount: number;
+    skippedNoShopify: number;
+  }> {
+    const groupedByStore = new Map<
+      string,
+      { store: StoreView; postIdsByUrl: Map<string, string[]> }
+    >();
+    let skippedNoShopify = 0;
+    let firstUnconnectedStore: StoreView | null = null;
+
+    for (const { post, targets } of targetEntries) {
+      const rawUrl = (sourceMap[post.id] ?? '').trim();
+      if (!rawUrl) continue;
+      const store = resolvePostStore(post, targets);
+      if (!store) {
+        skippedNoShopify += 1;
+        continue;
+      }
+      if (!store.shopify?.connected || !store.shopify.enabled) {
+        skippedNoShopify += 1;
+        if (!firstUnconnectedStore) firstUnconnectedStore = store;
+        continue;
+      }
+      if (isStoreShortLink(rawUrl, store)) continue;
+
+      let bucket = groupedByStore.get(store.id);
+      if (!bucket) {
+        bucket = { store, postIdsByUrl: new Map() };
+        groupedByStore.set(store.id, bucket);
+      }
+      const list = bucket.postIdsByUrl.get(rawUrl) ?? [];
+      list.push(post.id);
+      bucket.postIdsByUrl.set(rawUrl, list);
+    }
+
+    if (groupedByStore.size === 0) {
+      if (firstUnconnectedStore) {
+        setShopifySetupStore(firstUnconnectedStore);
+        toast.warning(
+          `Store "${firstUnconnectedStore.name}" chưa gắn Shopify Custom App. Gắn nhanh 1 phút ngay tại đây để rút gọn link /s/!`,
+        );
+      }
+      return { updatedMap: sourceMap, shortenedCount: 0, skippedNoShopify };
+    }
+
+    const nextMap: Record<string, string> = { ...sourceMap };
+    let shortenedCount = 0;
+
+    await Promise.all(
+      Array.from(groupedByStore.values()).map(async ({ store, postIdsByUrl }) => {
+        const urls = Array.from(postIdsByUrl.keys());
+        const res = await storesApi.shortenLinks(workspaceId, store.id, {
+          urls,
+          cleanTracking: true,
+        });
+        for (const item of res.items) {
+          if (!item.shortUrl) continue;
+          const postIds = postIdsByUrl.get(item.inputUrl) ?? [];
+          for (const pid of postIds) {
+            nextMap[pid] = item.shortUrl;
+            shortenedCount += 1;
+          }
+        }
+      }),
+    );
+
+    return { updatedMap: nextMap, shortenedCount, skippedNoShopify };
+  }
+
+  async function handleShortenDisplayedPostLinks() {
+    const filledEntries = displayedPosts.filter(({ post }) =>
+      Boolean((linkByPostId[post.id] ?? '').trim()),
+    );
+    if (filledEntries.length === 0) {
+      const singleStore = resolveActiveSingleStore();
+      if (singleStore && (!singleStore.shopify?.connected || !singleStore.shopify.enabled)) {
+        setShopifySetupStore(singleStore);
+        toast.warning(
+          `Store "${singleStore.name}" chưa gắn Shopify. Kết nối Shopify trước rồi dán link sản phẩm để rút gọn /s/!`,
+        );
+        return;
+      }
+      toast.warning('Vui lòng điền ít nhất 1 link sản phẩm trước khi bấm Rút gọn link (/s/).');
+      return;
+    }
+
+    setShorteningAll(true);
+    try {
+      const { updatedMap, shortenedCount, skippedNoShopify } = await shortenLinksMapByPost(
+        linkByPostId,
+        filledEntries,
+      );
+      setLinkByPostId(updatedMap);
+      if (shortenedCount > 0) {
+        toast.success(
+          skippedNoShopify > 0
+            ? `Đã rút gọn ${shortenedCount} link sang /s/! (${skippedNoShopify} bài chưa gắn Shopify được giữ nguyên)`
+            : `Đã rút gọn ${shortenedCount} link sạch sang /s/!`,
+        );
+      } else if (skippedNoShopify === 0) {
+        toast.success('Tất cả các link đang điền đều đã ở dạng rút gọn /s/ sẵn.');
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setShorteningAll(false);
+    }
+  }
+
+  async function handleShortenSinglePostLink(post: ContentPostView, targets: PlatformPostView[]) {
+    const rawUrl = (linkByPostId[post.id] ?? '').trim();
+    if (!rawUrl) return;
+    const store = resolvePostStore(post, targets);
+    if (!store) {
+      toast.warning('Bài viết này chưa thuộc Store nào nên chưa xác định được domain /s/.');
+      return;
+    }
+    if (!store.shopify?.connected || !store.shopify.enabled) {
+      setShopifySetupStore(store);
+      toast.warning(
+        `Store "${store.name}" chưa gắn Shopify. Kết nối nhanh trong 1 phút để dùng link ${store.name} /s/!`,
+      );
+      return;
+    }
+
+    setShorteningPostId(post.id);
+    try {
+      const res = await storesApi.shortenLinks(workspaceId, store.id, {
+        urls: [rawUrl],
+        cleanTracking: true,
+      });
+      const first = res.items[0];
+      if (first?.shortUrl) {
+        const shortUrl = first.shortUrl;
+        setLinkByPostId((prev) => ({ ...prev, [post.id]: shortUrl }));
+        toast.success(`Đã rút gọn thành ${shortUrl}`);
+      } else if (first?.error) {
+        toast.error(first.error);
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setShorteningPostId(null);
+    }
+  }
+
   function applySharedLinkToAll() {
     const trimmed = sharedLinkInput.trim();
     if (!trimmed) return;
@@ -807,7 +1049,38 @@ export function BulkPostCommentModal({
     toast.success(`Đã điền link chung cho ${displayedPosts.length} bài viết.`);
   }
 
-  function applyBulkLinesToPosts() {
+  async function shortenAndApplySharedLinkToAll() {
+    const trimmed = sharedLinkInput.trim();
+    if (!trimmed) return;
+    const singleStore = resolveActiveSingleStore();
+    if (singleStore && (!singleStore.shopify?.connected || !singleStore.shopify.enabled)) {
+      setShopifySetupStore(singleStore);
+      toast.warning(
+        `Store "${singleStore.name}" chưa gắn Shopify Custom App. Gắn nhanh tại đây để rút gọn link chung sang /s/!`,
+      );
+      return;
+    }
+
+    setShorteningShared(true);
+    try {
+      const seeded: Record<string, string> = { ...linkByPostId };
+      for (const { post } of displayedPosts) {
+        seeded[post.id] = trimmed;
+      }
+      const { updatedMap, shortenedCount } = await shortenLinksMapByPost(seeded, displayedPosts);
+      setLinkByPostId(updatedMap);
+      if (shortenedCount > 0) {
+        setBulkLinkToolMode('NONE');
+        toast.success(`Đã rút gọn sang /s/ và điền cho ${displayedPosts.length} bài viết!`);
+      }
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setShorteningShared(false);
+    }
+  }
+
+  async function applyBulkLinesToPosts() {
     const lines = bulkLinksRaw
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -817,14 +1090,43 @@ export function BulkPostCommentModal({
       return;
     }
     const next: Record<string, string> = { ...linkByPostId };
+    const affectedEntries: Array<{ post: ContentPostView; targets: PlatformPostView[] }> = [];
     let applied = 0;
-    displayedPosts.forEach(({ post }, idx) => {
+    displayedPosts.forEach((entry, idx) => {
       const line = lines[idx];
       if (line) {
-        next[post.id] = line;
+        next[entry.post.id] = line;
+        affectedEntries.push(entry);
         applied += 1;
       }
     });
+
+    if (autoShortenBulkLines) {
+      const anyConnectedStore = affectedEntries.some(({ post, targets }) => {
+        const s = resolvePostStore(post, targets);
+        return Boolean(s?.shopify?.connected && s.shopify.enabled);
+      });
+      if (anyConnectedStore) {
+        setShorteningAll(true);
+        try {
+          const { updatedMap, shortenedCount } = await shortenLinksMapByPost(next, affectedEntries);
+          setLinkByPostId(updatedMap);
+          setBulkLinkToolMode('NONE');
+          setBulkLinksRaw('');
+          toast.success(
+            `Đã điền ${applied} link và rút gọn tự động ${shortenedCount} link sang /s/!`,
+          );
+          return;
+        } catch (err) {
+          setLinkByPostId(next);
+          toast.error(`Đã điền ${applied} link gốc nhưng lỗi rút gọn /s/: ${getErrorMessage(err)}`);
+          return;
+        } finally {
+          setShorteningAll(false);
+        }
+      }
+    }
+
     setLinkByPostId(next);
     setBulkLinkToolMode('NONE');
     setBulkLinksRaw('');
@@ -915,7 +1217,7 @@ export function BulkPostCommentModal({
     mediaPostCounts.NONE > 0,
   ].filter(Boolean).length;
 
-  const isStoreLocked = storeCatalog.length <= 1;
+  const isStoreLocked = Boolean(lockedStoreId) || storeCatalog.length <= 1;
   const isPlatformLocked = platformFacet.supported.length <= 1 && platformFilter === 'ALL';
   const isMediaLocked = nonZeroMediaOptionCount <= 1 && mediaFilter === 'ALL';
 
@@ -1123,24 +1425,34 @@ export function BulkPostCommentModal({
                   }`}
                   disabled={isStoreLocked}
                   onChange={(e) => handleChangeStore(e.target.value)}
-                  title="Lọc bài đăng theo Store / Brand"
+                  title="Store / Brand đang chọn"
                   value={storeFilter}
                 >
-                  {storesWithPosts.map((store) => (
-                    <option key={store.id} value={store.id}>
-                      Store: {store.name} ({storeOptionCounts.byStoreId.get(store.id) ?? 0})
+                  {lockedStoreId ? (
+                    <option value={lockedStoreId}>
+                      Store:{' '}
+                      {storeCatalog.find((s) => s.id === lockedStoreId)?.name ?? lockedStoreId} (
+                      {storeOptionCounts.byStoreId.get(lockedStoreId) ?? 0})
                     </option>
-                  ))}
-                  {storesWithPosts.length > 1 ? (
-                    <option value="ALL">Tất cả Stores ({storeOptionCounts.total})</option>
-                  ) : null}
-                  {storeCatalog
-                    .filter((store) => (allTimeStoreCounts.get(store.id) ?? 0) === 0)
-                    .map((store) => (
-                      <option key={store.id} disabled value={store.id}>
-                        ── {store.name} (0 bài · chưa có bài đăng)
-                      </option>
-                    ))}
+                  ) : (
+                    <>
+                      {storesWithPosts.map((store) => (
+                        <option key={store.id} value={store.id}>
+                          Store: {store.name} ({storeOptionCounts.byStoreId.get(store.id) ?? 0})
+                        </option>
+                      ))}
+                      {storesWithPosts.length > 1 ? (
+                        <option value="ALL">Tất cả Stores ({storeOptionCounts.total})</option>
+                      ) : null}
+                      {storeCatalog
+                        .filter((store) => (allTimeStoreCounts.get(store.id) ?? 0) === 0)
+                        .map((store) => (
+                          <option key={store.id} disabled value={store.id}>
+                            ── {store.name} (0 bài · chưa có bài đăng)
+                          </option>
+                        ))}
+                    </>
+                  )}
                 </select>
 
                 {/* 2. Social Platform Select (True visibility + target filter) */}
@@ -1360,35 +1672,49 @@ export function BulkPostCommentModal({
                   ) : null}
                 </div>
 
-                {displayedPosts.length > 1 && usesLinkVariable ? (
+                {displayedPosts.length > 0 && usesLinkVariable ? (
                   <div className="flex flex-wrap items-center gap-1.5">
                     <button
-                      className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition ${
-                        bulkLinkToolMode === 'SHARED'
-                          ? 'border-brand-500 bg-brand-50 text-brand-700'
-                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                      }`}
-                      onClick={() =>
-                        setBulkLinkToolMode((prev) => (prev === 'SHARED' ? 'NONE' : 'SHARED'))
-                      }
+                      className="inline-flex h-7 items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 px-2.5 text-[11px] font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-50"
+                      disabled={shorteningAll}
+                      onClick={() => void handleShortenDisplayedPostLinks()}
+                      title="Tự động lọc rác tracking (fbclid, _pos, _ss...) và tạo link ngắn chính chủ https://tenstore.com/s/... qua Shopify"
                       type="button"
                     >
-                      <Link2 className="h-3 w-3 text-brand-600" />1 link chung
+                      <Zap className="h-3 w-3 text-emerald-600" />
+                      {shorteningAll ? 'Đang rút gọn...' : 'Rút gọn link (/s/)'}
                     </button>
-                    <button
-                      className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition ${
-                        bulkLinkToolMode === 'LINES'
-                          ? 'border-brand-500 bg-brand-50 text-brand-700'
-                          : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                      }`}
-                      onClick={() =>
-                        setBulkLinkToolMode((prev) => (prev === 'LINES' ? 'NONE' : 'LINES'))
-                      }
-                      type="button"
-                    >
-                      <ClipboardPaste className="h-3 w-3 text-brand-600" />
-                      Dán Sheet
-                    </button>
+                    {displayedPosts.length > 1 ? (
+                      <>
+                        <button
+                          className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition ${
+                            bulkLinkToolMode === 'SHARED'
+                              ? 'border-brand-500 bg-brand-50 text-brand-700'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                          onClick={() =>
+                            setBulkLinkToolMode((prev) => (prev === 'SHARED' ? 'NONE' : 'SHARED'))
+                          }
+                          type="button"
+                        >
+                          <Link2 className="h-3 w-3 text-brand-600" />1 link chung
+                        </button>
+                        <button
+                          className={`inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition ${
+                            bulkLinkToolMode === 'LINES'
+                              ? 'border-brand-500 bg-brand-50 text-brand-700'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                          onClick={() =>
+                            setBulkLinkToolMode((prev) => (prev === 'LINES' ? 'NONE' : 'LINES'))
+                          }
+                          type="button"
+                        >
+                          <ClipboardPaste className="h-3 w-3 text-brand-600" />
+                          Dán Sheet
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -1405,10 +1731,19 @@ export function BulkPostCommentModal({
                       type="url"
                       value={sharedLinkInput}
                     />
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <SecondaryButton
+                        className="h-8 shrink-0 border-emerald-300 bg-emerald-50 px-2.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+                        disabled={!sharedLinkInput.trim() || shorteningShared}
+                        onClick={() => void shortenAndApplySharedLinkToAll()}
+                        type="button"
+                      >
+                        <Zap className="h-3.5 w-3.5 text-emerald-600" />
+                        {shorteningShared ? 'Đang rút gọn...' : 'Rút gọn /s/ & Áp dụng'}
+                      </SecondaryButton>
                       <SecondaryButton
                         className="h-8 shrink-0 border-brand-300 bg-white px-3 text-xs font-semibold text-brand-700 hover:bg-brand-50"
-                        disabled={!sharedLinkInput.trim()}
+                        disabled={!sharedLinkInput.trim() || shorteningShared}
                         onClick={applySharedLinkToAll}
                         type="button"
                       >
@@ -1445,23 +1780,34 @@ export function BulkPostCommentModal({
                     rows={3}
                     value={bulkLinksRaw}
                   />
-                  <div className="mt-1.5 flex justify-end gap-2">
-                    <button
-                      className="rounded-md px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200/70"
-                      onClick={() => setBulkLinkToolMode('NONE')}
-                      type="button"
-                    >
-                      Đóng
-                    </button>
-                    <SecondaryButton
-                      className="h-7 border-brand-300 bg-white px-3 text-xs font-semibold text-brand-700 hover:bg-brand-50"
-                      disabled={!bulkLinksRaw.trim()}
-                      onClick={applyBulkLinesToPosts}
-                      type="button"
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                      Điền theo thứ tự dòng
-                    </SecondaryButton>
+                  <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-emerald-800">
+                      <input
+                        checked={autoShortenBulkLines}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                        onChange={(e) => setAutoShortenBulkLines(e.target.checked)}
+                        type="checkbox"
+                      />
+                      <span>⚡ Tự rút gọn sang /s/... nếu Store đã gắn Shopify</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="rounded-md px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200/70"
+                        onClick={() => setBulkLinkToolMode('NONE')}
+                        type="button"
+                      >
+                        Đóng
+                      </button>
+                      <SecondaryButton
+                        className="h-7 border-brand-300 bg-white px-3 text-xs font-semibold text-brand-700 hover:bg-brand-50"
+                        disabled={!bulkLinksRaw.trim() || shorteningAll}
+                        onClick={() => void applyBulkLinesToPosts()}
+                        type="button"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        {shorteningAll ? 'Đang điền & rút gọn...' : 'Điền theo thứ tự dòng'}
+                      </SecondaryButton>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -1516,8 +1862,13 @@ export function BulkPostCommentModal({
               ) : (
                 displayedPosts.map(({ post, targets, originalIndex }) => {
                   const storeBadge = post.store ?? targets.find((t) => t.store)?.store ?? null;
+                  const postStore = resolvePostStore(post, targets);
+                  const postStoreHasShopify = Boolean(
+                    postStore?.shopify?.connected && postStore.shopify.enabled,
+                  );
                   const postHasAnyChecked = targets.some((t) => selectedTargetIds.includes(t.id));
                   const linkValue = linkByPostId[post.id] ?? '';
+                  const alreadyShort = isStoreShortLink(linkValue, postStore);
                   const isMissingLink = usesLinkVariable && postHasAnyChecked && !linkValue.trim();
                   const primaryExternalUrl =
                     targets.find((t) => t.externalUrl)?.externalUrl ?? null;
@@ -1630,7 +1981,9 @@ export function BulkPostCommentModal({
                               <div className="relative flex items-center">
                                 <Link2 className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-slate-400" />
                                 <input
-                                  className={`w-full rounded-md border py-1.5 pl-8 pr-7 text-xs text-slate-900 transition focus:outline-none ${
+                                  className={`w-full rounded-md border py-1.5 pl-8 ${
+                                    linkValue.trim() ? 'pr-24' : 'pr-7'
+                                  } text-xs text-slate-900 transition focus:outline-none ${
                                     isMissingLink
                                       ? 'border-amber-400 bg-amber-50/40 focus:border-amber-500'
                                       : 'border-slate-300 bg-white focus:border-brand-500'
@@ -1646,17 +1999,54 @@ export function BulkPostCommentModal({
                                   type="url"
                                   value={linkValue}
                                 />
-                                {linkValue ? (
-                                  <button
-                                    aria-label="Xóa link bài này"
-                                    className="absolute right-2 inline-flex h-4 w-4 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                                    onClick={() =>
-                                      setLinkByPostId((prev) => ({ ...prev, [post.id]: '' }))
-                                    }
-                                    type="button"
-                                  >
-                                    <X className="h-3 w-3" />
-                                  </button>
+                                {linkValue.trim() ? (
+                                  <div className="absolute right-1.5 flex items-center gap-1">
+                                    {alreadyShort ? (
+                                      <span
+                                        className="inline-flex items-center gap-0.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700"
+                                        title="Link này đã là link ngắn chính chủ /s/"
+                                      >
+                                        ✓ /s/
+                                      </span>
+                                    ) : postStore ? (
+                                      <button
+                                        className={`inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px] font-semibold transition disabled:opacity-50 ${
+                                          postStoreHasShopify
+                                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                                            : 'border-dashed border-slate-300 bg-slate-50 text-slate-600 hover:border-emerald-300 hover:text-emerald-800'
+                                        }`}
+                                        disabled={shorteningPostId === post.id || shorteningAll}
+                                        onClick={() =>
+                                          void handleShortenSinglePostLink(post, targets)
+                                        }
+                                        title={
+                                          postStoreHasShopify
+                                            ? `Rút gọn sang https://${postStore.shopify?.publicDomain}${postStore.shopify?.shortPathPrefix}...`
+                                            : `Gắn Shopify cho Store "${postStore.name}" để rút gọn link /s/`
+                                        }
+                                        type="button"
+                                      >
+                                        <Zap className="h-2.5 w-2.5 text-emerald-600" />
+                                        <span>
+                                          {shorteningPostId === post.id
+                                            ? '...'
+                                            : postStoreHasShopify
+                                              ? '/s/'
+                                              : '+ /s/'}
+                                        </span>
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      aria-label="Xóa link bài này"
+                                      className="inline-flex h-4 w-4 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                                      onClick={() =>
+                                        setLinkByPostId((prev) => ({ ...prev, [post.id]: '' }))
+                                      }
+                                      type="button"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </div>
                                 ) : null}
                               </div>
                               {isMissingLink ? (
@@ -1741,6 +2131,24 @@ export function BulkPostCommentModal({
           </div>
         </footer>
       </div>
+
+      {shopifySetupStore ? (
+        <StoreSettingsModal
+          initialTab="shopify"
+          onClose={() => setShopifySetupStore(null)}
+          onSaved={async () => {
+            const refreshed = await storesApi.list(workspaceId);
+            setLocalStores(refreshed.items);
+            queryClient.setQueryData(workspaceQueryKeys.stores(workspaceId), refreshed);
+            const updated = refreshed.items.find((s) => s.id === shopifySetupStore.id) ?? null;
+            if (updated) {
+              setShopifySetupStore(updated);
+            }
+          }}
+          store={storeById.get(shopifySetupStore.id) ?? shopifySetupStore}
+          workspaceId={workspaceId}
+        />
+      ) : null}
     </div>
   );
 }

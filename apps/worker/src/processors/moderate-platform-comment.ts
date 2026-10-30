@@ -1,5 +1,5 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import { type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import { RemoteRequestError, type Platform, type QueuePayload } from '@socialhub/shared';
@@ -51,7 +51,10 @@ export function createModeratePlatformCommentProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapterFactory: {
-    forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
   };
   locks: JobLockService;
 }) {
@@ -118,7 +121,10 @@ async function moderatePlatformComment(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapterFactory: {
-      forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
     };
     locks: JobLockService;
   },
@@ -188,7 +194,10 @@ async function moderatePlatformComment(
   }
 
   const adapterCtx = await input.adapterFactory
-    .forWorkspace(payload.workspaceId)
+    .forWorkspace(payload.workspaceId, {
+      storeId: account.storeId ?? null,
+      target: account.platform,
+    })
     .catch(async (error) => {
       await rollbackBeforeConnect(input.prisma, ownership, {
         code: error instanceof Error ? error.name : 'ADAPTER_PREPARE_FAILED',

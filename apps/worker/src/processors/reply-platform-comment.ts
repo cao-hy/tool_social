@@ -1,5 +1,5 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import {
   createPrismaClient,
   operationRequestKey,
@@ -40,7 +40,10 @@ export function createReplyPlatformCommentProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapterFactory: {
-    forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
   };
 }) {
   return async (job: {
@@ -116,7 +119,10 @@ async function replyPlatformComment(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapterFactory: {
-      forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
     };
   },
   payload: ReplyPlatformCommentPayload,
@@ -183,7 +189,10 @@ async function replyPlatformComment(
   }
 
   const adapterCtx = await input.adapterFactory
-    .forWorkspace(payload.workspaceId)
+    .forWorkspace(payload.workspaceId, {
+      storeId: account.storeId ?? null,
+      target: account.platform,
+    })
     .catch(async (error) => {
       await rollbackBeforeConnect(input.prisma, ownership, {
         code: error instanceof Error ? error.name : 'ADAPTER_PREPARE_FAILED',

@@ -119,10 +119,17 @@ export class MediaService implements OnModuleDestroy {
   }
 
   async list(workspaceId: string, query: ListMediaInput) {
+    const storeFilter =
+      query.storeId === 'UNASSIGNED'
+        ? { storeId: null }
+        : query.storeId
+          ? { OR: [{ storeId: query.storeId }, { storeId: null }] }
+          : {};
     const items = await this.prisma.mediaAsset.findMany({
       where: {
         workspaceId,
         deletedAt: null,
+        ...storeFilter,
         type: query.type,
         status: query.status,
         originalFileName: query.q ? { contains: query.q, mode: 'insensitive' } : undefined,
@@ -231,13 +238,30 @@ export class MediaService implements OnModuleDestroy {
     return this.toMediaView(updated);
   }
 
+  private async resolveUploadStoreId(
+    workspaceId: string,
+    storeId?: string | null,
+  ): Promise<string | null> {
+    if (!storeId) return null;
+    if (this.prisma.store?.findFirst) {
+      const store = await this.prisma.store.findFirst({
+        where: { id: storeId, workspaceId },
+        select: { id: true },
+      });
+      if (!store) throw AppError.notFound('store');
+    }
+    return storeId;
+  }
+
   async createUpload(workspaceId: string, uploadedById: string, input: CreateMediaUploadInput) {
     this.assertAllowedUploadInput(input);
+    const storeId = await this.resolveUploadStoreId(workspaceId, input.storeId);
 
     const storageKey = this.storageKey(workspaceId, input.fileName);
     const media = await this.prisma.mediaAsset.create({
       data: {
         workspaceId,
+        ...(storeId ? { storeId } : {}),
         storageKey,
         originalFileName: input.fileName,
         sizeBytes: input.sizeBytes,
@@ -269,6 +293,7 @@ export class MediaService implements OnModuleDestroy {
     input: CreateMediaUploadInput,
   ) {
     this.assertAllowedUploadInput(input);
+    const storeId = await this.resolveUploadStoreId(workspaceId, input.storeId);
     const partSizeBytes = MULTIPART_PART_SIZE_BYTES;
     const partCount = Math.ceil(input.sizeBytes / partSizeBytes);
 
@@ -276,6 +301,7 @@ export class MediaService implements OnModuleDestroy {
     const media = await this.prisma.mediaAsset.create({
       data: {
         workspaceId,
+        ...(storeId ? { storeId } : {}),
         storageKey,
         originalFileName: input.fileName,
         sizeBytes: input.sizeBytes,
@@ -879,6 +905,7 @@ export class MediaService implements OnModuleDestroy {
   private async toMediaView(media: {
     id: string;
     workspaceId: string;
+    storeId?: string | null;
     type: MediaType;
     status: string;
     storageKey: string;
@@ -903,6 +930,7 @@ export class MediaService implements OnModuleDestroy {
 
     return {
       id: media.id,
+      storeId: media.storeId ?? null,
       type: media.type,
       status: media.status,
       originalFileName: media.originalFileName,

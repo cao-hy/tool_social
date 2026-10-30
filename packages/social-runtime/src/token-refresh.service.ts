@@ -234,6 +234,10 @@ export class TokenRefreshService {
 
           return refreshed.accessToken;
         },
+        {
+          storeId: account.storeId ?? null,
+          target: account.platform,
+        },
       );
     } finally {
       clearInterval(heartbeatTimer);

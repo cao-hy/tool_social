@@ -76,7 +76,7 @@ function completeTikTokConfig(
   return {
     clientKey: config?.clientKey ?? '',
     clientSecret: config?.clientSecret ?? '',
-    fetch,
+    fetch: config?.fetch ?? fetch,
     scopes: config?.scopes,
   };
 }
@@ -99,7 +99,7 @@ function completeYouTubeConfig(
   return {
     clientId: config?.clientId ?? '',
     clientSecret: config?.clientSecret ?? '',
-    fetch,
+    fetch: config?.fetch ?? fetch,
     scopes: config?.scopes,
   };
 }
@@ -124,7 +124,7 @@ function completeFacebookConfig(
     appSecret: config?.appSecret ?? '',
     apiVersion: normalizeApiVersion(config?.apiVersion ?? ''),
     loginConfigId: config?.loginConfigId,
-    fetch,
+    fetch: config?.fetch ?? fetch,
     scopes: config?.scopes,
   };
 }
@@ -148,7 +148,7 @@ function completeInstagramConfig(
     appId: config?.appId ?? '',
     appSecret: config?.appSecret ?? '',
     apiVersion: normalizeApiVersion(config?.apiVersion ?? ''),
-    fetch,
+    fetch: config?.fetch ?? fetch,
     scopes: config?.scopes,
   };
 }
@@ -174,7 +174,7 @@ function completePinterestConfig(
     appSecret: config?.appSecret ?? '',
     defaultBoardName: config?.defaultBoardName,
     environment: config?.environment ?? (nodeEnv === 'production' ? 'production' : 'sandbox'),
-    fetch,
+    fetch: config?.fetch ?? fetch,
     scopes: config?.scopes,
   };
 }

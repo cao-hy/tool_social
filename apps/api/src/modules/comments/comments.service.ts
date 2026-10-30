@@ -713,6 +713,26 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const platformPostIds = [...new Set(input.platformPostIds)];
+    if (platformPostIds.length > 1 && this.prisma.platformPost?.findMany) {
+      const targetPosts = await this.prisma.platformPost.findMany({
+        where: { id: { in: platformPostIds }, workspaceId },
+        select: {
+          id: true,
+          socialAccount: { select: { storeId: true } },
+          contentPost: { select: { storeId: true } },
+        },
+      });
+      const resolvedStoreKeys = new Set(
+        targetPosts.map(
+          (item) => item.socialAccount?.storeId ?? item.contentPost?.storeId ?? '__UNASSIGNED__',
+        ),
+      );
+      if (resolvedStoreKeys.size > 1) {
+        throw AppError.validation(
+          'Mỗi thao tác bình luận hàng loạt chỉ được thực hiện trên các bài thuộc cùng 1 Store duy nhất.',
+        );
+      }
+    }
     const results: BulkQueueResult[] = [];
 
     for (const platformPostId of platformPostIds) {
@@ -759,6 +779,23 @@ export class CommentsService implements OnModuleDestroy {
     auditContext: AuditContext,
   ) {
     const commentIds = [...new Set(input.commentIds)];
+    if (commentIds.length > 1 && this.prisma.comment?.findMany) {
+      const targetComments = await this.prisma.comment.findMany({
+        where: { id: { in: commentIds }, workspaceId, deletedAt: null },
+        select: {
+          id: true,
+          socialAccount: { select: { storeId: true } },
+        },
+      });
+      const resolvedStoreKeys = new Set(
+        targetComments.map((item) => item.socialAccount?.storeId ?? '__UNASSIGNED__'),
+      );
+      if (resolvedStoreKeys.size > 1) {
+        throw AppError.validation(
+          'Mỗi thao tác trả lời bình luận hàng loạt chỉ được thực hiện trên 1 Store duy nhất.',
+        );
+      }
+    }
     const results: BulkQueueResult[] = [];
 
     for (const commentId of commentIds) {
@@ -1237,16 +1274,53 @@ export class CommentsService implements OnModuleDestroy {
     return { queued: true, jobId };
   }
 
-  async listTemplates(workspaceId: string) {
+  async listTemplates(workspaceId: string, storeId?: string) {
+    const where: Prisma.ReplyTemplateWhereInput =
+      storeId === 'UNASSIGNED'
+        ? { workspaceId, storeId: null }
+        : storeId
+          ? { workspaceId, OR: [{ storeId }, { storeId: null }] }
+          : { workspaceId };
     const templates = await this.prisma.replyTemplate.findMany({
-      where: { workspaceId },
+      where,
       orderBy: { name: 'asc' },
     });
+    if (storeId && storeId !== 'UNASSIGNED') {
+      templates.sort(
+        (a, b) =>
+          (a.storeId === storeId ? 0 : 1) - (b.storeId === storeId ? 0 : 1) ||
+          a.name.localeCompare(b.name),
+      );
+    }
     return { items: templates };
   }
 
   async createTemplate(workspaceId: string, input: CreateReplyTemplateInput) {
-    return this.prisma.replyTemplate.create({ data: { workspaceId, ...input } });
+    const normalizedStoreId = input.storeId ?? null;
+    if (normalizedStoreId && this.prisma.store?.findFirst) {
+      const store = await this.prisma.store.findFirst({
+        where: { id: normalizedStoreId, workspaceId },
+        select: { id: true },
+      });
+      if (!store) throw AppError.notFound('store');
+    }
+    if (this.prisma.replyTemplate?.findFirst) {
+      const duplicate = await this.prisma.replyTemplate.findFirst({
+        where: { workspaceId, storeId: normalizedStoreId, name: input.name },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw AppError.conflict('Mẫu bình luận cùng tên đã tồn tại trong Store này.');
+      }
+    }
+    return this.prisma.replyTemplate.create({
+      data: {
+        workspaceId,
+        storeId: normalizedStoreId,
+        name: input.name,
+        body: input.body,
+      },
+    });
   }
 
   async updateTemplate(workspaceId: string, templateId: string, input: UpdateReplyTemplateInput) {
@@ -1254,7 +1328,40 @@ export class CommentsService implements OnModuleDestroy {
       where: { id: templateId, workspaceId },
     });
     if (!template) throw AppError.notFound('reply template');
-    return this.prisma.replyTemplate.update({ where: { id: template.id }, data: input });
+    const targetStoreId = input.storeId !== undefined ? (input.storeId ?? null) : template.storeId;
+    if (targetStoreId && this.prisma.store?.findFirst) {
+      const store = await this.prisma.store.findFirst({
+        where: { id: targetStoreId, workspaceId },
+        select: { id: true },
+      });
+      if (!store) throw AppError.notFound('store');
+    }
+    const targetName = input.name ?? template.name;
+    if (
+      (targetName !== template.name || targetStoreId !== template.storeId) &&
+      this.prisma.replyTemplate?.findFirst
+    ) {
+      const duplicate = await this.prisma.replyTemplate.findFirst({
+        where: {
+          workspaceId,
+          storeId: targetStoreId,
+          name: targetName,
+          id: { not: template.id },
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw AppError.conflict('Mẫu bình luận cùng tên đã tồn tại trong Store này.');
+      }
+    }
+    return this.prisma.replyTemplate.update({
+      where: { id: template.id },
+      data: {
+        ...(input.storeId !== undefined ? { storeId: targetStoreId } : {}),
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.body !== undefined ? { body: input.body } : {}),
+      },
+    });
   }
 
   async deleteTemplate(workspaceId: string, templateId: string) {

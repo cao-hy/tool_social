@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const listMediaSchema = z.object({
   q: z.string().trim().max(120).optional(),
+  storeId: z.string().trim().min(1).optional(),
   type: z.enum(['IMAGE', 'VIDEO']).optional(),
   status: z
     .enum(['PENDING_UPLOAD', 'UPLOADED', 'PROCESSING', 'READY', 'FAILED', 'ARCHIVED'])
@@ -11,6 +12,7 @@ export const listMediaSchema = z.object({
 });
 
 export const createMediaUploadSchema = z.object({
+  storeId: z.string().trim().min(1).nullable().optional(),
   fileName: z.string().trim().min(1).max(255),
   sizeBytes: z
     .number()

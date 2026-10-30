@@ -322,11 +322,10 @@ model PasswordResetToken {
 // ============================================================ WORKSPACE & TEAM
 
 model Workspace {
-  id                 String             @id @default(cuid())
-  name               String
-  slug               String             @unique
-  imageUrl           String?
-  socialEgressPolicy SocialEgressPolicy @default(DIRECT_ALLOWED)
+  id       String  @id @default(cuid())
+  name     String
+  slug     String  @unique
+  imageUrl String?
 
   /// Timezone dùng để hiển thị lịch và tính khoảng thời gian analytics.
   /// Dữ liệu trong DB luôn là UTC (rủi ro R10).
@@ -350,39 +349,12 @@ model Workspace {
   replyTemplates        ReplyTemplate[]
   commentTags           CommentTag[]
   backgroundJobs        BackgroundJob[]
-  proxySetting          WorkspaceProxySetting?
   outboundOperations    OutboundOperation[]
   outboxEvents          OutboxEvent[]
   externalPostSyncJobs  ExternalPostSyncJob[]
 
   @@index([slug])
-  @@index([socialEgressPolicy])
   @@index([deletedAt])
-}
-
-model WorkspaceProxySetting {
-  id          String @id @default(cuid())
-  workspaceId String @unique
-
-  enabled        Boolean @default(false)
-  proxyUrl       String? @db.Text
-  proxyUrlMasked String?
-  countryLock    String?
-  configVersion  Int     @default(0)
-
-  lastCheckedAt   DateTime?
-  lastCheckStatus String?
-  lastIp          String?
-  lastCountryCode String?
-  lastCheckError  String?   @db.Text
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@index([workspaceId])
-  @@index([enabled])
 }
 
 model WorkspaceMember {
@@ -440,13 +412,93 @@ model Store {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace      Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   socialAccounts SocialAccount[]
   contentPosts   ContentPost[]
+  mediaAssets    MediaAsset[]
+  replyTemplates ReplyTemplate[]
+  proxySetting   StoreProxySetting?
+  shopifySetting StoreShopifySetting?
+  shortLinks     StoreShortLink[]
 
   @@unique([workspaceId, slug])
   @@unique([workspaceId, name])
   @@index([workspaceId])
+}
+
+model StoreProxySetting {
+  id          String @id @default(cuid())
+  workspaceId String
+  storeId     String @unique
+
+  enabled        Boolean  @default(false)
+  proxyUrl       String?  @db.Text
+  proxyUrlMasked String?
+  countryLock    String?
+  targets        String[] @default([])
+  configVersion  Int      @default(0)
+
+  lastCheckedAt   DateTime?
+  lastCheckStatus String?
+  lastIp          String?
+  lastCountryCode String?
+  lastCheckError  String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([enabled])
+}
+
+model StoreShopifySetting {
+  id          String @id @default(cuid())
+  workspaceId String
+  storeId     String @unique
+
+  enabled              Boolean @default(true)
+  shopDomain           String
+  publicDomain         String
+  shortPathPrefix      String  @default("/s/")
+  adminAccessToken     String  @db.Text
+  adminTokenMasked     String
+  encryptionKeyVersion String
+
+  shopName        String?
+  lastCheckedAt   DateTime?
+  lastCheckStatus String?
+  lastCheckError  String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model StoreShortLink {
+  id          String @id @default(cuid())
+  workspaceId String
+  storeId     String
+
+  targetUrl         String  @db.Text
+  shopifyTarget     String  @db.Text
+  shortPath         String
+  shortUrl          String
+  shopifyRedirectId String?
+  createdByUserId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, shortPath])
+  @@unique([storeId, targetUrl])
+  @@index([workspaceId, storeId])
 }
 
 // ============================================================ SOCIAL ACCOUNTS
@@ -529,8 +581,9 @@ model SocialToken {
 // ============================================================ MEDIA
 
 model MediaAsset {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
+  storeId     String?
 
   type   MediaType
   status MediaStatus @default(PENDING_UPLOAD)
@@ -557,11 +610,13 @@ model MediaAsset {
   deletedAt DateTime?
 
   workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  store         Store?              @relation(fields: [storeId], references: [id], onDelete: SetNull)
   uploadedBy    User?               @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   posts         ContentPostMedia[]
   platformPosts PlatformPostMedia[]
 
   @@index([workspaceId])
+  @@index([workspaceId, storeId])
   @@index([workspaceId, status])
   @@index([deletedAt])
 }
@@ -1022,18 +1077,21 @@ model CommentNote {
 }
 
 model ReplyTemplate {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
+  storeId     String?
   name        String
-  body        String @db.Text
+  body        String  @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  store     Store?    @relation(fields: [storeId], references: [id], onDelete: SetNull)
 
-  @@unique([workspaceId, name])
+  @@unique([workspaceId, storeId, name])
   @@index([workspaceId])
+  @@index([workspaceId, storeId])
 }
 
 // ============================================================ OPS

@@ -1,9 +1,4 @@
-import type {
-  ApiResponse,
-  NetworkProxyPolicyItem,
-  Platform,
-  WorkspaceRole,
-} from '@socialhub/shared';
+import type { ApiResponse, Platform, WorkspaceRole } from '@socialhub/shared';
 import type {
   AuditLogItem,
   AnalyticsDashboardView,
@@ -24,8 +19,12 @@ import type {
   PlatformCapabilitiesView,
   PlatformPostState,
   ReplyTemplateView,
+  ShortenedLinkItemView,
   SocialAccountView,
   StorageUsageView,
+  StoreProxySummaryView,
+  StoreProxyTarget,
+  StoreShopifySummaryView,
   StoreView,
   TikTokCreatorInfoView,
   WorkspaceInvitation,
@@ -142,68 +141,6 @@ export const authApi = {
     }),
 };
 
-export const systemApi = {
-  getNetworkStatus: (workspaceId: string, options?: { refresh?: boolean }) =>
-    apiFetch<{
-      ip: string;
-      countryCode: string | null;
-      country: string;
-      city: string;
-      isp: string;
-      provider: string | null;
-      checkOk: boolean;
-      checkError: string | null;
-      checkErrors: string[];
-      proxyConfig: {
-        enabled: boolean;
-        countryLock: string | null;
-        proxyUrlMasked?: string | null;
-        source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
-        version?: number;
-        configVersion?: number;
-      };
-      proxyAvailable: boolean;
-      proxyActive: boolean;
-      countryLockSatisfied: boolean;
-    }>(`/workspaces/${workspaceId}/system/network${options?.refresh ? '?refresh=true' : ''}`),
-  getProxyPolicy: (workspaceId: string) =>
-    apiFetch<{
-      generatedAt: string;
-      proxyConfig: {
-        enabled: boolean;
-        countryLock: string | null;
-        proxyUrlMasked?: string | null;
-        source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
-        version?: number;
-        configVersion?: number;
-      };
-      proxyAvailable: boolean;
-      summary: { total: number; proxied: number; direct: number };
-      items: NetworkProxyPolicyItem[];
-    }>(`/workspaces/${workspaceId}/system/proxy-policy`),
-  toggleProxy: (
-    workspaceId: string,
-    input: {
-      enabled?: boolean;
-      countryLock?: string | null;
-      proxyUrl?: string | null;
-      version?: number;
-      configVersion?: number;
-    },
-  ) =>
-    apiFetch<{
-      enabled: boolean;
-      countryLock: string | null;
-      proxyUrlMasked?: string | null;
-      source?: 'WORKSPACE' | 'ENV' | 'DIRECT';
-      version?: number;
-      configVersion?: number;
-    }>(`/workspaces/${workspaceId}/system/proxy`, {
-      method: 'POST',
-      body: JSON.stringify(input),
-    }),
-};
-
 export const workspaceApi = {
   list: () => apiFetch<{ items: WorkspaceSummary[] }>('/workspaces'),
   create: (input: { name: string; timezone: string }) =>
@@ -280,6 +217,86 @@ export const storesApi = {
       `/workspaces/${workspaceId}/stores/auto-group`,
       { method: 'POST' },
     ),
+  updateProxy: (
+    workspaceId: string,
+    storeId: string,
+    input: {
+      enabled?: boolean;
+      proxyUrl?: string | null;
+      clearProxyUrl?: boolean;
+      countryLock?: string | null;
+      targets?: StoreProxyTarget[];
+    },
+  ) =>
+    apiFetch<StoreProxySummaryView>(`/workspaces/${workspaceId}/stores/${storeId}/proxy`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  testProxy: (workspaceId: string, storeId: string) =>
+    apiFetch<{
+      checkOk: boolean;
+      checkedAt: string;
+      ip: string | null;
+      countryCode: string | null;
+      country: string | null;
+      city: string | null;
+      isp: string | null;
+      provider: string | null;
+      countryLockSatisfied: boolean;
+      checkError: string | null;
+      proxy: StoreProxySummaryView;
+    }>(`/workspaces/${workspaceId}/stores/${storeId}/proxy/test`, {
+      method: 'POST',
+    }),
+  updateShopify: (
+    workspaceId: string,
+    storeId: string,
+    input: {
+      enabled?: boolean;
+      shopDomain: string;
+      publicDomain?: string | null;
+      shortPathPrefix?: string | null;
+      adminAccessToken?: string | null;
+    },
+  ) =>
+    apiFetch<StoreShopifySummaryView>(`/workspaces/${workspaceId}/stores/${storeId}/shopify`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  deleteShopify: (workspaceId: string, storeId: string) =>
+    apiFetch<{ deleted: true; shopify: StoreShopifySummaryView }>(
+      `/workspaces/${workspaceId}/stores/${storeId}/shopify`,
+      { method: 'DELETE' },
+    ),
+  testShopify: (workspaceId: string, storeId: string) =>
+    apiFetch<{
+      checkOk: boolean;
+      shopName: string | null;
+      myshopifyDomain: string | null;
+      primaryDomainHost: string | null;
+      checkError: string | null;
+      shopify: StoreShopifySummaryView;
+    }>(`/workspaces/${workspaceId}/stores/${storeId}/shopify/test`, {
+      method: 'POST',
+    }),
+  shortenLinks: (
+    workspaceId: string,
+    storeId: string,
+    input: {
+      urls: string[];
+      cleanTracking?: boolean;
+      customSlug?: string;
+    },
+  ) =>
+    apiFetch<{
+      storeId: string;
+      publicDomain: string;
+      shortPathPrefix: string;
+      items: ShortenedLinkItemView[];
+    }>(`/workspaces/${workspaceId}/stores/${storeId}/short-links/batch`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 };
 
 export const socialAccountsApi = {
@@ -495,6 +512,7 @@ export const mediaApi = {
     workspaceId: string,
     query?: {
       q?: string;
+      storeId?: string;
       type?: string;
       status?: string;
       cursor?: string;
@@ -503,6 +521,7 @@ export const mediaApi = {
   ) => {
     const params = new URLSearchParams();
     if (query?.q) params.set('q', query.q);
+    if (query?.storeId) params.set('storeId', query.storeId);
     if (query?.type) params.set('type', query.type);
     if (query?.status) params.set('status', query.status);
     if (query?.cursor) params.set('cursor', query.cursor);
@@ -514,7 +533,12 @@ export const mediaApi = {
   },
   createUpload: (
     workspaceId: string,
-    input: { fileName: string; sizeBytes: number; declaredMimeType: string },
+    input: {
+      storeId?: string | null;
+      fileName: string;
+      sizeBytes: number;
+      declaredMimeType: string;
+    },
   ) =>
     apiFetch<{ mediaAsset: MediaAssetView; uploadUrl: string; expiresInSeconds: number }>(
       `/workspaces/${workspaceId}/media/uploads`,
@@ -522,7 +546,12 @@ export const mediaApi = {
     ),
   createMultipartUpload: (
     workspaceId: string,
-    input: { fileName: string; sizeBytes: number; declaredMimeType: string },
+    input: {
+      storeId?: string | null;
+      fileName: string;
+      sizeBytes: number;
+      declaredMimeType: string;
+    },
   ) =>
     apiFetch<{
       mediaAsset: MediaAssetView;
@@ -866,9 +895,16 @@ export const commentsApi = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  listTemplates: (workspaceId: string) =>
-    apiFetch<{ items: ReplyTemplateView[] }>(`/workspaces/${workspaceId}/comments/templates`),
-  createTemplate: (workspaceId: string, input: { name: string; body: string }) =>
+  listTemplates: (workspaceId: string, storeId?: string) => {
+    const suffix = storeId ? `?storeId=${encodeURIComponent(storeId)}` : '';
+    return apiFetch<{ items: ReplyTemplateView[] }>(
+      `/workspaces/${workspaceId}/comments/templates${suffix}`,
+    );
+  },
+  createTemplate: (
+    workspaceId: string,
+    input: { storeId?: string | null; name: string; body: string },
+  ) =>
     apiFetch<ReplyTemplateView>(`/workspaces/${workspaceId}/comments/templates`, {
       method: 'POST',
       body: JSON.stringify(input),
@@ -876,7 +912,7 @@ export const commentsApi = {
   updateTemplate: (
     workspaceId: string,
     templateId: string,
-    input: { name?: string; body?: string },
+    input: { storeId?: string | null; name?: string; body?: string },
   ) =>
     apiFetch<ReplyTemplateView>(`/workspaces/${workspaceId}/comments/templates/${templateId}`, {
       method: 'PATCH',

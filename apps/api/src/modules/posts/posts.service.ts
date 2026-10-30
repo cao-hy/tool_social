@@ -537,7 +537,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      await this.replaceTargets(
+      const resolvedStoreId = await this.replaceTargets(
         tx,
         workspaceId,
         created.id,
@@ -545,7 +545,13 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         input.platformOverrides,
         input.storeId,
       );
-      await this.replaceMedia(tx, workspaceId, created.id, input.mediaAssetIds);
+      await this.replaceMedia(
+        tx,
+        workspaceId,
+        created.id,
+        input.mediaAssetIds,
+        resolvedStoreId ?? input.storeId ?? null,
+      );
 
       if (input.scheduledAt) {
         await tx.postSchedule.create({
@@ -619,18 +625,31 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
           },
         });
 
+        let effectiveStoreId = input.storeId !== undefined ? input.storeId : existing.storeId;
         if (input.socialAccountIds) {
-          await this.replaceTargets(
+          const resolvedStoreId = await this.replaceTargets(
             tx,
             workspaceId,
             postId,
             input.socialAccountIds,
             input.platformOverrides ?? [],
-            input.storeId !== undefined ? input.storeId : existing.storeId,
+            effectiveStoreId,
           );
+          if (resolvedStoreId !== undefined) {
+            effectiveStoreId = resolvedStoreId;
+          }
+        } else if (input.storeId !== undefined && existing.platformPosts.length > 0) {
+          const mismatched = existing.platformPosts.find(
+            (pp) => (pp.socialAccount.storeId ?? null) !== (input.storeId ?? null),
+          );
+          if (mismatched) {
+            throw AppError.validation(
+              `Kênh "${mismatched.socialAccount.name}" đang chọn không thuộc Store mới của bài đăng.`,
+            );
+          }
         }
         if (input.mediaAssetIds) {
-          await this.replaceMedia(tx, workspaceId, postId, input.mediaAssetIds);
+          await this.replaceMedia(tx, workspaceId, postId, input.mediaAssetIds, effectiveStoreId);
         }
       });
 
@@ -1999,7 +2018,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     platformOverrides:
       CreatePostInput['platformOverrides'] | NonNullable<UpdatePostInput['platformOverrides']> = [],
     expectedStoreId?: string | null,
-  ): Promise<void> {
+  ): Promise<string | null | undefined> {
     const uniqueIds = [...new Set(socialAccountIds)];
     const overrideByAccountId = new Map(
       platformOverrides.map((override) => [override.socialAccountId, override]),
@@ -2017,28 +2036,57 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.validation('Một hoặc nhiều social account không hợp lệ hoặc chưa kết nối.');
     }
 
-    if (expectedStoreId) {
-      const mismatched = accounts.find(
-        (account) => account.storeId && account.storeId !== expectedStoreId,
+    let resolvedStoreId: string | null | undefined = expectedStoreId;
+
+    if (accounts.length > 0) {
+      const accountStoreKeys = new Set(
+        accounts.map((a) => (a as { storeId?: string | null }).storeId ?? '__UNASSIGNED__'),
       );
-      if (mismatched) {
+      if (accountStoreKeys.size > 1) {
         throw AppError.validation(
-          `Kênh "${mismatched.name}" thuộc một Store khác với Store đang chọn của bài đăng.`,
+          'Mỗi bài đăng chỉ được chọn các kênh thuộc cùng 1 Store duy nhất (không trộn nhiều Store hoặc kênh chưa gán Store).',
         );
       }
-    } else if (expectedStoreId === undefined && accounts.length > 0) {
-      const distinctStoreIds = [
-        ...new Set(
-          accounts
-            .map((a) => (a as { storeId?: string | null }).storeId)
-            .filter((id): id is string => Boolean(id)),
-        ),
-      ];
-      if (distinctStoreIds.length === 1 && distinctStoreIds[0]) {
+
+      const singleAccountStoreId = (accounts[0] as { storeId?: string | null }).storeId ?? null;
+
+      if (expectedStoreId) {
+        const mismatched = accounts.find(
+          (account) =>
+            ((account as { storeId?: string | null }).storeId ?? null) !== expectedStoreId,
+        );
+        if (mismatched) {
+          const mismatchedStoreId = (mismatched as { storeId?: string | null }).storeId ?? null;
+          if (!mismatchedStoreId) {
+            throw AppError.validation(
+              `Kênh "${mismatched.name}" chưa được gán vào Store. Vui lòng gán kênh vào Store trước khi đăng bài.`,
+            );
+          }
+          throw AppError.validation(
+            `Kênh "${mismatched.name}" thuộc một Store khác với Store đang chọn của bài đăng.`,
+          );
+        }
+        resolvedStoreId = expectedStoreId;
+      } else if (expectedStoreId === null && singleAccountStoreId) {
+        throw AppError.validation(
+          'Không thể gỡ Store khỏi bài đăng khi đang chọn kênh thuộc một Store.',
+        );
+      } else if (!singleAccountStoreId) {
+        const workspaceStoreCount = tx.store?.count
+          ? await tx.store.count({ where: { workspaceId } })
+          : 0;
+        if (workspaceStoreCount > 0) {
+          throw AppError.validation(
+            `Kênh "${accounts[0]?.name ?? ''}" chưa được gán vào Store nào. Vui lòng gán kênh vào Store trước khi thao tác.`,
+          );
+        }
+        resolvedStoreId = null;
+      } else {
         await tx.contentPost.update({
           where: { id: contentPostId },
-          data: { storeId: distinctStoreIds[0] },
+          data: { storeId: singleAccountStoreId },
         });
+        resolvedStoreId = singleAccountStoreId;
       }
     }
 
@@ -2069,6 +2117,7 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
           tx,
           workspaceId,
           override.mediaAssetIds,
+          resolvedStoreId,
         );
         await tx.platformPostMedia.createMany({
           data: mediaAssetIds.map((mediaAssetId, position) => ({
@@ -2079,6 +2128,8 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
+
+    return resolvedStoreId;
   }
 
   private resolvePlatformPostOptions(
@@ -2099,8 +2150,14 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     workspaceId: string,
     contentPostId: string,
     mediaAssetIds: string[],
+    expectedStoreId?: string | null,
   ): Promise<void> {
-    const uniqueIds = await this.validateMediaAssetIds(tx, workspaceId, mediaAssetIds);
+    const uniqueIds = await this.validateMediaAssetIds(
+      tx,
+      workspaceId,
+      mediaAssetIds,
+      expectedStoreId,
+    );
 
     await tx.contentPostMedia.deleteMany({ where: { contentPostId } });
     if (uniqueIds.length > 0) {
@@ -2118,13 +2175,27 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
     tx: Prisma.TransactionClient,
     workspaceId: string,
     mediaAssetIds: string[],
+    expectedStoreId?: string | null,
   ): Promise<string[]> {
     const uniqueIds = [...new Set(mediaAssetIds)];
+    if (uniqueIds.length === 0) return [];
     const mediaAssets = await tx.mediaAsset.findMany({
       where: { id: { in: uniqueIds }, workspaceId, deletedAt: null, status: 'READY' },
     });
     if (mediaAssets.length !== uniqueIds.length) {
       throw AppError.validation('Một hoặc nhiều media asset chưa sẵn sàng hoặc không hợp lệ.');
+    }
+    if (expectedStoreId) {
+      const foreignStoreMedia = mediaAssets.find(
+        (asset) =>
+          (asset as { storeId?: string | null }).storeId &&
+          (asset as { storeId?: string | null }).storeId !== expectedStoreId,
+      );
+      if (foreignStoreMedia) {
+        throw AppError.validation(
+          'Không được gắn media thuộc Store khác vào bài đăng của Store này.',
+        );
+      }
     }
     return uniqueIds;
   }
@@ -2616,36 +2687,43 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('Social account chưa kết nối hoặc token không khả dụng.');
     }
 
-    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get(platformPost.platform);
-      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-      const ctx = {
-        accessToken,
-        externalAccountId: platformPost.socialAccount.externalAccountId,
-        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-        correlationId: `platform-state:${platformPostId}`,
-      } satisfies AdapterContext;
+    return await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get(platformPost.platform);
+        const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+        const ctx = {
+          accessToken,
+          externalAccountId: platformPost.socialAccount.externalAccountId,
+          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+          correlationId: `platform-state:${platformPostId}`,
+        } satisfies AdapterContext;
 
-      return await fn({
-        platformPost: {
-          id: platformPost.id,
-          platform: platformPost.platform as Platform,
-          externalPostId: platformPost.externalPostId as string,
-          platformState: platformPost.platformState,
-          socialAccount: {
-            id: platformPost.socialAccount.id,
-            workspaceId: platformPost.socialAccount.workspaceId,
-            platform: platformPost.socialAccount.platform as Platform,
-            externalAccountId: platformPost.socialAccount.externalAccountId,
-            externalPageId: platformPost.socialAccount.externalPageId,
-            status: platformPost.socialAccount.status,
-            token: platformPost.socialAccount.token,
+        return await fn({
+          platformPost: {
+            id: platformPost.id,
+            platform: platformPost.platform as Platform,
+            externalPostId: platformPost.externalPostId as string,
+            platformState: platformPost.platformState,
+            socialAccount: {
+              id: platformPost.socialAccount.id,
+              workspaceId: platformPost.socialAccount.workspaceId,
+              platform: platformPost.socialAccount.platform as Platform,
+              externalAccountId: platformPost.socialAccount.externalAccountId,
+              externalPageId: platformPost.socialAccount.externalPageId,
+              status: platformPost.socialAccount.status,
+              token: platformPost.socialAccount.token,
+            },
           },
-        },
-        adapter,
-        ctx,
-      });
-    });
+          adapter,
+          ctx,
+        });
+      },
+      {
+        storeId: platformPost.socialAccount.storeId ?? null,
+        target: platformPost.platform as Platform,
+      },
+    );
   }
 
   private async withTikTokPlatformPostContext<T>(
@@ -2697,40 +2775,47 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('TikTok account chưa kết nối hoặc token không khả dụng.');
     }
 
-    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get('TIKTOK');
-      if (!hasTikTokStatusMethods(adapter)) {
-        throw AppError.capabilityUnsupported('TIKTOK', 'tiktok_publish_state');
-      }
+    return await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get('TIKTOK');
+        if (!hasTikTokStatusMethods(adapter)) {
+          throw AppError.capabilityUnsupported('TIKTOK', 'tiktok_publish_state');
+        }
 
-      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-      const ctx = {
-        accessToken,
-        externalAccountId: platformPost.socialAccount.externalAccountId,
-        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-        correlationId: `tiktok-state:${platformPostId}`,
-      } satisfies AdapterContext;
+        const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+        const ctx = {
+          accessToken,
+          externalAccountId: platformPost.socialAccount.externalAccountId,
+          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+          correlationId: `tiktok-state:${platformPostId}`,
+        } satisfies AdapterContext;
 
-      return await fn({
-        platformPost: {
-          id: platformPost.id,
-          contentPostId: platformPost.contentPostId,
-          externalPostId: platformPost.externalPostId as string,
-          platformState: platformPost.platformState,
-          socialAccount: {
-            id: platformPost.socialAccount.id,
-            workspaceId: platformPost.socialAccount.workspaceId,
-            platform: platformPost.socialAccount.platform as Platform,
-            externalAccountId: platformPost.socialAccount.externalAccountId,
-            externalPageId: platformPost.socialAccount.externalPageId,
-            status: platformPost.socialAccount.status,
-            token: platformPost.socialAccount.token,
+        return await fn({
+          platformPost: {
+            id: platformPost.id,
+            contentPostId: platformPost.contentPostId,
+            externalPostId: platformPost.externalPostId as string,
+            platformState: platformPost.platformState,
+            socialAccount: {
+              id: platformPost.socialAccount.id,
+              workspaceId: platformPost.socialAccount.workspaceId,
+              platform: platformPost.socialAccount.platform as Platform,
+              externalAccountId: platformPost.socialAccount.externalAccountId,
+              externalPageId: platformPost.socialAccount.externalPageId,
+              status: platformPost.socialAccount.status,
+              token: platformPost.socialAccount.token,
+            },
           },
-        },
-        adapter,
-        ctx,
-      });
-    });
+          adapter,
+          ctx,
+        });
+      },
+      {
+        storeId: platformPost.socialAccount.storeId ?? null,
+        target: 'TIKTOK',
+      },
+    );
   }
 
   private async withYouTubePlatformPostContext<T>(
@@ -2781,39 +2866,46 @@ export class PostsService implements OnModuleInit, OnModuleDestroy {
       throw AppError.conflict('YouTube account chưa kết nối hoặc token không khả dụng.');
     }
 
-    return await this.adapterFactory.withWorkspace(workspaceId, async ({ adapters }) => {
-      const adapter = adapters.get('YOUTUBE');
-      if (!hasYouTubeStatusMethods(adapter)) {
-        throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
-      }
+    return await this.adapterFactory.withWorkspace(
+      workspaceId,
+      async ({ adapters }) => {
+        const adapter = adapters.get('YOUTUBE');
+        if (!hasYouTubeStatusMethods(adapter)) {
+          throw AppError.capabilityUnsupported('YOUTUBE', 'youtube_video_state');
+        }
 
-      const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
-      const ctx = {
-        accessToken,
-        externalAccountId: platformPost.socialAccount.externalAccountId,
-        externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
-        correlationId: `youtube-state:${platformPostId}`,
-      } satisfies AdapterContext;
+        const accessToken = await this.getFreshAccessToken(platformPost.socialAccount, adapter);
+        const ctx = {
+          accessToken,
+          externalAccountId: platformPost.socialAccount.externalAccountId,
+          externalPageId: platformPost.socialAccount.externalPageId ?? undefined,
+          correlationId: `youtube-state:${platformPostId}`,
+        } satisfies AdapterContext;
 
-      return await fn({
-        platformPost: {
-          id: platformPost.id,
-          platform: platformPost.platform as Platform,
-          externalPostId: platformPost.externalPostId as string,
-          socialAccount: {
-            id: platformPost.socialAccount.id,
-            workspaceId: platformPost.socialAccount.workspaceId,
-            platform: platformPost.socialAccount.platform as Platform,
-            externalAccountId: platformPost.socialAccount.externalAccountId,
-            externalPageId: platformPost.socialAccount.externalPageId,
-            status: platformPost.socialAccount.status,
-            token: platformPost.socialAccount.token,
+        return await fn({
+          platformPost: {
+            id: platformPost.id,
+            platform: platformPost.platform as Platform,
+            externalPostId: platformPost.externalPostId as string,
+            socialAccount: {
+              id: platformPost.socialAccount.id,
+              workspaceId: platformPost.socialAccount.workspaceId,
+              platform: platformPost.socialAccount.platform as Platform,
+              externalAccountId: platformPost.socialAccount.externalAccountId,
+              externalPageId: platformPost.socialAccount.externalPageId,
+              status: platformPost.socialAccount.status,
+              token: platformPost.socialAccount.token,
+            },
           },
-        },
-        adapter,
-        ctx,
-      });
-    });
+          adapter,
+          ctx,
+        });
+      },
+      {
+        storeId: platformPost.socialAccount.storeId ?? null,
+        target: 'YOUTUBE',
+      },
+    );
   }
 
   private async updateParentStatus(contentPostId: string): Promise<void> {

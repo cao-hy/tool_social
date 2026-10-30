@@ -47,7 +47,7 @@ import {
 } from '@/components/media-preview';
 import { useToast } from '@/components/toast-provider';
 import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
-import { platformsApi, postsApi, socialAccountsApi, storesApi } from '@/lib/api-client';
+import { platformsApi, postsApi, socialAccountsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { rowsToCsv } from '@/lib/csv';
 import { getErrorMessage } from '@/lib/errors';
@@ -56,16 +56,10 @@ import {
   formatMetricNumber,
   hasVisibleMetrics,
 } from '@/lib/post-metrics';
-import type {
-  ContentPostView,
-  DeletePostResult,
-  PlatformCapabilitiesView,
-  SocialAccountView,
-  StoreView,
-} from '@/lib/types';
+import { useActiveStore } from '@/lib/store-context';
+import type { ContentPostView, DeletePostResult, PlatformCapabilitiesView } from '@/lib/types';
 import {
   CAPABILITIES_STALE_TIME,
-  SHARED_META_STALE_TIME,
   workspaceQueryKeys,
   type PostsListCacheParams,
 } from '@/lib/workspace-queries';
@@ -121,64 +115,26 @@ const INITIAL_POSTS_CACHE_PARAMS: PostsListCacheParams = {
   cursor: undefined,
 };
 
-function getStickyStoreKey(workspaceId: string): string {
-  return `socialhub:posts:selected-store:${workspaceId}`;
-}
-
-function readStickyStoreId(workspaceId?: string): string {
-  if (!workspaceId || typeof window === 'undefined') return '';
-  try {
-    return window.localStorage.getItem(getStickyStoreKey(workspaceId)) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-function writeStickyStoreId(workspaceId: string | undefined, nextStoreId: string): void {
-  if (!workspaceId || typeof window === 'undefined') return;
-  try {
-    if (nextStoreId) {
-      window.localStorage.setItem(getStickyStoreKey(workspaceId), nextStoreId);
-    } else {
-      window.localStorage.removeItem(getStickyStoreKey(workspaceId));
-    }
-  } catch {
-    // ignore storage quota / privacy mode errors
-  }
-}
-
 export default function PostsPage() {
   const auth = useAuth();
   const queryClient = useQueryClient();
   const toast = useToast();
   const workspace = auth.activeWorkspace;
-  const initialStickyStoreId = readStickyStoreId(workspace?.id);
-  const initialPostsCache = workspace
-    ? queryClient.getQueryData<PostsListCachedData>(
-        workspaceQueryKeys.postsList(workspace.id, {
-          ...INITIAL_POSTS_CACHE_PARAMS,
-          storeId: initialStickyStoreId || undefined,
-        }),
-      )
-    : undefined;
+  const storeCtx = useActiveStore();
+  const { activeStore, activeStoreId, stores, accounts } = storeCtx;
+  const storeId = activeStoreId ?? '';
+  const initialPostsCache =
+    workspace && storeId
+      ? queryClient.getQueryData<PostsListCachedData>(
+          workspaceQueryKeys.postsList(workspace.id, {
+            ...INITIAL_POSTS_CACHE_PARAMS,
+            storeId,
+          }),
+        )
+      : undefined;
   const [posts, setPosts] = useState<ContentPostView[]>(() => initialPostsCache?.items ?? []);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>(
     () => initialPostsCache?.statusCounts ?? {},
-  );
-  const [accounts, setAccounts] = useState<SocialAccountView[]>(
-    () =>
-      (workspace
-        ? queryClient.getQueryData<{ items: SocialAccountView[] }>(
-            workspaceQueryKeys.socialAccounts(workspace.id),
-          )?.items
-        : undefined) ?? [],
-  );
-  const [stores, setStores] = useState<StoreView[]>(
-    () =>
-      (workspace
-        ? queryClient.getQueryData<{ items: StoreView[] }>(workspaceQueryKeys.stores(workspace.id))
-            ?.items
-        : undefined) ?? [],
   );
   const [capabilityByPlatform, setCapabilityByPlatform] = useState<
     Partial<Record<Platform, PlatformCapabilitiesView>>
@@ -192,7 +148,6 @@ export default function PostsPage() {
     >;
   });
   const [status, setStatus] = useState('');
-  const [storeId, setStoreId] = useState(() => initialStickyStoreId);
   const [platform, setPlatform] = useState('');
   const [mediaType, setMediaType] = useState<PostMediaFilter>('');
   const [query, setQuery] = useState('');
@@ -272,21 +227,16 @@ export default function PostsPage() {
   );
 
   const realtimeReloadTimerRef = useRef<number | null>(null);
-  const lastWorkspaceIdRef = useRef<string | undefined>(workspace?.id);
-
-  function selectStoreId(nextStoreId: string) {
-    setStoreId(nextStoreId);
-    writeStickyStoreId(workspace?.id, nextStoreId);
-  }
-
-  useEffect(() => {
-    if (lastWorkspaceIdRef.current === workspace?.id) return;
-    lastWorkspaceIdRef.current = workspace?.id;
-    setStoreId(readStickyStoreId(workspace?.id));
-  }, [workspace?.id]);
 
   async function loadPosts(cursor?: string, options?: { silent?: boolean; useCache?: boolean }) {
     if (!workspace) return;
+    if (storeCtx.loading && !storeId) return;
+    if (!storeId && stores.length > 0) {
+      setPosts([]);
+      setStatusCounts({});
+      setNextCursor(null);
+      return;
+    }
     const listParams: PostsListCacheParams = { ...activeFilters, cursor };
     const queryKey = workspaceQueryKeys.postsList(workspace.id, listParams);
     const cached = queryClient.getQueryData<PostsListCachedData>(queryKey);
@@ -376,37 +326,13 @@ export default function PostsPage() {
 
   useEffect(() => {
     if (!workspace) return;
-    Promise.all([
-      queryClient.fetchQuery({
-        queryKey: workspaceQueryKeys.socialAccounts(workspace.id),
-        queryFn: () => socialAccountsApi.list(workspace.id),
-        staleTime: SHARED_META_STALE_TIME,
-      }),
-      queryClient.fetchQuery({
-        queryKey: workspaceQueryKeys.stores(workspace.id),
-        queryFn: () => storesApi.list(workspace.id),
-        staleTime: SHARED_META_STALE_TIME,
-      }),
-      queryClient.fetchQuery({
+    queryClient
+      .fetchQuery({
         queryKey: workspaceQueryKeys.capabilities(),
         queryFn: () => platformsApi.capabilities(),
         staleTime: CAPABILITIES_STALE_TIME,
-      }),
-    ])
-      .then(([accountResult, storeResult, capabilityResult]) => {
-        setAccounts(accountResult.items);
-        setStores(storeResult.items);
-        setStoreId((current) => {
-          if (
-            current &&
-            current !== 'UNASSIGNED' &&
-            !storeResult.items.some((item) => item.id === current)
-          ) {
-            writeStickyStoreId(workspace.id, '');
-            return '';
-          }
-          return current;
-        });
+      })
+      .then((capabilityResult) => {
         setCapabilityByPlatform(
           Object.fromEntries(
             capabilityResult.platforms.map((item) => [item.platform, item]),
@@ -423,8 +349,9 @@ export default function PostsPage() {
 
   useEffect(() => {
     setCursorStack([]);
+    setSelectedPostIds([]);
     void loadPosts(undefined, { useCache: true });
-  }, [workspace, activeFilters]);
+  }, [workspace, activeFilters, storeCtx.loading, stores.length]);
 
   useEffect(() => {
     if (!workspace) return;
@@ -773,7 +700,7 @@ export default function PostsPage() {
     (statusCounts.PUBLISHED ?? 0) + (statusCounts.PARTIALLY_PUBLISHED ?? 0) > 0;
 
   function openSyncPostsModal() {
-    const initStoreId = storeId || '';
+    const initStoreId = storeId || 'UNASSIGNED';
     const initPlatform = platform || '';
     setSyncFilterStoreId(initStoreId);
     setSyncFilterPlatform(initPlatform);
@@ -873,6 +800,9 @@ export default function PostsPage() {
       let cursor: string | undefined;
       for (let page = 0; page < 3; page += 1) {
         const res = await postsApi.list(workspace.id, {
+          storeId: storeId || undefined,
+          platform: platform || undefined,
+          mediaType: mediaType || undefined,
           q: activeFilters.q,
           dateFrom: activeFilters.dateFrom,
           dateTo: activeFilters.dateTo,
@@ -886,23 +816,6 @@ export default function PostsPage() {
         }
         if (!res.nextCursor) break;
         cursor = res.nextCursor;
-      }
-
-      if (storeId || platform || mediaType) {
-        const scopedRes = await postsApi.list(workspace.id, {
-          storeId: storeId || undefined,
-          platform: platform || undefined,
-          mediaType: mediaType || undefined,
-          q: activeFilters.q,
-          dateFrom: activeFilters.dateFrom,
-          dateTo: activeFilters.dateTo,
-          sortBy: activeFilters.sortBy,
-          direction: activeFilters.direction,
-          limit: 100,
-        });
-        for (const item of scopedRes.items) {
-          collectedById.set(item.id, item);
-        }
       }
 
       const collected = Array.from(collectedById.values());
@@ -939,7 +852,6 @@ export default function PostsPage() {
   ].filter(Boolean).length;
   const hasAnyFilter = Boolean(
     status ||
-    storeId ||
     platform ||
     mediaType ||
     debouncedQuery.trim() ||
@@ -955,8 +867,10 @@ export default function PostsPage() {
         body: 'Thử xóa bớt filter, đổi khoảng ngày, hoặc tìm bằng từ khóa khác.',
       }
     : {
-        title: 'Chưa có bài viết nào',
-        body: 'Tạo draft đầu tiên, chọn tài khoản publish, rồi đăng ngay hoặc đưa vào lịch.',
+        title: activeStore
+          ? `Store "${activeStore.name}" chưa có bài viết nào`
+          : 'Chưa có bài viết nào',
+        body: 'Tạo draft đầu tiên cho Store này, hoặc bấm "Đồng bộ bài viết" để kéo bài đã đăng về.',
       };
 
   const activeFilterChips: Array<{ key: string; label: string; onRemove: () => void }> = [];
@@ -968,17 +882,6 @@ export default function PostsPage() {
         setQuery('');
         setDebouncedQuery('');
       },
-    });
-  }
-  if (storeId) {
-    const storeName =
-      storeId === 'UNASSIGNED'
-        ? 'Chưa gán Store'
-        : (stores.find((item) => item.id === storeId)?.name ?? storeId);
-    activeFilterChips.push({
-      key: 'storeId',
-      label: `Store: ${storeName}`,
-      onRemove: () => selectStoreId(''),
     });
   }
   if (platform) {
@@ -1046,7 +949,6 @@ export default function PostsPage() {
 
   function resetFilters() {
     setStatus('');
-    selectStoreId('');
     setPlatform('');
     setMediaType('');
     setQuery('');
@@ -1114,8 +1016,8 @@ export default function PostsPage() {
       </header>
 
       <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-[minmax(220px,1.5fr)_minmax(145px,1fr)_minmax(145px,1fr)_minmax(145px,1fr)_auto] xl:items-end">
-          <div className="sm:col-span-2 lg:col-span-4 xl:col-span-1">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-[minmax(240px,1.7fr)_minmax(160px,1fr)_minmax(160px,1fr)_auto] xl:items-end">
+          <div className="sm:col-span-2 lg:col-span-3 xl:col-span-1">
             <Field label="Tìm kiếm">
               <div className="relative">
                 <Search
@@ -1144,20 +1046,6 @@ export default function PostsPage() {
                   </button>
                 ) : null}
               </div>
-            </Field>
-          </div>
-
-          <div>
-            <Field label="Store / Brand">
-              <SelectInput value={storeId} onChange={(event) => selectStoreId(event.target.value)}>
-                <option value="">Tất cả Stores</option>
-                {stores.map((store) => (
-                  <option key={store.id} value={store.id}>
-                    {store.name}
-                  </option>
-                ))}
-                <option value="UNASSIGNED">Chưa gán Store</option>
-              </SelectInput>
             </Field>
           </div>
 
@@ -1648,19 +1536,19 @@ export default function PostsPage() {
                   <label className="block text-xs font-semibold text-slate-700">
                     Store / Brand
                   </label>
-                  <select
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
-                    onChange={(e) => updateSyncFilters(e.target.value, syncFilterPlatform)}
-                    value={syncFilterStoreId}
-                  >
-                    <option value="">Tất cả Stores</option>
-                    {stores.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                    <option value="UNASSIGNED">Chưa gán Store</option>
-                  </select>
+                  <div className="mt-1 flex h-[34px] items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-semibold text-slate-800">
+                    {activeStore ? (
+                      <>
+                        <span
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: activeStore.color ?? '#2563eb' }}
+                        />
+                        <span className="truncate">{activeStore.name}</span>
+                      </>
+                    ) : (
+                      <span className="truncate text-slate-500">Chưa gán Store</span>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -1796,7 +1684,8 @@ export default function PostsPage() {
         capabilityByPlatform={capabilityByPlatform}
         initialMediaType={mediaType}
         initialPlatform={platform}
-        initialStoreId={storeId}
+        initialStoreId={storeId || undefined}
+        lockedStoreId={storeId || undefined}
         isExplicitSelection={commentModalExplicitSelection}
         posts={commentModalPosts}
         stores={stores}

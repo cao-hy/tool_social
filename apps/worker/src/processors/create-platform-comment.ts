@@ -1,5 +1,5 @@
 import { isPlatformError } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import {
   createPrismaClient,
   operationRequestKey,
@@ -51,7 +51,10 @@ export function createCreatePlatformCommentProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapterFactory: {
-    forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
   };
 }) {
   return async (job: {
@@ -124,7 +127,10 @@ async function createPlatformComment(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapterFactory: {
-      forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
     };
   },
   payload: CreatePlatformCommentPayload,
@@ -199,7 +205,10 @@ async function createPlatformComment(
   }
 
   const adapterCtx = await input.adapterFactory
-    .forWorkspace(payload.workspaceId)
+    .forWorkspace(payload.workspaceId, {
+      storeId: account.storeId ?? null,
+      target: account.platform,
+    })
     .catch(async (error) => {
       await rollbackBeforeConnect(input.prisma, ownership, {
         code: error instanceof Error ? error.name : 'ADAPTER_PREPARE_FAILED',
@@ -479,7 +488,10 @@ async function tryReconcileRemoteComment(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapterFactory: {
-      forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
     };
   },
   params: {
@@ -507,7 +519,10 @@ async function tryReconcileRemoteComment(
 
   let adapterCtx: WorkspaceAdapterContext | null = null;
   try {
-    adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+    adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId, {
+      storeId: account.storeId ?? null,
+      target: account.platform,
+    });
     const adapter = adapterCtx.adapters.get(account.platform);
     const getComments = adapter.getComments?.bind(adapter);
     if (!getComments) return null;

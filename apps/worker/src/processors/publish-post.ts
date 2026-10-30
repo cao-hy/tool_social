@@ -20,7 +20,7 @@ import {
   type PrismaClientInstance,
 } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import { randomUUID } from 'node:crypto';
 import {
   deriveContentPostStatus,
@@ -131,7 +131,12 @@ function logPublishStageTimings(input: {
 export function createPublishPostProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+  adapterFactory: {
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
+  };
   locks: JobLockService;
   storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
   reconcileQueue?: Queue;
@@ -241,7 +246,12 @@ async function publishPlatformPost(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+    adapterFactory: {
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
+    };
     locks: JobLockService;
     storage: { client: S3Client; bucket: string; publicBaseUrl?: string };
     reconcileQueue?: Queue;
@@ -380,7 +390,10 @@ async function publishPlatformPost(
 
     const prepareRouteStartedAt = Date.now();
     const adaptersContext = await input.adapterFactory
-      .forWorkspace(payload.workspaceId)
+      .forWorkspace(payload.workspaceId, {
+        storeId: platformPost.socialAccount.storeId ?? null,
+        target: platformPost.platform,
+      })
       .catch(async (error) => {
         if (operationOwnership) {
           await rollbackBeforeConnect(input.prisma, operationOwnership, {

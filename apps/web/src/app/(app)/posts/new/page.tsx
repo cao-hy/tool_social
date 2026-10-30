@@ -22,7 +22,7 @@ import { MediaPreview } from '@/components/media-preview';
 import { PlatformComposerPanels } from '@/components/platform-composer-panels';
 import { useToast } from '@/components/toast-provider';
 import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
-import { mediaApi, postsApi, socialAccountsApi, storesApi } from '@/lib/api-client';
+import { mediaApi, postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
 import {
@@ -38,14 +38,14 @@ import {
   zonedDateTimeLocalToUtcIso,
   type SchedulePreview,
 } from '@/lib/schedule-time';
+import { useActiveStore } from '@/lib/store-context';
 import type {
   MediaAssetView,
   MediaLibraryItem,
   SocialAccountView,
   StorageUsageView,
-  StoreView,
 } from '@/lib/types';
-import { SHARED_META_STALE_TIME, workspaceQueryKeys } from '@/lib/workspace-queries';
+import { workspaceQueryKeys } from '@/lib/workspace-queries';
 
 const MAX_MEDIA_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MULTIPART_UPLOAD_THRESHOLD_BYTES = 16 * 1024 * 1024;
@@ -67,22 +67,13 @@ export default function NewPostPage() {
   const toast = useToast();
   const router = useRouter();
   const workspace = auth.activeWorkspace;
-  const cachedAccounts = workspace
-    ? queryClient.getQueryData<{ items: SocialAccountView[] }>(
-        workspaceQueryKeys.socialAccounts(workspace.id),
-      )?.items
-    : undefined;
-  const cachedStores = workspace
-    ? queryClient.getQueryData<{ items: StoreView[] }>(workspaceQueryKeys.stores(workspace.id))
-        ?.items
-    : undefined;
-  const [accounts, setAccounts] = useState<SocialAccountView[]>(() =>
-    cachedAccounts ? cachedAccounts.filter((item) => item.status === 'CONNECTED') : [],
+  const storeCtx = useActiveStore();
+  const { activeStore, activeStoreId, stores } = storeCtx;
+  const accounts = useMemo(
+    () => storeCtx.accounts.filter((item) => item.status === 'CONNECTED'),
+    [storeCtx.accounts],
   );
-  const [stores, setStores] = useState<StoreView[]>(() => cachedStores ?? []);
-  const [selectedStoreId, setSelectedStoreId] = useState<string>(
-    () => cachedStores?.find((item) => item.isDefault)?.id ?? '',
-  );
+  const selectedStoreId = activeStoreId ?? '';
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -120,28 +111,6 @@ export default function NewPostPage() {
 
   useEffect(() => {
     if (!workspace) return;
-    Promise.all([
-      queryClient.fetchQuery({
-        queryKey: workspaceQueryKeys.socialAccounts(workspace.id),
-        queryFn: () => socialAccountsApi.list(workspace.id),
-        staleTime: SHARED_META_STALE_TIME,
-      }),
-      queryClient.fetchQuery({
-        queryKey: workspaceQueryKeys.stores(workspace.id),
-        queryFn: () => storesApi.list(workspace.id),
-        staleTime: SHARED_META_STALE_TIME,
-      }),
-    ])
-      .then(([accountsResult, storesResult]) => {
-        setAccounts(accountsResult.items.filter((item) => item.status === 'CONNECTED'));
-        setStores(storesResult.items);
-        const defaultStore = storesResult.items.find((item) => item.isDefault);
-        if (defaultStore) {
-          setSelectedStoreId((current) => current || defaultStore.id);
-        }
-      })
-      .catch((loadError) => setError(getErrorMessage(loadError)));
-
     queryClient
       .fetchQuery({
         queryKey: workspaceQueryKeys.mediaUsage(workspace.id),
@@ -150,6 +119,52 @@ export default function NewPostPage() {
       .then((usage) => setStorageUsage(usage))
       .catch(() => setStorageUsage(null));
   }, [queryClient, workspace]);
+
+  useEffect(() => {
+    const validAccountIds = new Set(
+      accounts
+        .filter((account) => (selectedStoreId ? account.storeId === selectedStoreId : true))
+        .map((account) => account.id),
+    );
+    setSelectedIds((current) => current.filter((id) => validAccountIds.has(id)));
+  }, [accounts, selectedStoreId]);
+
+  useEffect(() => {
+    setMediaAssets((current) => {
+      const allowed = current.filter(
+        (asset) => !asset.storeId || asset.storeId === selectedStoreId,
+      );
+      if (allowed.length === current.length) return current;
+      const allowedIds = new Set(allowed.map((asset) => asset.id));
+      setPlatformOverrides((overrides) =>
+        Object.fromEntries(
+          Object.entries(overrides).map(([accountId, draft]) => [
+            accountId,
+            {
+              ...draft,
+              mediaAssetIds: draft.mediaAssetIds.filter((id) => allowedIds.has(id)),
+              thumbnailMediaAssetId: allowedIds.has(draft.thumbnailMediaAssetId)
+                ? draft.thumbnailMediaAssetId
+                : '',
+              thumbnailMode: allowedIds.has(draft.thumbnailMediaAssetId)
+                ? draft.thumbnailMode
+                : 'AUTO',
+            },
+          ]),
+        ),
+      );
+      return allowed;
+    });
+    setCoverMediaAssets((current) =>
+      current.filter((asset) => !asset.storeId || asset.storeId === selectedStoreId),
+    );
+    setLibraryItems([]);
+    setLibraryCursorStack([]);
+    setLibraryNextCursor(null);
+    if (mediaMode === 'library' && workspace) {
+      void loadMediaLibrary(undefined, selectedStoreId);
+    }
+  }, [selectedStoreId]);
 
   useWorkspaceEventSubscription((event) => {
     if (!workspace) return;
@@ -176,20 +191,14 @@ export default function NewPostPage() {
       }
       void refreshStorageUsage();
       void loadMediaLibrary(libraryCursorStack.at(-1));
-    } else if (event.type === 'accounts.changed' || event.type === 'stream.reconnected') {
-      socialAccountsApi
-        .list(workspace.id)
-        .then((accountsResult) => {
-          setAccounts(accountsResult.items.filter((item) => item.status === 'CONNECTED'));
-        })
-        .catch(() => undefined);
     }
   });
 
   const visibleAccounts = useMemo(() => {
+    if (stores.length > 0 && !selectedStoreId) return [];
     if (!selectedStoreId) return accounts;
     return accounts.filter((account) => account.storeId === selectedStoreId);
-  }, [accounts, selectedStoreId]);
+  }, [accounts, selectedStoreId, stores.length]);
 
   const groupedAccounts = useMemo(() => {
     const groups = new Map<Platform, SocialAccountView[]>();
@@ -343,14 +352,6 @@ export default function NewPostPage() {
       mediaAssetIds: mediaAssets.map((item) => item.id),
       platformOverrides: platformOverridePayload,
     };
-  }
-
-  function handleSelectStore(nextStoreId: string) {
-    setSelectedStoreId(nextStoreId);
-    if (nextStoreId) {
-      const validIds = new Set(accounts.filter((a) => a.storeId === nextStoreId).map((a) => a.id));
-      setSelectedIds((current) => current.filter((id) => validIds.has(id)));
-    }
   }
 
   function selectAllVisibleAccounts() {
@@ -561,6 +562,7 @@ export default function NewPostPage() {
     uploadProgressId: string,
   ): Promise<MediaAssetView> {
     const request = await mediaApi.createUpload(workspaceId, {
+      storeId: selectedStoreId || undefined,
       fileName: file.name,
       sizeBytes: file.size,
       declaredMimeType: file.type || 'application/octet-stream',
@@ -595,6 +597,7 @@ export default function NewPostPage() {
     uploadProgressId: string,
   ): Promise<MediaAssetView> {
     const request = await mediaApi.createMultipartUpload(workspaceId, {
+      storeId: selectedStoreId || undefined,
       fileName: file.name,
       sizeBytes: file.size,
       declaredMimeType: file.type || 'application/octet-stream',
@@ -709,12 +712,14 @@ export default function NewPostPage() {
     }
   }
 
-  async function loadMediaLibrary(cursor?: string) {
+  async function loadMediaLibrary(cursor?: string, overrideStoreId?: string) {
     if (!workspace) return;
+    const effectiveStoreId = overrideStoreId !== undefined ? overrideStoreId : selectedStoreId;
     setLibraryLoading(true);
     setLibraryError(null);
     try {
       const response = await mediaApi.list(workspace.id, {
+        storeId: effectiveStoreId || undefined,
         limit: 12,
         cursor,
         q: libraryQuery.trim() || undefined,
@@ -939,6 +944,7 @@ export default function NewPostPage() {
           common={{ title, body, linkUrl, hashtags }}
           drafts={platformOverrides}
           mediaAssets={mediaAssets}
+          storeId={selectedStoreId || null}
           workspaceId={workspace.id}
           onChange={updateOverride}
           onSelectCoverMedia={rememberCoverMedia}
@@ -955,36 +961,46 @@ export default function NewPostPage() {
             </span>
           </div>
 
-          {stores.length > 0 ? (
-            <div className="mt-3 space-y-2 border-b border-slate-100 pb-3">
-              <label className="block text-xs font-semibold text-slate-600">
-                Chọn Store / Brand
-              </label>
-              <select
-                className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                onChange={(e) => handleSelectStore(e.target.value)}
-                value={selectedStoreId}
-              >
-                <option value="">Tất cả Stores ({accounts.length} kênh)</option>
-                {stores.map((store) => (
-                  <option key={store.id} value={store.id}>
-                    {store.name} ({accounts.filter((a) => a.storeId === store.id).length} kênh)
-                  </option>
-                ))}
-              </select>
-              {visibleAccounts.length > 0 ? (
+          <div className="mt-3 space-y-2 border-b border-slate-100 pb-3">
+            {activeStore ? (
+              <div className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: activeStore.color ?? '#2563eb' }}
+                  />
+                  <span className="truncate text-xs font-semibold text-slate-900">
+                    {activeStore.name}
+                  </span>
+                </div>
+                <span className="shrink-0 text-[11px] font-medium text-slate-500">
+                  {visibleAccounts.length} kênh
+                </span>
+              </div>
+            ) : stores.length === 0 && !storeCtx.loading ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <p>Chưa có Store / Brand nào trong workspace.</p>
                 <button
-                  className="text-xs font-medium text-brand-700 hover:underline"
-                  onClick={selectAllVisibleAccounts}
+                  className="mt-1 font-semibold text-amber-950 underline"
+                  onClick={() => storeCtx.openCreateStoreModal()}
                   type="button"
                 >
-                  {visibleAccounts.every((a) => selectedIds.includes(a.id))
-                    ? 'Bỏ chọn tất cả kênh trong danh sách'
-                    : `Chọn tất cả ${visibleAccounts.length} kênh${selectedStoreId ? ' của Store này' : ''}`}
+                  + Tạo Store đầu tiên
                 </button>
-              ) : null}
-            </div>
-          ) : null}
+              </div>
+            ) : null}
+            {visibleAccounts.length > 0 ? (
+              <button
+                className="text-xs font-medium text-brand-700 hover:underline"
+                onClick={selectAllVisibleAccounts}
+                type="button"
+              >
+                {visibleAccounts.every((a) => selectedIds.includes(a.id))
+                  ? 'Bỏ chọn tất cả kênh trong danh sách'
+                  : `Chọn tất cả ${visibleAccounts.length} kênh của Store này`}
+              </button>
+            ) : null}
+          </div>
 
           <div className="mt-3 space-y-3">
             {groupedAccounts.map(([platform, items]) => (
@@ -1083,7 +1099,7 @@ export default function NewPostPage() {
 
         <div className="grid gap-2">
           <SecondaryButton
-            disabled={!canCreate || busy !== null}
+            disabled={!canCreate || busy !== null || (stores.length > 0 && !selectedStoreId)}
             onClick={createDraft}
             type="button"
           >
@@ -1091,14 +1107,22 @@ export default function NewPostPage() {
           </SecondaryButton>
           <PrimaryButton
             busy={busy === 'publish'}
-            disabled={!canPublish || selectedIds.length === 0}
+            disabled={
+              !canPublish || selectedIds.length === 0 || (stores.length > 0 && !selectedStoreId)
+            }
             onClick={publishNow}
             type="button"
           >
             Publish ngay
           </PrimaryButton>
           <SecondaryButton
-            disabled={!canSchedule || selectedIds.length === 0 || !scheduledAt || busy !== null}
+            disabled={
+              !canSchedule ||
+              selectedIds.length === 0 ||
+              !scheduledAt ||
+              busy !== null ||
+              (stores.length > 0 && !selectedStoreId)
+            }
             onClick={schedule}
             type="button"
           >

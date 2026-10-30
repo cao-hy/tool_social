@@ -38,6 +38,7 @@ import {
   type PlatformOverrideDraft,
 } from '@/lib/platform-composer-options';
 import { validatePostComposer } from '@/lib/post-validation';
+import { useActiveStore } from '@/lib/store-context';
 import type { ContentPostView, MediaAssetView, SocialAccountView } from '@/lib/types';
 
 const CONTENT_EDITABLE_POST_STATUSES = [
@@ -56,6 +57,7 @@ export default function EditPostPage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
   const workspace = auth.activeWorkspace;
+  const storeCtx = useActiveStore();
   const [post, setPost] = useState<ContentPostView | null>(null);
   const [accounts, setAccounts] = useState<SocialAccountView[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -157,15 +159,39 @@ export default function EditPostPage() {
     }
   });
 
+  const postStoreId = useMemo(
+    () =>
+      post?.storeId ??
+      post?.platformPosts.find((item) => item.storeId)?.storeId ??
+      storeCtx.activeStoreId ??
+      null,
+    [post, storeCtx.activeStoreId],
+  );
+
+  const postStore = useMemo(
+    () =>
+      (postStoreId ? storeCtx.stores.find((item) => item.id === postStoreId) : null) ??
+      post?.store ??
+      null,
+    [post?.store, postStoreId, storeCtx.stores],
+  );
+
+  const visibleAccounts = useMemo(() => {
+    if (!postStoreId) return accounts;
+    return accounts.filter(
+      (account) => account.storeId === postStoreId || selectedIds.includes(account.id),
+    );
+  }, [accounts, postStoreId, selectedIds]);
+
   const groupedAccounts = useMemo(() => {
     const groups = new Map<Platform, SocialAccountView[]>();
-    for (const account of accounts) {
+    for (const account of visibleAccounts) {
       const items = groups.get(account.platform) ?? [];
       items.push(account);
       groups.set(account.platform, items);
     }
     return [...groups.entries()];
-  }, [accounts]);
+  }, [visibleAccounts]);
 
   const selectedAccounts = useMemo(
     () => accounts.filter((account) => selectedIds.includes(account.id)),
@@ -255,6 +281,7 @@ export default function EditPostPage() {
     }
 
     const upload = await mediaApi.createUpload(workspace.id, {
+      storeId: postStoreId ?? undefined,
       fileName: file.name,
       sizeBytes: file.size,
       declaredMimeType: file.type || 'application/octet-stream',
@@ -529,6 +556,7 @@ export default function EditPostPage() {
                 drafts={platformOverrides}
                 mediaLocked={!canEditTargets}
                 mediaAssets={post?.media.filter((asset) => mediaAssetIds.includes(asset.id)) ?? []}
+                storeId={postStoreId}
                 workspaceId={workspace.id}
                 onChange={updateOverride}
                 onSelectCoverMedia={rememberCoverMedia}
@@ -552,9 +580,20 @@ export default function EditPostPage() {
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-slate-950">Kênh publish</h2>
             <span className="rounded-full bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700">
-              {selectedIds.length}/{accounts.length}
+              {selectedIds.length}/{visibleAccounts.length}
             </span>
           </div>
+          {postStore ? (
+            <div className="mt-3 flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: postStore.color ?? '#2563eb' }}
+              />
+              <span className="truncate text-xs font-semibold text-slate-900">
+                {postStore.name}
+              </span>
+            </div>
+          ) : null}
           <div className="mt-3 space-y-3">
             {groupedAccounts.map(([platform, items]) => (
               <div key={platform}>

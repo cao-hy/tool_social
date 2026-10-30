@@ -1,6 +1,6 @@
 import { fetch as undiciFetch } from 'undici';
 import { isIP } from 'node:net';
-import type { ProxyConfig } from '@socialhub/shared';
+import { STORE_PROXY_TARGETS, type ProxyConfig, type StoreProxyTarget } from '@socialhub/shared';
 
 export class ProxyConfigurationMissingError extends Error {
   readonly code = 'PROXY_CONFIGURATION_MISSING';
@@ -51,6 +51,35 @@ export interface WorkspaceProxySettingRecord {
   countryLock: string | null;
   configVersion: number;
   updatedAt: Date;
+}
+
+export interface StoreProxySettingRecord extends WorkspaceProxySettingRecord {
+  storeId: string;
+  workspaceId: string;
+  targets: string[];
+}
+
+const VALID_STORE_PROXY_TARGETS = new Set<string>(STORE_PROXY_TARGETS);
+
+export function normalizeStoreProxyTargets(targets?: readonly string[] | null): StoreProxyTarget[] {
+  if (!targets || targets.length === 0) return [];
+  const unique = new Set<StoreProxyTarget>();
+  for (const raw of targets) {
+    const upper = raw.trim().toUpperCase();
+    if (VALID_STORE_PROXY_TARGETS.has(upper)) {
+      unique.add(upper as StoreProxyTarget);
+    }
+  }
+  return Array.from(unique);
+}
+
+export function shouldUseStoreProxyForTarget(
+  setting: Pick<StoreProxySettingRecord, 'enabled' | 'targets'> | null | undefined,
+  target: StoreProxyTarget,
+): boolean {
+  if (!setting?.enabled) return false;
+  const targets = normalizeStoreProxyTargets(setting.targets);
+  return targets.includes(target);
 }
 
 interface ParsedIpLookup {
@@ -369,6 +398,7 @@ export function normalizeProxyConfig(value: Partial<ProxyConfig>): ProxyConfig {
     proxyUrl,
     proxyUrlMasked: value.proxyUrlMasked ?? maskProxyUrl(proxyUrl),
     source,
+    ...(value.targets ? { targets: normalizeStoreProxyTargets(value.targets) } : {}),
     version: value.version,
   };
 }

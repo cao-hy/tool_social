@@ -1,5 +1,5 @@
 import { isPlatformError, type PlatformError } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import { createPrismaClient, type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import {
@@ -25,7 +25,12 @@ type SyncPostMetricsPayload = QueuePayload<'sync-post-metrics'>;
 export function createSyncPostMetricsProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+  adapterFactory: {
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
+  };
 }) {
   return async (job: {
     data: unknown;
@@ -79,7 +84,12 @@ async function syncPostMetrics(
   input: {
     prisma: PrismaClientInstance;
     keyring: Keyring;
-    adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+    adapterFactory: {
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
+    };
   },
   payload: SyncPostMetricsPayload,
 ) {
@@ -110,7 +120,10 @@ async function syncPostMetrics(
     select: { timezone: true },
   });
 
-  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId);
+  const adapterCtx = await input.adapterFactory.forWorkspace(payload.workspaceId, {
+    storeId: account.storeId ?? null,
+    target: account.platform,
+  });
   try {
     const { adapters } = adapterCtx;
     const adapter = adapters.get(account.platform);

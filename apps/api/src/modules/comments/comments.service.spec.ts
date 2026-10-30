@@ -218,4 +218,72 @@ describe('CommentsService', () => {
       'create-platform-comment-outbound-operation_command_2',
     ]);
   });
+
+  it('bulkCreatePlatformComments chặn khi target platformPosts trộn lẫn nhiều Store', async () => {
+    const prismaForBulk = {
+      platformPost: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'pp_1',
+            socialAccount: { storeId: 'store_a' },
+            contentPost: { storeId: 'store_a' },
+          },
+          {
+            id: 'pp_2',
+            socialAccount: { storeId: 'store_b' },
+            contentPost: { storeId: 'store_b' },
+          },
+        ]),
+      },
+    };
+    const service = new CommentsService(
+      prismaForBulk as never,
+      redis,
+      audit,
+      adapterFactory,
+      keyring,
+    );
+
+    await expect(
+      service.bulkCreatePlatformComments(
+        'workspace_1',
+        'user_1',
+        { platformPostIds: ['pp_1', 'pp_2'], message: 'Ghim link sản phẩm' },
+        { requestId: 'req_bulk_1' },
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+  });
+
+  it('listTemplates lọc theo storeId + trả về mẫu riêng của Store đứng trước mẫu dùng chung', async () => {
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'tpl_shared',
+        workspaceId: 'workspace_1',
+        storeId: null,
+        name: 'A Mẫu chung',
+        body: '1',
+      },
+      {
+        id: 'tpl_store',
+        workspaceId: 'workspace_1',
+        storeId: 'store_a',
+        name: 'Z Mẫu riêng',
+        body: '2',
+      },
+    ]);
+    const service = new CommentsService(
+      { replyTemplate: { findMany } } as never,
+      redis,
+      audit,
+      adapterFactory,
+      keyring,
+    );
+
+    const res = await service.listTemplates('workspace_1', 'store_a');
+    expect(findMany).toHaveBeenCalledWith({
+      where: { workspaceId: 'workspace_1', OR: [{ storeId: 'store_a' }, { storeId: null }] },
+      orderBy: { name: 'asc' },
+    });
+    expect(res.items.map((item) => item.id)).toEqual(['tpl_store', 'tpl_shared']);
+  });
 });

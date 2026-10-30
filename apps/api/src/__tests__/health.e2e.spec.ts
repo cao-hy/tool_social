@@ -15,7 +15,6 @@ import { ResponseInterceptor } from '../common/interceptors/response.interceptor
 import { attachRequestId } from '../common/request-context';
 import { HealthController } from '../modules/health/health.controller';
 import { HealthService } from '../modules/health/health.service';
-import { SystemController } from '../modules/health/system.controller';
 import { AdapterRegistryFactory } from '../infrastructure/adapter-registry.factory';
 import { PlatformsController } from '../modules/platforms/platforms.controller';
 import { PrismaService } from '../infrastructure/prisma/prisma.service';
@@ -38,18 +37,13 @@ describe('Health & Platforms (e2e)', () => {
 
   beforeAll(async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
-      controllers: [HealthController, PlatformsController, SystemController],
+      controllers: [HealthController, PlatformsController],
       providers: [
         HealthService,
         {
           provide: PrismaService,
           useValue: {
             ping: prismaPing,
-            workspaceProxySetting: {
-              findUnique: vi.fn().mockResolvedValue(null),
-              update: vi.fn().mockResolvedValue(null),
-              upsert: vi.fn().mockResolvedValue(null),
-            },
           },
         },
         {
@@ -242,22 +236,22 @@ describe('Health & Platforms (e2e)', () => {
     });
   });
 
-  describe('System proxy config', () => {
-    it('không cho client chưa đăng nhập đọc network/proxy status', async () => {
+  describe('Legacy workspace proxy routes removed', () => {
+    it('trả 404 cho GET /workspaces/ws_1/system/network (đã chuyển sang Per-Store Proxy)', async () => {
       const response = await request(app.getHttpServer())
         .get('/workspaces/ws_1/system/network')
-        .expect(401);
+        .expect(404);
       expect(response.body.success).toBe(false);
-      expect(response.body.error.code).toBe('UNAUTHENTICATED');
+      expect(response.body.error.code).toBe('NOT_FOUND');
     });
 
-    it('không cho client chưa đăng nhập sửa proxy config', async () => {
+    it('trả 404 cho POST /workspaces/ws_1/system/proxy (không còn cho phép bật Proxy cấp Workspace)', async () => {
       const response = await request(app.getHttpServer())
         .post('/workspaces/ws_1/system/proxy')
         .send({ enabled: true })
-        .expect(401);
+        .expect(404);
       expect(response.body.success).toBe(false);
-      expect(response.body.error.code).toBe('UNAUTHENTICATED');
+      expect(response.body.error.code).toBe('NOT_FOUND');
     });
   });
 

@@ -1,5 +1,5 @@
 import { isPlatformError, type AdapterLogger } from '@socialhub/platform-adapters';
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import { type Prisma, type PrismaClientInstance } from '@socialhub/db';
 import type { Keyring } from '@socialhub/security';
 import {
@@ -75,7 +75,10 @@ export function createDeletePlatformPostProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
   adapterFactory: {
-    forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
   };
   locks: JobLockService;
   cleanupMediaQueue: Queue;
@@ -141,7 +144,10 @@ async function deletePlatformPost(
     prisma: PrismaClientInstance;
     keyring: Keyring;
     adapterFactory: {
-      forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext>;
+      forWorkspace(
+        workspaceId: string,
+        route?: WorkspaceRouteOptions,
+      ): Promise<WorkspaceAdapterContext>;
     };
     locks: JobLockService;
     cleanupMediaQueue: Queue;
@@ -229,7 +235,10 @@ async function deletePlatformPost(
   });
 
   const adapterCtx = await input.adapterFactory
-    .forWorkspace(payload.workspaceId)
+    .forWorkspace(payload.workspaceId, {
+      storeId: account.storeId ?? null,
+      target: platformPost.platform as Platform,
+    })
     .catch(async (error) => {
       await rollbackBeforeConnect(input.prisma, ownership, {
         code: error instanceof Error ? error.name : 'ADAPTER_PREPARE_FAILED',

@@ -4,9 +4,11 @@ import {
   Delete,
   Get,
   Inject,
+  Optional,
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -14,7 +16,7 @@ import {
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { platformSchema, type Platform } from '@socialhub/shared';
+import { platformSchema, storeProxyTargetSchema, type Platform } from '@socialhub/shared';
 import { isPlatformError } from '@socialhub/platform-adapters';
 import { scrubSecretsFromText } from '@socialhub/security';
 import type { AuthenticatedRequest } from '../../common/auth/auth.types';
@@ -26,8 +28,10 @@ import { WorkspaceGuard } from '../../common/guards/workspace.guard';
 import { zodPipe } from '../../common/pipes/zod-validation.pipe';
 import { getRequestId } from '../../common/request-context';
 import { logger } from '../../common/logger';
+import { AppError } from '../../common/errors/app-error';
 import { ENV, type ApiEnv } from '../../infrastructure/env.provider';
 import { SocialAccountsService } from './social-accounts.service';
+import { StoreIntegrationsService } from './store-integrations.service';
 
 const OAUTH_CALLBACK_TIMEOUT_MS = 20_000;
 
@@ -82,11 +86,42 @@ const assignAccountStoreSchema = z.object({
 });
 type AssignAccountStoreInput = z.infer<typeof assignAccountStoreSchema>;
 
+const updateStoreProxySchema = z.object({
+  enabled: z.boolean().optional(),
+  proxyUrl: z.string().trim().max(1000).nullable().optional(),
+  clearProxyUrl: z.boolean().optional(),
+  countryLock: z.string().trim().max(8).nullable().optional(),
+  targets: z.array(storeProxyTargetSchema).optional(),
+});
+type UpdateStoreProxyInput = z.infer<typeof updateStoreProxySchema>;
+
+const updateStoreShopifySchema = z.object({
+  enabled: z.boolean().optional(),
+  shopDomain: z.string().trim().min(1, 'Vui lòng nhập Shop Admin Domain.').max(255),
+  publicDomain: z.string().trim().max(255).nullable().optional(),
+  shortPathPrefix: z.string().trim().max(32).nullable().optional(),
+  adminAccessToken: z.string().trim().max(500).nullable().optional(),
+});
+type UpdateStoreShopifyInput = z.infer<typeof updateStoreShopifySchema>;
+
+const shortenStoreUrlsBatchSchema = z.object({
+  urls: z
+    .array(z.string().trim().min(1, 'URL không được để trống.').max(2048))
+    .min(1, 'Cần ít nhất 1 URL để rút gọn.')
+    .max(200, 'Tối đa 200 URL mỗi lần rút gọn.'),
+  cleanTracking: z.boolean().optional(),
+  customSlug: z.string().trim().max(64).optional(),
+});
+type ShortenStoreUrlsBatchInput = z.infer<typeof shortenStoreUrlsBatchSchema>;
+
 @Controller()
 export class SocialAccountsController {
   constructor(
     @Inject(SocialAccountsService) private readonly socialAccounts: SocialAccountsService,
     @Inject(ENV) private readonly env: ApiEnv,
+    @Optional()
+    @Inject(StoreIntegrationsService)
+    private readonly storeIntegrations?: StoreIntegrationsService,
   ) {}
 
   @Get('workspaces/:workspaceId/social-accounts')
@@ -164,6 +199,107 @@ export class SocialAccountsController {
       workspaceId,
       requireUser(request).id,
       this.auditContext(request),
+    );
+  }
+
+  @Put('workspaces/:workspaceId/stores/:storeId/proxy')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  updateStoreProxy(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Body(zodPipe(updateStoreProxySchema)) body: UpdateStoreProxyInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.requireStoreIntegrations().updateStoreProxy(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Post('workspaces/:workspaceId/stores/:storeId/proxy/test')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  testStoreProxy(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.requireStoreIntegrations().testStoreProxy(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
+  @Put('workspaces/:workspaceId/stores/:storeId/shopify')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  updateStoreShopify(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Body(zodPipe(updateStoreShopifySchema)) body: UpdateStoreShopifyInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.requireStoreIntegrations().upsertStoreShopify(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      body,
+      this.auditContext(request),
+    );
+  }
+
+  @Delete('workspaces/:workspaceId/stores/:storeId/shopify')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  deleteStoreShopify(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.requireStoreIntegrations().deleteStoreShopify(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
+  @Post('workspaces/:workspaceId/stores/:storeId/shopify/test')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:connect')
+  testStoreShopify(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.requireStoreIntegrations().testStoreShopify(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      this.auditContext(request),
+    );
+  }
+
+  @Post('workspaces/:workspaceId/stores/:storeId/short-links/batch')
+  @UseGuards(AuthGuard, WorkspaceGuard, RoleGuard)
+  @RequirePermissions('social_account:view')
+  shortenStoreUrlsBatch(
+    @Param('workspaceId') workspaceId: string,
+    @Param('storeId') storeId: string,
+    @Body(zodPipe(shortenStoreUrlsBatchSchema)) body: ShortenStoreUrlsBatchInput,
+    @Req() request: FastifyRequest & AuthenticatedRequest,
+  ) {
+    return this.requireStoreIntegrations().shortenStoreUrls(
+      workspaceId,
+      storeId,
+      requireUser(request).id,
+      body,
     );
   }
 
@@ -591,6 +727,13 @@ export class SocialAccountsController {
       user.id,
       this.auditContext(request),
     );
+  }
+
+  private requireStoreIntegrations(): StoreIntegrationsService {
+    if (!this.storeIntegrations) {
+      throw AppError.internal('StoreIntegrationsService chưa được khởi tạo.');
+    }
+    return this.storeIntegrations;
   }
 
   private auditContext(request: FastifyRequest) {

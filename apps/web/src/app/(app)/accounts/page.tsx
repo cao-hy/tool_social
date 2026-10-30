@@ -1,40 +1,44 @@
 'use client';
 
-import { useQueryClient } from '@tanstack/react-query';
-import { hasPermission, PLATFORM_LABELS, PLATFORMS, type Platform } from '@socialhub/shared';
 import {
+  hasPermission,
+  PLATFORM_LABELS,
+  PLATFORMS,
+  type Platform,
+  type SocialAccountStatus,
+} from '@socialhub/shared';
+import {
+  AlertTriangle,
+  ArrowRightLeft,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Copy,
   ExternalLink,
-  Pencil,
+  Link2,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
+  Settings2,
+  Shield,
   ShieldCheck,
   Trash2,
+  Wrench,
   X,
+  Zap,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { InlineError, PrimaryButton, SecondaryButton } from '@/components/form-controls';
+import type { StoreSettingsTab } from '@/components/store-settings-modal';
 import { useToast } from '@/components/toast-provider';
-import { useWorkspaceEventSubscription } from '@/components/workspace-events-provider';
 import { socialAccountsApi, storesApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
+import { useActiveStore } from '@/lib/store-context';
 import type { SocialAccountView, StoreView } from '@/lib/types';
-import { SHARED_META_STALE_TIME, workspaceQueryKeys } from '@/lib/workspace-queries';
-
-const STORE_COLOR_SWATCHES = [
-  '#2563eb',
-  '#7c3aed',
-  '#db2777',
-  '#ea580c',
-  '#059669',
-  '#0891b2',
-  '#4f46e5',
-  '#b45309',
-] as const;
 
 const PLATFORM_BADGE_STYLES: Record<Platform, string> = {
   FACEBOOK: 'bg-blue-50 text-blue-700 border-blue-200',
@@ -44,38 +48,69 @@ const PLATFORM_BADGE_STYLES: Record<Platform, string> = {
   PINTEREST: 'bg-rose-50 text-rose-700 border-rose-200',
 };
 
-interface StoreModalDraft {
-  id: string | null;
-  name: string;
-  description: string;
-  color: string;
-  isDefault: boolean;
-  socialAccountIds: string[];
+const PLATFORM_SHORT_CODES: Record<Platform, string> = {
+  FACEBOOK: 'FB',
+  INSTAGRAM: 'IG',
+  YOUTUBE: 'YT',
+  TIKTOK: 'TT',
+  PINTEREST: 'PIN',
+};
+
+function hasAccountIssue(account: SocialAccountView): boolean {
+  return account.status !== 'CONNECTED' || Boolean(account.lastErrorMessage);
+}
+
+function formatAccountStatusLabel(status: SocialAccountStatus): string {
+  switch (status) {
+    case 'CONNECTED':
+      return 'Đang kết nối';
+    case 'NEEDS_RECONNECT':
+      return 'Cần kết nối lại';
+    case 'ERROR':
+      return 'Lỗi kết nối';
+    case 'DISCONNECTED':
+      return 'Đã ngắt kết nối';
+    default:
+      return status;
+  }
+}
+
+function formatAccountHandle(account: SocialAccountView): string {
+  const cleaned = account.username?.trim().replace(/^@+/, '');
+  if (cleaned) {
+    return `@${cleaned}`;
+  }
+  return PLATFORM_LABELS[account.platform];
+}
+
+function formatRelativeSyncTime(iso: string | null): string {
+  if (!iso) return 'Chưa đồng bộ';
+  const date = new Date(iso);
+  const ts = date.getTime();
+  if (Number.isNaN(ts)) return 'Chưa đồng bộ';
+
+  const diffSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  if (diffSec < 60) return 'Vừa xong';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} phút trước`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour} giờ trước`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 7) return `${diffDay} ngày trước`;
+  return date.toLocaleDateString('vi-VN');
 }
 
 export default function AccountsPage() {
   const auth = useAuth();
-  const queryClient = useQueryClient();
   const toast = useToast();
   const workspace = auth.activeWorkspace;
-  const [accounts, setAccounts] = useState<SocialAccountView[]>(
-    () =>
-      (workspace
-        ? queryClient.getQueryData<{ items: SocialAccountView[] }>(
-            workspaceQueryKeys.socialAccounts(workspace.id),
-          )?.items
-        : undefined) ?? [],
-  );
-  const [stores, setStores] = useState<StoreView[]>(
-    () =>
-      (workspace
-        ? queryClient.getQueryData<{ items: StoreView[] }>(workspaceQueryKeys.stores(workspace.id))
-            ?.items
-        : undefined) ?? [],
-  );
+  const storeCtx = useActiveStore();
+  const { activeStore, activeStoreId, stores, accounts, loading } = storeCtx;
+
   const [selectedStoreFilter, setSelectedStoreFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [collapsedStoreIds, setCollapsedStoreIds] = useState<Record<string, boolean>>({});
+
   const [connectingKey, setConnectingKey] = useState<string | null>(null);
   const [copyingKey, setCopyingKey] = useState<string | null>(null);
   const [hasCopiedOAuthLink, setHasCopiedOAuthLink] = useState(false);
@@ -84,10 +119,16 @@ export default function AccountsPage() {
   const [syncingStoreId, setSyncingStoreId] = useState<string | null>(null);
   const [autoGrouping, setAutoGrouping] = useState(false);
   const [assigningAccountId, setAssigningAccountId] = useState<string | null>(null);
-  const [openAddChannelMenuStoreId, setOpenAddChannelMenuStoreId] = useState<string | null>(null);
 
-  const [storeModal, setStoreModal] = useState<StoreModalDraft | null>(null);
-  const [savingStore, setSavingStore] = useState(false);
+  // Dropdown menu states (mutually exclusive)
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
+  const [openAddChannelMenuStoreId, setOpenAddChannelMenuStoreId] = useState<string | null>(null);
+  const [openStoreMenuId, setOpenStoreMenuId] = useState<string | null>(null);
+  const [openAccountMenuId, setOpenAccountMenuId] = useState<string | null>(null);
+
+  // Reassign channel modal state
+  const [reassignModalAccount, setReassignModalAccount] = useState<SocialAccountView | null>(null);
+  const [reassignTargetStoreId, setReassignTargetStoreId] = useState<string>('');
 
   const [metaModalOpen, setMetaModalOpen] = useState(false);
   const [metaToken, setMetaToken] = useState('');
@@ -100,104 +141,49 @@ export default function AccountsPage() {
   const [completingCallback, setCompletingCallback] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
-  const reloadTimerRef = useRef<number | null>(null);
 
-  async function loadAccounts(
-    workspaceId: string,
-    options?: { silent?: boolean; useCache?: boolean },
-  ) {
-    const cachedAccounts = queryClient.getQueryData<{ items: SocialAccountView[] }>(
-      workspaceQueryKeys.socialAccounts(workspaceId),
-    );
-    const cachedStores = queryClient.getQueryData<{ items: StoreView[] }>(
-      workspaceQueryKeys.stores(workspaceId),
-    );
-    const hasWarmData = Boolean(cachedAccounts && cachedStores);
-
-    if (cachedAccounts) setAccounts(cachedAccounts.items);
-    if (cachedStores) setStores(cachedStores.items);
-
-    const shouldBlockUi = !options?.silent && !hasWarmData;
-    if (shouldBlockUi) setLoading(true);
-    setError(null);
-    try {
-      const staleTime = options?.useCache ? SHARED_META_STALE_TIME : 0;
-      const [accountsResult, storesResult] = await Promise.all([
-        queryClient.fetchQuery({
-          queryKey: workspaceQueryKeys.socialAccounts(workspaceId),
-          queryFn: () => socialAccountsApi.list(workspaceId),
-          staleTime,
-        }),
-        queryClient.fetchQuery({
-          queryKey: workspaceQueryKeys.stores(workspaceId),
-          queryFn: () => storesApi.list(workspaceId),
-          staleTime,
-        }),
-      ]);
-      setAccounts(accountsResult.items);
-      setStores(storesResult.items);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError));
-    } finally {
-      if (shouldBlockUi) setLoading(false);
-    }
+  function closeAllMenus() {
+    setToolsMenuOpen(false);
+    setOpenAddChannelMenuStoreId(null);
+    setOpenStoreMenuId(null);
+    setOpenAccountMenuId(null);
   }
 
   useEffect(() => {
-    if (!workspace) return;
-    const key = workspaceQueryKeys.socialAccounts(workspace.id);
-    if (queryClient.getQueryData(key) !== undefined) {
-      queryClient.setQueryData(key, { items: accounts });
-    }
-  }, [accounts, queryClient, workspace]);
+    closeAllMenus();
+  }, [activeStoreId]);
 
   useEffect(() => {
-    if (!workspace) return;
-    const key = workspaceQueryKeys.stores(workspace.id);
-    if (queryClient.getQueryData(key) !== undefined) {
-      queryClient.setQueryData(key, { items: stores });
+    function handleDocumentMouseDown(event: MouseEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-dropdown-root]')) {
+        return;
+      }
+      closeAllMenus();
     }
-  }, [queryClient, stores, workspace]);
-
-  useEffect(() => {
-    if (!workspace) return;
-    void loadAccounts(workspace.id, { useCache: true });
+    function handleDocumentKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        closeAllMenus();
+      }
+    }
+    document.addEventListener('mousedown', handleDocumentMouseDown);
+    document.addEventListener('keydown', handleDocumentKeyDown);
     return () => {
-      if (reloadTimerRef.current !== null) {
-        window.clearTimeout(reloadTimerRef.current);
-      }
+      document.removeEventListener('mousedown', handleDocumentMouseDown);
+      document.removeEventListener('keydown', handleDocumentKeyDown);
     };
-  }, [workspace]);
-
-  useWorkspaceEventSubscription((event) => {
-    if (!workspace) return;
-    if (
-      event.type === 'accounts.changed' ||
-      event.type === 'stream.reconnected' ||
-      (event.type === 'posts.changed' && event.queueName === 'sync-external-posts')
-    ) {
-      if (reloadTimerRef.current !== null) {
-        window.clearTimeout(reloadTimerRef.current);
-      }
-      reloadTimerRef.current = window.setTimeout(() => {
-        reloadTimerRef.current = null;
-        void loadAccounts(workspace.id, { silent: true });
-      }, 400);
-    }
-  });
+  }, []);
 
   useEffect(() => {
     if (!workspace || !hasCopiedOAuthLink) return;
     function handleWindowFocus() {
-      if (workspace) {
-        void loadAccounts(workspace.id);
-      }
+      void storeCtx.refreshStores();
     }
     window.addEventListener('focus', handleWindowFocus);
     return () => {
       window.removeEventListener('focus', handleWindowFocus);
     };
-  }, [hasCopiedOAuthLink, workspace]);
+  }, [hasCopiedOAuthLink, storeCtx, workspace]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -256,10 +242,15 @@ export default function AccountsPage() {
     });
   }, [accounts, matchesAccountSearch, normalizedSearch, selectedStoreFilter, stores]);
 
+  const issueAccountCount = useMemo(
+    () => accounts.filter((item) => hasAccountIssue(item)).length,
+    [accounts],
+  );
+
   if (!workspace) {
     return (
       <section className="rounded-lg border border-slate-200 bg-white p-6">
-        <h1 className="text-xl font-semibold text-slate-950">Stores & Social Accounts</h1>
+        <h1 className="text-xl font-semibold text-slate-950">Stores &amp; Social Accounts</h1>
         <p className="mt-2 text-sm text-slate-600">Tài khoản này chưa thuộc workspace nào.</p>
       </section>
     );
@@ -269,11 +260,34 @@ export default function AccountsPage() {
   const canDisconnect = hasPermission(workspace.role, 'social_account:disconnect');
   const totalUnassignedCount = accounts.filter((item) => !item.storeId).length;
 
+  const allVisibleCollapsed =
+    visibleStores.length > 0 &&
+    visibleStores.every((store) => Boolean(collapsedStoreIds[store.id]));
+
+  function toggleStoreCollapsed(storeId: string) {
+    setCollapsedStoreIds((prev) => ({
+      ...prev,
+      [storeId]: !prev[storeId],
+    }));
+  }
+
+  function toggleCollapseAllStores() {
+    if (allVisibleCollapsed) {
+      setCollapsedStoreIds({});
+      return;
+    }
+    const next: Record<string, boolean> = {};
+    for (const store of visibleStores) {
+      next[store.id] = true;
+    }
+    setCollapsedStoreIds(next);
+  }
+
   async function connectOAuth(platform: Platform, storeId?: string) {
     if (!workspace) return;
     const key = `${storeId ?? 'GLOBAL'}:${platform}`;
     setConnectingKey(key);
-    setOpenAddChannelMenuStoreId(null);
+    closeAllMenus();
     setError(null);
     try {
       const result = await socialAccountsApi.startOAuth(workspace.id, platform, storeId);
@@ -293,7 +307,7 @@ export default function AccountsPage() {
       const result = await socialAccountsApi.startOAuth(workspace.id, platform, storeId);
       await navigator.clipboard.writeText(result.authorizationUrl);
       setHasCopiedOAuthLink(true);
-      setOpenAddChannelMenuStoreId(null);
+      closeAllMenus();
       toast.success(
         `Đã copy link OAuth ${PLATFORM_LABELS[platform]}! Sau khi cấp quyền trên Multilogin và trang nhảy về localhost:4000, hãy copy URL đó rồi bấm "Dán Callback Multilogin".`,
       );
@@ -305,6 +319,7 @@ export default function AccountsPage() {
   }
 
   async function openCallbackModal() {
+    closeAllMenus();
     setCallbackModalOpen(true);
     try {
       const clipText = await navigator.clipboard.readText();
@@ -332,7 +347,7 @@ export default function AccountsPage() {
       setCallbackModalOpen(false);
       setCallbackUrlInput('');
       setHasCopiedOAuthLink(false);
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
       toast.success(
         `Đã kết nối thành công kênh ${res.accountName} (${PLATFORM_LABELS[res.platform]})!`,
       );
@@ -345,11 +360,12 @@ export default function AccountsPage() {
 
   async function disconnect(accountId: string) {
     if (!workspace) return;
+    closeAllMenus();
     if (!window.confirm('Bạn có chắc muốn ngắt kết nối kênh này?')) return;
     setError(null);
     try {
       await socialAccountsApi.disconnect(workspace.id, accountId);
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
       toast.success('Đã ngắt kết nối tài khoản.');
     } catch (disconnectError) {
       toast.error(getErrorMessage(disconnectError));
@@ -358,12 +374,13 @@ export default function AccountsPage() {
 
   async function testConnection(accountId: string) {
     if (!workspace) return;
+    closeAllMenus();
     setTesting(accountId);
     setError(null);
     try {
       const result = await socialAccountsApi.testConnection(workspace.id, accountId);
       toast.success(`Kết nối OK: ${result.profile.name}`);
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
     } catch (testError) {
       toast.error(getErrorMessage(testError));
     } finally {
@@ -373,12 +390,13 @@ export default function AccountsPage() {
 
   async function syncPosts(accountId: string) {
     if (!workspace) return;
+    closeAllMenus();
     setSyncing(accountId);
     setError(null);
     try {
       await socialAccountsApi.syncPosts(workspace.id, accountId);
       toast.success('Đã gửi yêu cầu đồng bộ bài viết vào queue.');
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
     } catch (syncError) {
       toast.error(getErrorMessage(syncError));
     } finally {
@@ -388,6 +406,7 @@ export default function AccountsPage() {
 
   async function syncAllStorePosts(store: StoreView) {
     if (!workspace) return;
+    closeAllMenus();
     const storeAccounts = accounts.filter(
       (item) => item.storeId === store.id && item.status === 'CONNECTED',
     );
@@ -400,7 +419,7 @@ export default function AccountsPage() {
       await Promise.allSettled(
         storeAccounts.map((acc) => socialAccountsApi.syncPosts(workspace.id, acc.id)),
       );
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
       toast.success(
         `Đã gửi yêu cầu đồng bộ bài viết cho ${storeAccounts.length} kênh thuộc Store "${store.name}".`,
       );
@@ -432,7 +451,7 @@ export default function AccountsPage() {
       setMetaToken('');
       setMetaPageIds('');
       setMetaModalOpen(false);
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
       toast.success(`Đã đồng bộ ${result.syncedCount} tài khoản Facebook/Instagram từ Meta Token.`);
     } catch (syncError) {
       toast.error(getErrorMessage(syncError));
@@ -442,66 +461,18 @@ export default function AccountsPage() {
   }
 
   function openCreateStoreModal() {
-    const nextColor =
-      STORE_COLOR_SWATCHES[stores.length % STORE_COLOR_SWATCHES.length] ?? '#2563eb';
-    setStoreModal({
-      id: null,
-      name: '',
-      description: '',
-      color: nextColor,
-      isDefault: stores.length === 0,
-      socialAccountIds: [],
-    });
+    closeAllMenus();
+    storeCtx.openCreateStoreModal();
   }
 
-  function openEditStoreModal(store: StoreView) {
-    const storeAccountIds = accounts
-      .filter((item) => item.storeId === store.id)
-      .map((item) => item.id);
-    setStoreModal({
-      id: store.id,
-      name: store.name,
-      description: store.description ?? '',
-      color: store.color ?? '#2563eb',
-      isDefault: store.isDefault,
-      socialAccountIds: storeAccountIds,
-    });
-  }
-
-  async function handleSaveStoreModal() {
-    if (!workspace || !storeModal || !storeModal.name.trim()) return;
-    setSavingStore(true);
-    try {
-      if (storeModal.id) {
-        const updated = await storesApi.update(workspace.id, storeModal.id, {
-          name: storeModal.name.trim(),
-          description: storeModal.description.trim() || null,
-          color: storeModal.color,
-          isDefault: storeModal.isDefault,
-          socialAccountIds: storeModal.socialAccountIds,
-        });
-        toast.success(`Đã cập nhật Store "${updated.name}".`);
-      } else {
-        const created = await storesApi.create(workspace.id, {
-          name: storeModal.name.trim(),
-          description: storeModal.description.trim() || null,
-          color: storeModal.color,
-          isDefault: storeModal.isDefault,
-          socialAccountIds: storeModal.socialAccountIds,
-        });
-        toast.success(`Đã tạo Store "${created.name}".`);
-      }
-      setStoreModal(null);
-      await loadAccounts(workspace.id);
-    } catch (err) {
-      toast.error(getErrorMessage(err));
-    } finally {
-      setSavingStore(false);
-    }
+  function openStoreSettings(store: StoreView, initialTab: StoreSettingsTab = 'general') {
+    closeAllMenus();
+    storeCtx.openStoreSettingsModal(store, initialTab);
   }
 
   async function handleDeleteStore(store: StoreView) {
     if (!workspace) return;
+    closeAllMenus();
     if (
       !window.confirm(
         `Xóa Store "${store.name}"? Các kênh và bài viết trong Store sẽ được giữ nguyên và chuyển về trạng thái Chưa gán Store.`,
@@ -514,7 +485,7 @@ export default function AccountsPage() {
       if (selectedStoreFilter === store.id) {
         setSelectedStoreFilter('ALL');
       }
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
       toast.success(`Đã xóa Store "${store.name}".`);
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -523,10 +494,11 @@ export default function AccountsPage() {
 
   async function handleAutoGroupStores() {
     if (!workspace) return;
+    closeAllMenus();
     setAutoGrouping(true);
     try {
       const result = await storesApi.autoGroup(workspace.id);
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
       toast.success(
         `Đã tự động tạo ${result.storesCreated} Store mới và gom nhóm ${result.groupedAccounts} kênh.`,
       );
@@ -546,8 +518,9 @@ export default function AccountsPage() {
         accountId,
         nextStoreId ? nextStoreId : null,
       );
-      await loadAccounts(workspace.id);
+      await storeCtx.refreshStores();
       toast.success('Đã cập nhật Store cho kênh.');
+      setReassignModalAccount(null);
     } catch (err) {
       toast.error(getErrorMessage(err));
     } finally {
@@ -555,171 +528,330 @@ export default function AccountsPage() {
     }
   }
 
-  function renderAccountCard(account: SocialAccountView) {
+  function openReassignModal(account: SocialAccountView) {
+    closeAllMenus();
+    setReassignTargetStoreId(account.storeId ?? '');
+    setReassignModalAccount(account);
+  }
+
+  function renderAccountCard(account: SocialAccountView, options?: { isUnassigned?: boolean }) {
+    const isUnassigned = options?.isUnassigned ?? !account.storeId;
+    const unhealthy = hasAccountIssue(account);
+    const isAccountMenuOpen = openAccountMenuId === account.id;
+    const handleText = formatAccountHandle(account);
+    const relativeSync = formatRelativeSyncTime(account.lastSyncedAt);
+    const fullSyncTitle = account.lastSyncedAt
+      ? `Lần đồng bộ gần nhất: ${new Date(account.lastSyncedAt).toLocaleString('vi-VN')}`
+      : 'Chưa đồng bộ bài viết lần nào';
+
     return (
       <div
         key={account.id}
-        className="flex flex-col justify-between rounded-lg border border-slate-200 bg-slate-50/60 p-3.5 transition hover:border-slate-300 hover:bg-white"
+        className={`group relative flex flex-col justify-between rounded-lg border p-3 transition ${
+          unhealthy
+            ? 'border-amber-300 bg-amber-50/40 hover:border-amber-400 hover:bg-amber-50/60'
+            : 'border-slate-200 bg-slate-50/50 hover:border-slate-300 hover:bg-white'
+        }`}
       >
-        <div>
-          <div className="flex items-start justify-between gap-2">
-            <span
-              className={`inline-flex items-center rounded border px-2 py-0.5 text-[11px] font-semibold ${
-                PLATFORM_BADGE_STYLES[account.platform]
-              }`}
-            >
-              {PLATFORM_LABELS[account.platform]}
-            </span>
-            <span
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                account.status === 'CONNECTED'
-                  ? 'bg-emerald-50 text-emerald-700'
-                  : 'bg-amber-50 text-amber-700'
-              }`}
-            >
+        <div className="flex items-center justify-between gap-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <div className="relative shrink-0">
+              {account.avatarUrl ? (
+                <img
+                  alt={account.name}
+                  className="h-9 w-9 rounded-full border border-slate-200 object-cover"
+                  src={account.avatarUrl}
+                />
+              ) : (
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-700">
+                  {account.name.slice(0, 2).toUpperCase()}
+                </div>
+              )}
               <span
-                className={`h-1.5 w-1.5 rounded-full ${
-                  account.status === 'CONNECTED' ? 'bg-emerald-500' : 'bg-amber-500'
+                className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white ${
+                  unhealthy ? 'bg-amber-500' : 'bg-emerald-500'
                 }`}
+                title={formatAccountStatusLabel(account.status)}
               />
-              {account.status}
-            </span>
-          </div>
+            </div>
 
-          <div className="mt-2.5 flex items-center gap-2.5">
-            {account.avatarUrl ? (
-              <img
-                alt={account.name}
-                className="h-9 w-9 shrink-0 rounded-full border border-slate-200 object-cover"
-                src={account.avatarUrl}
-              />
-            ) : (
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-700">
-                {account.name.slice(0, 2).toUpperCase()}
-              </div>
-            )}
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
-                <p className="truncate text-sm font-semibold text-slate-900">{account.name}</p>
+                <p className="truncate text-sm font-semibold text-slate-900" title={account.name}>
+                  {account.name}
+                </p>
+                <span
+                  className={`inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none ${
+                    PLATFORM_BADGE_STYLES[account.platform]
+                  }`}
+                  title={PLATFORM_LABELS[account.platform]}
+                >
+                  {PLATFORM_SHORT_CODES[account.platform]}
+                </span>
                 {account.profileUrl ? (
                   <a
-                    className="shrink-0 text-slate-400 hover:text-slate-700"
+                    className="shrink-0 text-slate-400 opacity-75 transition hover:text-slate-700 group-hover:opacity-100"
                     href={account.profileUrl}
                     rel="noreferrer"
                     target="_blank"
-                    title="Mở trang kênh"
+                    title="Mở trang kênh gốc"
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                   </a>
                 ) : null}
               </div>
-              <p className="truncate text-xs text-slate-500">
-                {account.username
-                  ? `@${account.username}`
-                  : `ID: ${account.externalAccountId ?? account.id}`}
-              </p>
+
+              <div className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-slate-500">
+                <span className="truncate" title={handleText}>
+                  {handleText}
+                </span>
+                <span className="text-slate-300">·</span>
+                <span className="shrink-0 text-[11px] text-slate-400" title={fullSyncTitle}>
+                  {account.lastSyncedAt ? `Sync ${relativeSync}` : relativeSync}
+                </span>
+              </div>
             </div>
           </div>
 
-          <p className="mt-2 truncate text-[11px] text-slate-400">
-            {account.lastSyncedAt
-              ? `Đồng bộ: ${new Date(account.lastSyncedAt).toLocaleString('vi-VN')}`
-              : 'Chưa đồng bộ bài viết'}
-          </p>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200/80 pt-2.5">
-          <select
-            aria-label={`Chọn Store cho ${account.name}`}
-            className="max-w-[155px] truncate rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-100"
-            disabled={!canConnect || assigningAccountId === account.id}
-            onChange={(e) => void handleAssignAccountStore(account.id, e.target.value)}
-            value={account.storeId ?? ''}
-          >
-            <option value="">-- Chưa gán Store --</option>
-            {stores.map((s) => (
-              <option key={s.id} value={s.id}>
-                Store: {s.name}
-              </option>
-            ))}
-          </select>
-
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <button
-              className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-              disabled={testing !== null || syncing === account.id}
-              onClick={() => void testConnection(account.id)}
-              title="Kiểm tra kết nối token"
-              type="button"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-              {testing === account.id ? '...' : 'Test'}
-            </button>
-            <button
-              className="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
               disabled={syncing !== null || testing === account.id}
               onClick={() => void syncPosts(account.id)}
               title="Đồng bộ bài viết từ nền tảng"
               type="button"
             >
-              <RefreshCw
-                className={`h-3.5 w-3.5 ${syncing === account.id ? 'animate-spin' : ''}`}
-              />
-              Sync
+              <RefreshCw className={`h-3 w-3 ${syncing === account.id ? 'animate-spin' : ''}`} />
+              <span>Sync</span>
             </button>
-            {canDisconnect ? (
+
+            <div className="relative" data-dropdown-root="true">
               <button
-                className="inline-flex items-center rounded border border-transparent px-1.5 py-1 text-xs text-rose-600 hover:bg-rose-50"
-                onClick={() => void disconnect(account.id)}
-                title="Ngắt kết nối kênh"
+                aria-label={`Tùy chọn kênh ${account.name}`}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-slate-500 transition hover:border-slate-200 hover:bg-white hover:text-slate-800"
+                onClick={() => {
+                  const next = isAccountMenuOpen ? null : account.id;
+                  closeAllMenus();
+                  setOpenAccountMenuId(next);
+                }}
+                title="Thêm thao tác"
                 type="button"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <MoreHorizontal className="h-4 w-4" />
               </button>
-            ) : null}
+
+              {isAccountMenuOpen ? (
+                <div className="absolute right-0 z-30 mt-1 w-52 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                  <button
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    disabled={testing !== null || syncing === account.id}
+                    onClick={() => void testConnection(account.id)}
+                    type="button"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>
+                      {testing === account.id ? 'Đang kiểm tra...' : 'Kiểm tra kết nối (Test)'}
+                    </span>
+                  </button>
+
+                  {canConnect ? (
+                    <button
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      onClick={() => openReassignModal(account)}
+                      type="button"
+                    >
+                      <ArrowRightLeft className="h-3.5 w-3.5 text-slate-500" />
+                      <span>Chuyển sang Store khác...</span>
+                    </button>
+                  ) : null}
+
+                  {account.profileUrl ? (
+                    <a
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      href={account.profileUrl}
+                      onClick={() => closeAllMenus()}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5 text-slate-500" />
+                      <span>Mở trang gốc</span>
+                    </a>
+                  ) : null}
+
+                  {canDisconnect ? (
+                    <>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs font-medium text-rose-600 hover:bg-rose-50"
+                        onClick={() => void disconnect(account.id)}
+                        type="button"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span>Ngắt kết nối kênh</span>
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
+
+        {unhealthy ? (
+          <div className="mt-2 flex items-start justify-between gap-2 rounded-md border border-amber-200 bg-amber-100/60 px-2.5 py-1.5 text-[11px] text-amber-900">
+            <div className="flex min-w-0 items-start gap-1.5">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+              <span className="line-clamp-2" title={account.lastErrorMessage ?? undefined}>
+                <strong>{formatAccountStatusLabel(account.status)}</strong>
+                {account.lastErrorMessage ? ` — ${account.lastErrorMessage}` : ''}
+              </span>
+            </div>
+            <button
+              className="shrink-0 font-semibold text-amber-800 underline hover:text-amber-950"
+              disabled={testing === account.id}
+              onClick={() => void testConnection(account.id)}
+              type="button"
+            >
+              {testing === account.id ? '...' : 'Kiểm tra'}
+            </button>
+          </div>
+        ) : null}
+
+        {isUnassigned ? (
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1.5 border-t border-slate-200/80 pt-2">
+            {activeStore && canConnect ? (
+              <button
+                className="inline-flex items-center gap-1 rounded border border-brand-200 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-50"
+                disabled={assigningAccountId === account.id}
+                onClick={() => void handleAssignAccountStore(account.id, activeStore.id)}
+                title={`Gán nhanh kênh này vào Store ${activeStore.name}`}
+                type="button"
+              >
+                + Gán vào {activeStore.name}
+              </button>
+            ) : null}
+            <select
+              aria-label={`Chọn Store cho ${account.name}`}
+              className="min-w-[155px] flex-1 truncate rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 focus:border-slate-900 focus:outline-none disabled:bg-slate-100"
+              disabled={!canConnect || assigningAccountId === account.id}
+              onChange={(e) => void handleAssignAccountStore(account.id, e.target.value)}
+              value={account.storeId ?? ''}
+            >
+              <option value="">Gán vào Store...</option>
+              {stores.map((s) => (
+                <option key={s.id} value={s.id}>
+                  Store: {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="space-y-5">
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-950">Stores & Kênh Mạng Xã Hội</h1>
+          <h1 className="text-2xl font-semibold text-slate-950">Stores &amp; Kênh Mạng Xã Hội</h1>
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-600">
             <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-800">
               {stores.length} Stores
             </span>
-            <span className="rounded-full bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
-              {accounts.length} Kênh đã kết nối
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700">
+              {accounts.length} Kênh kết nối
             </span>
-            {totalUnassignedCount > 0 ? (
-              <span className="rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700">
-                {totalUnassignedCount} Kênh chưa gán Store
+            {issueAccountCount > 0 ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-semibold text-amber-800">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                {issueAccountCount} kênh cần kiểm tra
               </span>
+            ) : null}
+            {totalUnassignedCount > 0 ? (
+              <button
+                className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 font-medium text-amber-800 hover:bg-amber-100"
+                onClick={() => setSelectedStoreFilter('UNASSIGNED')}
+                type="button"
+              >
+                {totalUnassignedCount} chưa gán Store
+              </button>
             ) : null}
           </div>
         </div>
 
         {canConnect ? (
           <div className="flex flex-wrap items-center gap-2">
-            <SecondaryButton onClick={() => void openCallbackModal()} type="button">
-              <CheckCircle2 className="mr-1.5 h-4 w-4 text-emerald-600" />
-              Dán Callback Multilogin
-            </SecondaryButton>
-            <SecondaryButton
-              disabled={autoGrouping || accounts.length === 0}
-              onClick={() => void handleAutoGroupStores()}
-              type="button"
-            >
-              {autoGrouping ? 'Đang gom...' : '⚡ Tự động gom Store'}
-            </SecondaryButton>
-            <SecondaryButton onClick={() => setMetaModalOpen(true)} type="button">
-              <ShieldCheck className="mr-1.5 h-4 w-4 text-blue-600" />
-              Đồng bộ Meta Token
-            </SecondaryButton>
+            <div className="relative" data-dropdown-root="true">
+              <SecondaryButton
+                onClick={() => {
+                  const next = !toolsMenuOpen;
+                  closeAllMenus();
+                  setToolsMenuOpen(next);
+                }}
+                type="button"
+              >
+                <Wrench className="mr-1.5 h-4 w-4 text-slate-500" />
+                Nhập / Công cụ
+                <ChevronDown className="ml-1.5 h-3.5 w-3.5 text-slate-500" />
+              </SecondaryButton>
+
+              {toolsMenuOpen ? (
+                <div className="absolute right-0 z-30 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                  <button
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={() => {
+                      closeAllMenus();
+                      setMetaTargetStoreId('AUTO');
+                      setMetaModalOpen(true);
+                    }}
+                    type="button"
+                  >
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-blue-600" />
+                    <div>
+                      <p className="font-semibold text-slate-900">Đồng bộ Meta Token</p>
+                      <p className="text-[11px] text-slate-500">
+                        Quét FB Pages &amp; IG từ Business Token
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    onClick={() => void openCallbackModal()}
+                    type="button"
+                  >
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                    <div>
+                      <p className="font-semibold text-slate-900">Dán Callback Multilogin</p>
+                      <p className="text-[11px] text-slate-500">
+                        Hoàn tất OAuth cách ly qua trình duyệt phụ
+                      </p>
+                    </div>
+                  </button>
+
+                  <div className="my-1 border-t border-slate-100" />
+
+                  <button
+                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                    disabled={autoGrouping || accounts.length === 0}
+                    onClick={() => void handleAutoGroupStores()}
+                    type="button"
+                  >
+                    <Zap className="h-4 w-4 shrink-0 text-amber-500" />
+                    <div>
+                      <p className="font-semibold text-slate-900">
+                        {autoGrouping ? 'Đang gom nhóm...' : 'Tự động gom Store'}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Ghép cặp FB + IG cùng tên thương hiệu
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
             <PrimaryButton onClick={openCreateStoreModal} type="button">
               <Plus className="mr-1.5 h-4 w-4" />
               Tạo Store mới
@@ -750,7 +882,7 @@ export default function AccountsPage() {
 
       <InlineError message={error} />
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <section className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-wrap items-center gap-1.5">
             <button
@@ -766,11 +898,13 @@ export default function AccountsPage() {
             </button>
             {stores.map((store) => {
               const active = selectedStoreFilter === store.id;
-              const count = accounts.filter((a) => a.storeId === store.id).length;
+              const storeAllAccounts = accounts.filter((a) => a.storeId === store.id);
+              const count = storeAllAccounts.length;
+              const hasIssue = storeAllAccounts.some((a) => hasAccountIssue(a));
               return (
                 <button
                   key={store.id}
-                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
                     active
                       ? 'border-slate-900 bg-slate-900 text-white'
                       : 'border-slate-200 bg-white text-slate-800 hover:bg-slate-50'
@@ -784,42 +918,94 @@ export default function AccountsPage() {
                   />
                   <span>{store.name}</span>
                   <span className={active ? 'text-slate-300' : 'text-slate-400'}>({count})</span>
+                  {hasIssue ? (
+                    <span
+                      className="h-2 w-2 rounded-full bg-amber-500"
+                      title="Có kênh cần kiểm tra kết nối"
+                    />
+                  ) : null}
                 </button>
               );
             })}
-            <button
-              className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                selectedStoreFilter === 'UNASSIGNED'
-                  ? 'border-slate-900 bg-slate-900 text-white'
-                  : 'border-slate-200 bg-amber-50/70 text-amber-800 hover:bg-amber-100/70'
-              }`}
-              onClick={() => setSelectedStoreFilter('UNASSIGNED')}
-              type="button"
-            >
-              Chưa gán Store ({totalUnassignedCount})
-            </button>
+            {totalUnassignedCount > 0 || selectedStoreFilter === 'UNASSIGNED' ? (
+              <button
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                  selectedStoreFilter === 'UNASSIGNED'
+                    ? 'border-slate-900 bg-slate-900 text-white'
+                    : 'border-amber-200 bg-amber-50/70 text-amber-800 hover:bg-amber-100/70'
+                }`}
+                onClick={() => setSelectedStoreFilter('UNASSIGNED')}
+                type="button"
+              >
+                Chưa gán Store ({totalUnassignedCount})
+              </button>
+            ) : null}
           </div>
 
-          <div className="relative w-full md:w-72">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input
-              className="h-9 w-full rounded-lg border border-slate-300 pl-9 pr-3 text-xs text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Tìm tên kênh, @username, Store..."
-              type="text"
-              value={searchQuery}
-            />
+          <div className="flex items-center gap-2">
+            {visibleStores.length > 1 && selectedStoreFilter === 'ALL' && !normalizedSearch ? (
+              <button
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
+                onClick={toggleCollapseAllStores}
+                title={allVisibleCollapsed ? 'Mở rộng tất cả Store' : 'Thu gọn tất cả Store'}
+                type="button"
+              >
+                {allVisibleCollapsed ? (
+                  <>
+                    <ChevronsUpDown className="h-3.5 w-3.5 text-slate-500" />
+                    <span className="hidden sm:inline">Mở rộng</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronsDownUp className="h-3.5 w-3.5 text-slate-500" />
+                    <span className="hidden sm:inline">Thu gọn</span>
+                  </>
+                )}
+              </button>
+            ) : null}
+
+            <div className="relative w-full md:w-64">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                className="h-9 w-full rounded-lg border border-slate-300 pl-9 pr-7 text-xs text-slate-900 placeholder:text-slate-400 focus:border-slate-900 focus:outline-none"
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Tìm tên kênh, @username, Store..."
+                type="text"
+                value={searchQuery}
+              />
+              {searchQuery ? (
+                <button
+                  aria-label="Xóa tìm kiếm"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-slate-400 hover:text-slate-700"
+                  onClick={() => setSearchQuery('')}
+                  type="button"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
           </div>
         </div>
       </section>
 
       {selectedStoreFilter !== 'UNASSIGNED' ? (
-        <div className="space-y-4">
+        <div className="space-y-3.5">
           {visibleStores.map((store) => {
             const storeAccounts = accounts.filter(
               (item) => item.storeId === store.id && matchesAccountSearch(item, store.name),
             );
-            const isMenuOpen = openAddChannelMenuStoreId === store.id;
+            const storeIssueCount = storeAccounts.filter((item) => hasAccountIssue(item)).length;
+            const isAddMenuOpen = openAddChannelMenuStoreId === store.id;
+            const isStoreMenuOpen = openStoreMenuId === store.id;
+            const isCollapsed =
+              Boolean(collapsedStoreIds[store.id]) &&
+              !normalizedSearch &&
+              selectedStoreFilter === 'ALL';
+
+            const platformCounts = PLATFORMS.map((platform) => ({
+              platform,
+              count: storeAccounts.filter((item) => item.platform === platform).length,
+            })).filter((entry) => entry.count > 0);
 
             return (
               <section
@@ -827,61 +1013,175 @@ export default function AccountsPage() {
                 className="overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm"
                 style={{ borderLeftWidth: '5px', borderLeftColor: store.color ?? '#2563eb' }}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div className="flex items-center gap-3">
+                <div
+                  className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3.5 ${
+                    isCollapsed ? '' : 'border-b border-slate-100'
+                  }`}
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <button
+                      aria-expanded={!isCollapsed}
+                      aria-label={isCollapsed ? `Mở rộng ${store.name}` : `Thu gọn ${store.name}`}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                      onClick={() => toggleStoreCollapsed(store.id)}
+                      title={isCollapsed ? 'Mở rộng danh sách kênh' : 'Thu gọn Store này'}
+                      type="button"
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                    </button>
+
                     <span
-                      className="h-3.5 w-3.5 rounded-full"
+                      className="h-3 w-3 shrink-0 rounded-full"
                       style={{ backgroundColor: store.color ?? '#2563eb' }}
                     />
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="text-base font-bold text-slate-950">{store.name}</h2>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          className="text-left text-base font-bold text-slate-950 hover:text-slate-700"
+                          onClick={() => toggleStoreCollapsed(store.id)}
+                          type="button"
+                        >
+                          {store.name}
+                        </button>
+
+                        {store.id === activeStoreId ? (
+                          <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                            Đang thao tác
+                          </span>
+                        ) : (
+                          <button
+                            className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-600 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
+                            onClick={() => storeCtx.setActiveStoreId(store.id)}
+                            title={`Chuyển Store đang thao tác sang ${store.name}`}
+                            type="button"
+                          >
+                            Chọn thao tác
+                          </button>
+                        )}
+
                         {store.isDefault ? (
                           <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-semibold text-brand-700">
                             Mặc định
                           </span>
                         ) : null}
-                        <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
+
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
                           {storeAccounts.length} kênh
                         </span>
+
+                        {isCollapsed && platformCounts.length > 0 ? (
+                          <div className="flex items-center gap-1">
+                            {platformCounts.map(({ platform, count }) => (
+                              <span
+                                key={platform}
+                                className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none ${PLATFORM_BADGE_STYLES[platform]}`}
+                                title={`${count} kênh ${PLATFORM_LABELS[platform]}`}
+                              >
+                                {PLATFORM_SHORT_CODES[platform]}
+                                {count > 1 ? ` ${count}` : ''}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {storeIssueCount > 0 ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                            <AlertTriangle className="h-3 w-3 text-amber-600" />
+                            {storeIssueCount} kênh lỗi
+                          </span>
+                        ) : null}
+
+                        {store.shopify?.connected && store.shopify.enabled ? (
+                          <button
+                            className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-default"
+                            disabled={!canConnect}
+                            onClick={() => openStoreSettings(store, 'shopify')}
+                            title="Mở cấu hình Shopify & Rút gọn link /s/ của Store này"
+                            type="button"
+                          >
+                            <Link2 className="h-3 w-3 text-emerald-600" />
+                            <span>
+                              {store.shopify.publicDomain}
+                              {store.shopify.shortPathPrefix}
+                            </span>
+                          </button>
+                        ) : canConnect ? (
+                          <button
+                            className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 transition hover:border-emerald-300 hover:bg-emerald-50/60 hover:text-emerald-800"
+                            onClick={() => openStoreSettings(store, 'shopify')}
+                            title="Gắn Shopify Custom App để rút gọn link 1 chạm (/s/...)"
+                            type="button"
+                          >
+                            <Link2 className="h-3 w-3" />
+                            <span>+ Shopify (/s/)</span>
+                          </button>
+                        ) : null}
+
+                        {store.proxy?.enabled && (store.proxy.targets?.length ?? 0) > 0 ? (
+                          <button
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition disabled:cursor-default ${
+                              store.proxy.lastCheckStatus === 'FAILED'
+                                ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                                : 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                            }`}
+                            disabled={!canConnect}
+                            onClick={() => openStoreSettings(store, 'proxy')}
+                            title={`Đang bọc Proxy Fail-Closed cho: ${store.proxy.targets.join(', ')}`}
+                            type="button"
+                          >
+                            <Shield className="h-3 w-3" />
+                            <span>
+                              {store.proxy.lastCheckStatus === 'FAILED'
+                                ? 'Proxy lỗi'
+                                : `Proxy${store.proxy.countryLock ? ` ${store.proxy.countryLock}` : ''} · ${store.proxy.targets.length} đích`}
+                            </span>
+                          </button>
+                        ) : (
+                          <button
+                            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600 transition hover:bg-slate-100 disabled:cursor-default"
+                            disabled={!canConnect}
+                            onClick={() => openStoreSettings(store, 'proxy')}
+                            title="Mặc định đi Direct (0ms). Bấm để cấu hình Proxy riêng theo từng nền tảng cho Store này"
+                            type="button"
+                          >
+                            <Zap className="h-3 w-3 text-amber-500" />
+                            <span>Direct (0ms)</span>
+                          </button>
+                        )}
                       </div>
-                      {store.description ? (
-                        <p className="mt-0.5 text-xs text-slate-500">{store.description}</p>
+
+                      {store.description && !isCollapsed ? (
+                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                          {store.description}
+                        </p>
                       ) : null}
                     </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {storeAccounts.length > 0 ? (
-                      <button
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                        disabled={syncingStoreId === store.id}
-                        onClick={() => void syncAllStorePosts(store)}
-                        type="button"
-                      >
-                        <RefreshCw
-                          className={`h-3.5 w-3.5 ${
-                            syncingStoreId === store.id ? 'animate-spin' : ''
-                          }`}
-                        />
-                        Đồng bộ bài cả Store
-                      </button>
-                    ) : null}
-
+                  <div className="flex items-center gap-1.5">
                     {canConnect ? (
-                      <div className="relative">
+                      <div className="relative" data-dropdown-root="true">
                         <button
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-                          onClick={() => setOpenAddChannelMenuStoreId(isMenuOpen ? null : store.id)}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-800"
+                          onClick={() => {
+                            const next = isAddMenuOpen ? null : store.id;
+                            closeAllMenus();
+                            setOpenAddChannelMenuStoreId(next);
+                          }}
                           type="button"
                         >
                           <Plus className="h-3.5 w-3.5" />
-                          Thêm kênh
+                          <span>Thêm kênh</span>
                           <ChevronDown className="h-3.5 w-3.5" />
                         </button>
 
-                        {isMenuOpen ? (
-                          <div className="absolute right-0 z-20 mt-1.5 w-72 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                        {isAddMenuOpen ? (
+                          <div className="absolute right-0 z-30 mt-1.5 w-72 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
                             <div className="px-2.5 py-1">
                               <p className="text-[11px] font-semibold uppercase text-slate-400">
                                 Kết nối OAuth vào {store.name}
@@ -925,10 +1225,7 @@ export default function AccountsPage() {
                             <div className="my-1 border-t border-slate-100" />
                             <button
                               className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs font-medium text-brand-700 hover:bg-brand-50"
-                              onClick={() => {
-                                setOpenAddChannelMenuStoreId(null);
-                                openEditStoreModal(store);
-                              }}
+                              onClick={() => openStoreSettings(store, 'general')}
                               type="button"
                             >
                               Chọn từ các kênh đã kết nối...
@@ -939,52 +1236,113 @@ export default function AccountsPage() {
                     ) : null}
 
                     {canConnect ? (
-                      <>
-                        <button
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                          onClick={() => openEditStoreModal(store)}
-                          title="Sửa tên, màu và chọn kênh cho Store"
-                          type="button"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                          Sửa
-                        </button>
-                        <button
-                          className="inline-flex items-center rounded-lg border border-slate-200 bg-white p-1.5 text-xs text-rose-600 hover:bg-rose-50"
-                          onClick={() => void handleDeleteStore(store)}
-                          title={`Xóa Store ${store.name}`}
-                          type="button"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </>
+                      <button
+                        className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                        onClick={() => openStoreSettings(store, 'general')}
+                        title="Cài đặt Store, Shopify (/s/) và Proxy riêng Store"
+                        type="button"
+                      >
+                        <Settings2 className="h-3.5 w-3.5" />
+                        <span>Cài đặt</span>
+                      </button>
                     ) : null}
+
+                    <div className="relative" data-dropdown-root="true">
+                      <button
+                        aria-label={`Tùy chọn Store ${store.name}`}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                        onClick={() => {
+                          const next = isStoreMenuOpen ? null : store.id;
+                          closeAllMenus();
+                          setOpenStoreMenuId(next);
+                        }}
+                        title="Thêm thao tác Store"
+                        type="button"
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </button>
+
+                      {isStoreMenuOpen ? (
+                        <div className="absolute right-0 z-30 mt-1.5 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                          <button
+                            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            disabled={storeAccounts.length === 0 || syncingStoreId === store.id}
+                            onClick={() => void syncAllStorePosts(store)}
+                            type="button"
+                          >
+                            <RefreshCw
+                              className={`h-3.5 w-3.5 text-slate-500 ${
+                                syncingStoreId === store.id ? 'animate-spin' : ''
+                              }`}
+                            />
+                            <span>
+                              {syncingStoreId === store.id
+                                ? 'Đang đồng bộ Store...'
+                                : 'Đồng bộ bài cả Store'}
+                            </span>
+                          </button>
+
+                          {store.id !== activeStoreId ? (
+                            <button
+                              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50"
+                              onClick={() => {
+                                closeAllMenus();
+                                storeCtx.setActiveStoreId(store.id);
+                              }}
+                              type="button"
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5 text-brand-600" />
+                              <span>Chọn làm Store đang thao tác</span>
+                            </button>
+                          ) : null}
+
+                          {canConnect ? (
+                            <>
+                              <div className="my-1 border-t border-slate-100" />
+                              <button
+                                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-rose-600 hover:bg-rose-50"
+                                onClick={() => void handleDeleteStore(store)}
+                                type="button"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                <span>Xóa Store {store.name}</span>
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
 
-                <div className="p-5">
-                  {storeAccounts.length > 0 ? (
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {storeAccounts.map((account) => renderAccountCard(account))}
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-slate-200 bg-slate-50/50 px-4 py-4">
-                      <p className="text-xs text-slate-500">
-                        Store <strong>{store.name}</strong> chưa có kênh nào. Bấm{' '}
-                        <strong>+ Thêm kênh</strong> để kết nối OAuth hoặc chọn từ các kênh có sẵn.
-                      </p>
-                      {canConnect ? (
-                        <button
-                          className="text-xs font-semibold text-brand-700 hover:underline"
-                          onClick={() => openEditStoreModal(store)}
-                          type="button"
-                        >
-                          Gán kênh có sẵn vào {store.name} →
-                        </button>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
+                {!isCollapsed ? (
+                  <div className="p-4">
+                    {storeAccounts.length > 0 ? (
+                      <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
+                        {storeAccounts.map((account) =>
+                          renderAccountCard(account, { isUnassigned: false }),
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed border-slate-200 bg-slate-50/50 px-4 py-3.5">
+                        <p className="text-xs text-slate-500">
+                          Store <strong>{store.name}</strong> chưa có kênh nào. Bấm{' '}
+                          <strong>+ Thêm kênh</strong> để kết nối OAuth hoặc chọn từ các kênh có
+                          sẵn.
+                        </p>
+                        {canConnect ? (
+                          <button
+                            className="text-xs font-semibold text-brand-700 hover:underline"
+                            onClick={() => openStoreSettings(store, 'general')}
+                            type="button"
+                          >
+                            Gán kênh có sẵn vào {store.name} →
+                          </button>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
               </section>
             );
           })}
@@ -997,8 +1355,9 @@ export default function AccountsPage() {
                   : 'Không tìm thấy Store nào khớp bộ lọc'}
               </p>
               <p className="mx-auto mt-1 max-w-lg text-xs text-slate-500">
-                Tạo Store (VD: PreAureum, Wrydeco, ChillGen Rugs...) hoặc bấm &ldquo;Tự động gom
-                Store&rdquo; để gom các Facebook Page và Instagram theo từng thương hiệu.
+                Tạo Store (VD: PreAureum, Wrydeco, ChillGen Rugs...) hoặc mở menu &ldquo;Nhập / Công
+                cụ → Tự động gom Store&rdquo; để gom các Facebook Page và Instagram theo từng thương
+                hiệu.
               </p>
               {canConnect && stores.length === 0 ? (
                 <div className="mt-4 flex justify-center gap-2">
@@ -1022,14 +1381,21 @@ export default function AccountsPage() {
       {(selectedStoreFilter === 'ALL' || selectedStoreFilter === 'UNASSIGNED') &&
       (unassignedAccounts.length > 0 || selectedStoreFilter === 'UNASSIGNED') ? (
         <section className="overflow-hidden rounded-xl border border-amber-200 bg-white shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-100 bg-amber-50/60 px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-100 bg-amber-50/60 px-4 py-3.5">
             <div>
               <h2 className="text-base font-bold text-slate-950">
                 Kênh chưa gán Store ({unassignedAccounts.length})
               </h2>
               <p className="mt-0.5 text-xs text-slate-600">
-                Các kênh này chưa thuộc Store nào. Chọn Store ở góc dưới mỗi thẻ hoặc bấm{' '}
-                <strong>⚡ Tự động gom Store</strong>.
+                Các kênh này chưa thuộc Store nào nên chưa hiển thị khi soạn bài. Chọn Store ngay ở
+                cuối mỗi thẻ
+                {activeStore ? (
+                  <>
+                    {' '}
+                    (hoặc bấm 1 chạm vào <strong>{activeStore.name}</strong>)
+                  </>
+                ) : null}
+                .
               </p>
             </div>
             {canConnect ? (
@@ -1049,7 +1415,7 @@ export default function AccountsPage() {
                       >
                         {connectingKey === busyKey
                           ? 'Đang mở...'
-                          : `+ ${PLATFORM_LABELS[platform]}`}
+                          : `+ ${PLATFORM_SHORT_CODES[platform]}`}
                       </button>
                       <button
                         className="border-l border-slate-200 px-2 py-1.5 text-xs text-slate-500 hover:bg-brand-50 hover:text-brand-700 disabled:opacity-50"
@@ -1067,10 +1433,12 @@ export default function AccountsPage() {
             ) : null}
           </div>
 
-          <div className="p-5">
+          <div className="p-4">
             {unassignedAccounts.length > 0 ? (
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {unassignedAccounts.map((account) => renderAccountCard(account))}
+              <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
+                {unassignedAccounts.map((account) =>
+                  renderAccountCard(account, { isUnassigned: true }),
+                )}
               </div>
             ) : (
               <p className="text-xs text-slate-500">
@@ -1081,165 +1449,57 @@ export default function AccountsPage() {
         </section>
       ) : null}
 
-      {storeModal ? (
+      {reassignModalAccount ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-xl">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h2 className="text-lg font-bold text-slate-950">
-                {storeModal.id ? 'Chỉnh sửa Store / Brand' : 'Tạo Store / Brand mới'}
-              </h2>
+              <div>
+                <h2 className="text-base font-bold text-slate-950">Chuyển kênh sang Store khác</h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {reassignModalAccount.name} ({PLATFORM_LABELS[reassignModalAccount.platform]})
+                </p>
+              </div>
               <button
                 className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                onClick={() => setStoreModal(null)}
+                onClick={() => setReassignModalAccount(null)}
                 type="button"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="mt-4 space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Tên Store / Thương hiệu *
-                </label>
-                <input
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                  onChange={(e) =>
-                    setStoreModal((curr) => (curr ? { ...curr, name: e.target.value } : null))
-                  }
-                  placeholder="VD: PreAureum, Wrydeco, ChillGen Rugs..."
-                  type="text"
-                  value={storeModal.name}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Mô tả ngắn (tùy chọn)
-                </label>
-                <input
-                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
-                  onChange={(e) =>
-                    setStoreModal((curr) =>
-                      curr ? { ...curr, description: e.target.value } : null,
-                    )
-                  }
-                  placeholder="VD: Trang sức bạc PreAureum US"
-                  type="text"
-                  value={storeModal.description}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700">
-                  Màu nhận diện Store
-                </label>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  {STORE_COLOR_SWATCHES.map((swatch) => (
-                    <button
-                      key={swatch}
-                      aria-label={`Chọn màu ${swatch}`}
-                      className={`h-7 w-7 rounded-full border-2 transition ${
-                        storeModal.color === swatch
-                          ? 'scale-110 border-slate-950 ring-2 ring-slate-300'
-                          : 'border-transparent hover:scale-105'
-                      }`}
-                      onClick={() =>
-                        setStoreModal((curr) => (curr ? { ...curr, color: swatch } : null))
-                      }
-                      style={{ backgroundColor: swatch }}
-                      type="button"
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
-                <input
-                  checked={storeModal.isDefault}
-                  className="rounded border-slate-300"
-                  onChange={(e) =>
-                    setStoreModal((curr) =>
-                      curr ? { ...curr, isDefault: e.target.checked } : null,
-                    )
-                  }
-                  type="checkbox"
-                />
-                Đặt làm Store mặc định khi mở trang Tạo bài đăng
-              </label>
-
-              <div>
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Chọn các kênh thuộc Store này ({storeModal.socialAccountIds.length} đã chọn)
-                  </label>
-                </div>
-                <div className="mt-2 max-h-56 space-y-1.5 overflow-y-auto rounded-lg border border-slate-200 p-2.5">
-                  {accounts.map((account) => {
-                    const checked = storeModal.socialAccountIds.includes(account.id);
-                    const otherStore =
-                      account.store && account.store.id !== storeModal.id ? account.store : null;
-                    return (
-                      <label
-                        key={account.id}
-                        className={`flex cursor-pointer items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-xs transition ${
-                          checked
-                            ? 'border-brand-300 bg-brand-50'
-                            : 'border-slate-100 hover:bg-slate-50'
-                        }`}
-                      >
-                        <div className="flex min-w-0 items-center gap-2">
-                          <input
-                            checked={checked}
-                            onChange={() =>
-                              setStoreModal((curr) => {
-                                if (!curr) return null;
-                                const exists = curr.socialAccountIds.includes(account.id);
-                                return {
-                                  ...curr,
-                                  socialAccountIds: exists
-                                    ? curr.socialAccountIds.filter((id) => id !== account.id)
-                                    : [...curr.socialAccountIds, account.id],
-                                };
-                              })
-                            }
-                            type="checkbox"
-                          />
-                          <span className="font-semibold text-slate-700">
-                            [{PLATFORM_LABELS[account.platform]}]
-                          </span>
-                          <span className="truncate font-medium text-slate-900">
-                            {account.name}
-                          </span>
-                        </div>
-                        {otherStore ? (
-                          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">
-                            Đang ở: {otherStore.name}
-                          </span>
-                        ) : null}
-                      </label>
-                    );
-                  })}
-                  {accounts.length === 0 ? (
-                    <p className="py-3 text-center text-xs text-slate-500">
-                      Chưa có kênh nào đã kết nối.
-                    </p>
-                  ) : null}
-                </div>
-              </div>
+            <div className="mt-4">
+              <label className="block text-xs font-semibold text-slate-700">Chọn Store đích</label>
+              <select
+                className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-900 focus:outline-none"
+                onChange={(e) => setReassignTargetStoreId(e.target.value)}
+                value={reassignTargetStoreId}
+              >
+                <option value="">-- Gỡ khỏi Store (Chưa gán) --</option>
+                {stores.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="mt-6 flex justify-end gap-2 border-t border-slate-100 pt-4">
-              <SecondaryButton onClick={() => setStoreModal(null)} type="button">
+            <div className="mt-5 flex justify-end gap-2 border-t border-slate-100 pt-3.5">
+              <SecondaryButton onClick={() => setReassignModalAccount(null)} type="button">
                 Hủy
               </SecondaryButton>
               <PrimaryButton
-                busy={savingStore}
-                disabled={!storeModal.name.trim() || savingStore}
-                onClick={() => void handleSaveStoreModal()}
+                busy={assigningAccountId === reassignModalAccount.id}
+                disabled={
+                  assigningAccountId === reassignModalAccount.id ||
+                  reassignTargetStoreId === (reassignModalAccount.storeId ?? '')
+                }
+                onClick={() =>
+                  void handleAssignAccountStore(reassignModalAccount.id, reassignTargetStoreId)
+                }
                 type="button"
               >
-                {storeModal.id ? 'Lưu thay đổi' : 'Tạo Store'}
+                Lưu thay đổi
               </PrimaryButton>
             </div>
           </div>
@@ -1254,7 +1514,7 @@ export default function AccountsPage() {
                 <h2 className="text-lg font-bold text-slate-950">Đồng bộ bằng Meta Access Token</h2>
                 <p className="mt-0.5 text-xs text-slate-500">
                   Dùng System User Token (Business Manager), User Token hoặc Page Token để tự động
-                  quét toàn bộ Facebook Pages & Instagram Business.
+                  quét toàn bộ Facebook Pages &amp; Instagram Business.
                 </p>
               </div>
               <button
@@ -1304,7 +1564,7 @@ export default function AccountsPage() {
                   value={metaTargetStoreId}
                 >
                   <option value="AUTO">
-                    ⚡ Tự động tạo & ghép cặp Store (FB + IG) theo tên từng Page
+                    ⚡ Tự động tạo &amp; ghép cặp Store (FB + IG) theo tên từng Page
                   </option>
                   <option value="NONE">Không gán Store (để ở mục Chưa gán)</option>
                   {stores.map((store) => (

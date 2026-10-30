@@ -161,6 +161,11 @@ export function PostCommentsDrawer({
     return targetWithStore?.store?.slug?.toLowerCase() ?? null;
   }, [post]);
 
+  const postStoreId = useMemo(() => {
+    if (!post) return undefined;
+    return post.storeId ?? post.platformPosts.find((pp) => pp.storeId)?.storeId ?? undefined;
+  }, [post]);
+
   const isStoreMatchedTemplate = useCallback(
     (templateName: string): boolean => isTemplateMatchingStoreSlug(templateName, activeStoreSlug),
     [activeStoreSlug],
@@ -219,7 +224,7 @@ export function PostCommentsDrawer({
     try {
       const [tagRes, tplRes, memberRes] = await Promise.all([
         commentsApi.listTags(workspaceId),
-        commentsApi.listTemplates(workspaceId),
+        commentsApi.listTemplates(workspaceId, postStoreId),
         workspaceApi.members(workspaceId),
       ]);
       setTags(tagRes.items);
@@ -228,7 +233,7 @@ export function PostCommentsDrawer({
     } catch {
       // ignore non-critical metadata errors
     }
-  }, [post, workspaceId]);
+  }, [post, postStoreId, workspaceId]);
 
   useEffect(() => {
     if (!post) return;
@@ -733,6 +738,7 @@ export function PostCommentsDrawer({
         toast.success('Đã cập nhật mẫu câu trả lời.');
       } else {
         const tpl = await commentsApi.createTemplate(workspaceId, {
+          storeId: postStoreId ?? null,
           name: newTemplateName.trim(),
           body: newTemplateBody.trim(),
         });

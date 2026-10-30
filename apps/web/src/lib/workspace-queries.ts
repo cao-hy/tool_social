@@ -35,6 +35,7 @@ export interface AnalyticsCacheParams {
 export interface MediaListCacheParams {
   limit?: number;
   cursor?: string;
+  storeId?: string;
   q?: string;
   type?: string;
   status?: string;
@@ -48,7 +49,8 @@ export const workspaceQueryKeys = {
   postsRoot: (workspaceId: string) => ['workspace', workspaceId, 'posts'] as const,
   postsList: (workspaceId: string, params: PostsListCacheParams) =>
     ['workspace', workspaceId, 'posts', 'list', params] as const,
-  calendarPosts: (workspaceId: string) => ['workspace', workspaceId, 'posts', 'calendar'] as const,
+  calendarPosts: (workspaceId: string, storeId?: string) =>
+    ['workspace', workspaceId, 'posts', 'calendar', storeId ?? 'all'] as const,
   analyticsRoot: (workspaceId: string) => ['workspace', workspaceId, 'analytics'] as const,
   analyticsDashboard: (workspaceId: string, params: AnalyticsCacheParams) =>
     ['workspace', workspaceId, 'analytics', 'dashboard', params] as const,
@@ -80,6 +82,7 @@ export function prefetchWorkspaceTabData(
   queryClient: QueryClient,
   workspaceId: string | null,
   href: string,
+  activeStoreId?: string | null,
 ) {
   if (!workspaceId) return;
 
@@ -90,24 +93,29 @@ export function prefetchWorkspaceTabData(
       queryFn: () => platformsApi.capabilities(),
       staleTime: CAPABILITIES_STALE_TIME,
     });
-    const defaultParams: PostsListCacheParams = {
-      sortBy: 'createdAt',
-      direction: 'desc',
-      limit: 20,
-      cursor: undefined,
-    };
-    void queryClient.prefetchQuery({
-      queryKey: workspaceQueryKeys.postsList(workspaceId, defaultParams),
-      queryFn: () => postsApi.list(workspaceId, defaultParams),
-    });
+    if (activeStoreId) {
+      const defaultParams: PostsListCacheParams = {
+        storeId: activeStoreId,
+        sortBy: 'createdAt',
+        direction: 'desc',
+        limit: 20,
+        cursor: undefined,
+      };
+      void queryClient.prefetchQuery({
+        queryKey: workspaceQueryKeys.postsList(workspaceId, defaultParams),
+        queryFn: () => postsApi.list(workspaceId, defaultParams),
+      });
+    }
     return;
   }
 
   if (href === '/calendar') {
-    void queryClient.prefetchQuery({
-      queryKey: workspaceQueryKeys.calendarPosts(workspaceId),
-      queryFn: () => postsApi.list(workspaceId, { limit: 100 }),
-    });
+    if (activeStoreId) {
+      void queryClient.prefetchQuery({
+        queryKey: workspaceQueryKeys.calendarPosts(workspaceId, activeStoreId),
+        queryFn: () => postsApi.list(workspaceId, { storeId: activeStoreId, limit: 100 }),
+      });
+    }
     return;
   }
 

@@ -30,6 +30,7 @@ import {
   createReplyTemplateSchema,
   deleteCommentQuerySchema,
   listCommentsQuerySchema,
+  listReplyTemplatesQuerySchema,
   replyToCommentSchema,
   syncCommentsSchema,
   updateCommentMessageSchema,
@@ -46,6 +47,7 @@ import {
   type CreateReplyTemplateInput,
   type DeleteCommentQuery,
   type ListCommentsQuery,
+  type ListReplyTemplatesQuery,
   type ReplyToCommentInput,
   type SyncCommentsInput,
   type UpdateCommentMessageInput,
@@ -144,8 +146,11 @@ export class CommentsController {
 
   @Get('templates')
   @RequirePermissions('comment:view')
-  listTemplates(@Param('workspaceId') workspaceId: string) {
-    return this.comments.listTemplates(workspaceId);
+  listTemplates(
+    @Param('workspaceId') workspaceId: string,
+    @Query(zodPipe(listReplyTemplatesQuerySchema)) query: ListReplyTemplatesQuery,
+  ) {
+    return this.comments.listTemplates(workspaceId, query?.storeId);
   }
 
   @Post('templates')

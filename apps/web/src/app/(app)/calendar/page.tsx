@@ -27,33 +27,44 @@ import { useWorkspaceEventSubscription } from '@/components/workspace-events-pro
 import { postsApi } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-store';
 import { getErrorMessage } from '@/lib/errors';
+import { useActiveStore } from '@/lib/store-context';
 import { workspaceQueryKeys } from '@/lib/workspace-queries';
 import { CalendarEvent } from '@/components/calendar/calendar-event';
 
 export default function CalendarPage() {
   const auth = useAuth();
+  const storeCtx = useActiveStore();
   const queryClient = useQueryClient();
   const toast = useToast();
   const workspace = auth.activeWorkspace;
+  const activeStore = storeCtx.activeStore;
+  const activeStoreId = storeCtx.activeStoreId;
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const workspaceId = workspace?.id ?? '';
 
   const calendarQuery = useQuery({
-    queryKey: workspaceQueryKeys.calendarPosts(workspaceId),
-    queryFn: () => postsApi.list(workspaceId, { limit: 100 }),
-    enabled: Boolean(workspaceId),
+    queryKey: workspaceQueryKeys.calendarPosts(workspaceId, activeStoreId ?? 'none'),
+    queryFn: () =>
+      postsApi.list(workspaceId, {
+        storeId: activeStoreId ?? undefined,
+        limit: 100,
+      }),
+    enabled: Boolean(workspaceId && activeStoreId),
   });
 
-  const posts = useMemo(() => calendarQuery.data?.items ?? [], [calendarQuery.data]);
-  const loading = calendarQuery.isPending;
+  const posts = useMemo(
+    () => (activeStoreId ? (calendarQuery.data?.items ?? []) : []),
+    [activeStoreId, calendarQuery.data],
+  );
+  const loading = storeCtx.loading || (Boolean(activeStoreId) && calendarQuery.isPending);
   const error = calendarQuery.error ? getErrorMessage(calendarQuery.error) : null;
 
   async function loadPosts(options?: { silent?: boolean }) {
-    if (!workspace) return;
+    if (!workspace || !activeStoreId) return;
     if (options?.silent) {
       await queryClient.invalidateQueries({
-        queryKey: workspaceQueryKeys.calendarPosts(workspace.id),
+        queryKey: workspaceQueryKeys.calendarPosts(workspace.id, activeStoreId),
       });
       return;
     }
@@ -105,7 +116,11 @@ export default function CalendarPage() {
       <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-950">Calendar</h1>
-          <p className="mt-1 text-sm text-slate-600">Lịch đăng bài tự động</p>
+          <p className="mt-1 text-sm text-slate-600">
+            {activeStore
+              ? `Lịch đăng bài tự động của Store "${activeStore.name}"`
+              : 'Vui lòng chọn hoặc tạo Store để xem lịch đăng bài'}
+          </p>
         </div>
         <div className="flex gap-2">
           <SecondaryButton disabled={loading} onClick={() => void loadPosts()} type="button">

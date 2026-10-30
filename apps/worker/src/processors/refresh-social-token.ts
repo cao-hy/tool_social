@@ -1,4 +1,4 @@
-import type { WorkspaceAdapterContext } from '@socialhub/social-runtime';
+import type { WorkspaceAdapterContext, WorkspaceRouteOptions } from '@socialhub/social-runtime';
 import { createPrismaClient, type PrismaClientInstance } from '@socialhub/db';
 import { type Keyring } from '@socialhub/security';
 import {
@@ -22,7 +22,12 @@ const localTokenRefreshLock = new InMemoryTokenRefreshLock();
 export function createRefreshSocialTokenProcessor(input: {
   prisma: PrismaClientInstance;
   keyring: Keyring;
-  adapterFactory: { forWorkspace(workspaceId: string): Promise<WorkspaceAdapterContext> };
+  adapterFactory: {
+    forWorkspace(
+      workspaceId: string,
+      route?: WorkspaceRouteOptions,
+    ): Promise<WorkspaceAdapterContext>;
+  };
   tokenRefreshLock?: TokenRefreshLock;
   locks?: JobLockService;
 }) {
@@ -67,8 +72,8 @@ export function createRefreshSocialTokenProcessor(input: {
         input.keyring,
         input.tokenRefreshLock ?? localTokenRefreshLock,
         {
-          withWorkspace: async (workspaceId, fn) => {
-            const adapterCtx = await input.adapterFactory.forWorkspace(workspaceId);
+          withWorkspace: async (workspaceId, fn, route) => {
+            const adapterCtx = await input.adapterFactory.forWorkspace(workspaceId, route);
             try {
               return await fn(adapterCtx);
             } finally {
