@@ -259,7 +259,8 @@ export const storesApi = {
       shopDomain: string;
       publicDomain?: string | null;
       shortPathPrefix?: string | null;
-      adminAccessToken?: string | null;
+      clientId?: string | null;
+      clientSecret?: string | null;
     },
   ) =>
     apiFetch<StoreShopifySummaryView>(`/workspaces/${workspaceId}/stores/${storeId}/shopify`, {

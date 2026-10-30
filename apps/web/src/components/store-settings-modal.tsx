@@ -105,7 +105,8 @@ export function StoreSettingsModal({
   const [shopDomain, setShopDomain] = useState(store?.shopify?.shopDomain ?? '');
   const [publicDomain, setPublicDomain] = useState(store?.shopify?.publicDomain ?? '');
   const [shortPathPrefix, setShortPathPrefix] = useState(store?.shopify?.shortPathPrefix ?? '/s/');
-  const [adminAccessToken, setAdminAccessToken] = useState('');
+  const [shopifyClientId, setShopifyClientId] = useState(store?.shopify?.clientId ?? '');
+  const [shopifyClientSecret, setShopifyClientSecret] = useState('');
   const [showShopifyGuide, setShowShopifyGuide] = useState(!store?.shopify?.connected);
   const [savingShopify, setSavingShopify] = useState(false);
   const [testingShopify, setTestingShopify] = useState(false);
@@ -143,6 +144,7 @@ export function StoreSettingsModal({
       setShopDomain((prev) => prev || store.shopify?.shopDomain || '');
       setPublicDomain((prev) => prev || store.shopify?.publicDomain || '');
       setShortPathPrefix((prev) => prev || store.shopify?.shortPathPrefix || '/s/');
+      setShopifyClientId((prev) => prev || store.shopify?.clientId || '');
     }
     if (store.proxy) {
       setProxySummary(store.proxy);
@@ -203,8 +205,12 @@ export function StoreSettingsModal({
       toast.warning('Vui lòng nhập Shop Admin Domain (ví dụ: preaureum.myshopify.com).');
       return;
     }
-    if (!shopifySummary?.connected && !adminAccessToken.trim()) {
-      toast.warning('Vui lòng nhập Admin API Access Token (shpat_...).');
+    if (!shopifyClientId.trim()) {
+      toast.warning('Vui lòng nhập Client ID từ trang $ shopify dev.');
+      return;
+    }
+    if (!shopifySummary?.connected && !shopifyClientSecret.trim()) {
+      toast.warning('Vui lòng nhập Client Secret (shpss_...) từ trang $ shopify dev.');
       return;
     }
 
@@ -215,16 +221,18 @@ export function StoreSettingsModal({
         shopDomain: shopDomain.trim(),
         publicDomain: publicDomain.trim() || null,
         shortPathPrefix: shortPathPrefix.trim() || '/s/',
-        adminAccessToken: adminAccessToken.trim() || undefined,
+        clientId: shopifyClientId.trim(),
+        clientSecret: shopifyClientSecret.trim() || undefined,
       });
       setShopifySummary(saved);
       setShopDomain(saved.shopDomain ?? shopDomain.trim());
       setPublicDomain(saved.publicDomain ?? '');
       setShortPathPrefix(saved.shortPathPrefix);
-      setAdminAccessToken('');
+      setShopifyClientId(saved.clientId ?? shopifyClientId.trim());
+      setShopifyClientSecret('');
       setShowShopifyGuide(false);
       toast.success(
-        `Đã kết nối Shopify "${saved.shopName ?? saved.publicDomain}"! Sẵn sàng rút gọn link ${saved.publicDomain}${saved.shortPathPrefix}...`,
+        `Đã kết nối Shopify "${saved.shopName ?? saved.publicDomain}" (tự xoay token 24h)! Sẵn sàng tạo link ${saved.publicDomain}${saved.shortPathPrefix}...`,
       );
       await onSaved?.();
     } catch (err) {
@@ -268,7 +276,8 @@ export function StoreSettingsModal({
     try {
       const res = await storesApi.deleteShopify(workspaceId, currentStore.id);
       setShopifySummary(res.shopify);
-      setAdminAccessToken('');
+      setShopifyClientId('');
+      setShopifyClientSecret('');
       toast.success('Đã gỡ cấu hình Shopify khỏi Store.');
       await onSaved?.();
     } catch (err) {
@@ -657,7 +666,7 @@ export function StoreSettingsModal({
                         https://{shopifySummary.publicDomain}
                         {shopifySummary.shortPathPrefix}xxxxxx
                       </code>{' '}
-                      · Token: <code>{shopifySummary.adminTokenMasked}</code>
+                      · Secret: <code>{shopifySummary.clientSecretMasked}</code> (tự xoay token 24h)
                     </p>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -693,31 +702,50 @@ export function StoreSettingsModal({
                 >
                   <span className="inline-flex items-center gap-1.5">
                     <HelpCircle className="h-4 w-4 text-brand-600" />
-                    Hướng dẫn lấy mã shpat_... trong Shopify Admin (chỉ mất 1 phút)
+                    Hướng dẫn kết nối chuẩn mới Shopify Dev Dashboard ($ shopify dev · 1 phút)
                   </span>
                   <span className="text-[11px] text-brand-600">
                     {showShopifyGuide ? 'Thu gọn' : 'Xem hướng dẫn'}
                   </span>
                 </button>
                 {showShopifyGuide ? (
-                  <ol className="mt-2.5 list-decimal space-y-1 pl-5 text-[11px] leading-relaxed text-slate-600">
+                  <ol className="mt-2.5 list-decimal space-y-1.5 pl-5 text-[11px] leading-relaxed text-slate-600">
                     <li>
-                      Mở trang quản trị Shopify của Store →{' '}
-                      <strong>Settings → Apps and sales channels → Develop apps</strong>.
+                      Trong Shopify Admin → <strong>Settings → Apps → Develop apps</strong> (góc
+                      trên phải) để mở trang <code>$ shopify dev</code>.
                     </li>
                     <li>
-                      Bấm <strong>Create an app</strong> (đặt tên ví dụ <code>SocialHub Link</code>)
-                      → <strong>Configure Admin API scopes</strong>.
+                      Cột trái chọn <strong>Apps → Create app</strong> → đặt tên (VD:{' '}
+                      <code>SocialHub Link</code>).
                     </li>
                     <li>
-                      Tìm từ khóa <code>redirect</code> hoặc <code>navigation</code>, tích bật{' '}
-                      <strong>write_online_store_navigation</strong> và{' '}
-                      <strong>read_online_store_navigation</strong> → bấm <strong>Save</strong>.
+                      Tại ô <strong>Scopes</strong>, dán cụm quyền sau rồi bấm{' '}
+                      <strong>Release</strong>:{' '}
+                      <button
+                        className="inline-flex items-center gap-1 rounded border border-brand-200 bg-white px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-brand-700 hover:bg-brand-50"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(
+                            'read_online_store_navigation,write_online_store_navigation',
+                          );
+                          toast.success(
+                            'Đã copy 2 quyền Scopes: read_online_store_navigation,write_online_store_navigation',
+                          );
+                        }}
+                        title="Bấm để copy nhanh Scopes"
+                        type="button"
+                      >
+                        <Copy className="h-3 w-3" />
+                        read_online_store_navigation,write_online_store_navigation
+                      </button>
                     </li>
                     <li>
-                      Bấm <strong>Install app</strong> ở góc trên phải → bấm{' '}
-                      <strong>Reveal token once</strong> để copy mã <code>shpat_...</code> dán vào ô
-                      bên dưới.
+                      Vào tab <strong>Home</strong> của App → mục <strong>Install app</strong> → cài
+                      đặt lên đúng Store này.
+                    </li>
+                    <li>
+                      Vào tab <strong>Settings</strong> của App → copy <strong>Client ID</strong> và{' '}
+                      <strong>Secret</strong> (<code>shpss_...</code>) dán vào bên dưới (hệ thống tự
+                      xoay Access Token mỗi 24h).
                     </li>
                   </ol>
                 ) : null}
@@ -736,33 +764,10 @@ export function StoreSettingsModal({
                     value={shopDomain}
                   />
                   <p className="mt-1 text-[11px] text-slate-500">
-                    Có thể dán nguyên link <code>admin.shopify.com/store/...</code>, hệ thống tự
-                    chuẩn hóa.
+                    Có thể dán nguyên link <code>admin.shopify.com/store/...</code> hoặc mã handle.
                   </p>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700">
-                    Admin API Access Token (shpat_...){shopifySummary?.connected ? '' : ' *'}
-                  </label>
-                  <input
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
-                    onChange={(e) => setAdminAccessToken(e.target.value)}
-                    placeholder={
-                      shopifySummary?.connected
-                        ? `Đang dùng ${shopifySummary.adminTokenMasked} (để trống nếu giữ nguyên)`
-                        : 'shpat_xxxxxxxxxxxxxxxxxxxxxxxx'
-                    }
-                    type="password"
-                    value={adminAccessToken}
-                  />
-                  <p className="mt-1 text-[11px] text-slate-500">
-                    Mã hóa AES-256-GCM an toàn trong CSDL. Không bao giờ lộ ra trình duyệt.
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700">
                     Public Domain (Tên miền thương hiệu hiển thị)
@@ -774,8 +779,48 @@ export function StoreSettingsModal({
                     type="text"
                     value={publicDomain}
                   />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Tên miền chính dùng cho link rút gọn công khai.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Client ID ($ shopify dev → Settings) *
+                  </label>
+                  <input
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+                    onChange={(e) => setShopifyClientId(e.target.value)}
+                    placeholder="VD: 8f9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c"
+                    type="text"
+                    value={shopifyClientId}
+                  />
                 </div>
 
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700">
+                    Client Secret (shpss_...){shopifySummary?.connected ? '' : ' *'}
+                  </label>
+                  <input
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs text-slate-900 focus:border-slate-900 focus:outline-none"
+                    onChange={(e) => setShopifyClientSecret(e.target.value)}
+                    placeholder={
+                      shopifySummary?.connected
+                        ? `Đang dùng ${shopifySummary.clientSecretMasked} (để trống nếu giữ nguyên)`
+                        : 'shpss_xxxxxxxxxxxxxxxxxxxxxxxx'
+                    }
+                    type="password"
+                    value={shopifyClientSecret}
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Mã hóa AES-256-GCM trong CSDL &amp; tự động xoay mới Access Token 24h.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700">
                     Tiền tố đường dẫn rút gọn
@@ -1115,7 +1160,12 @@ export function StoreSettingsModal({
             {activeTab === 'shopify' && currentStore ? (
               <PrimaryButton
                 busy={savingShopify}
-                disabled={savingShopify || !shopDomain.trim()}
+                disabled={
+                  savingShopify ||
+                  !shopDomain.trim() ||
+                  !shopifyClientId.trim() ||
+                  (!shopifySummary?.connected && !shopifyClientSecret.trim())
+                }
                 onClick={() => void handleSaveShopify()}
                 type="button"
               >

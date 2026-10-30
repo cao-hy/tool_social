@@ -458,12 +458,16 @@ model StoreShopifySetting {
   workspaceId String
   storeId     String @unique
 
-  enabled              Boolean @default(true)
+  enabled              Boolean   @default(true)
   shopDomain           String
   publicDomain         String
-  shortPathPrefix      String  @default("/s/")
-  adminAccessToken     String  @db.Text
-  adminTokenMasked     String
+  shortPathPrefix      String    @default("/s/")
+  clientId             String
+  clientSecret         String    @db.Text
+  clientSecretMasked   String
+  cachedAccessToken    String?   @db.Text
+  tokenExpiresAt       DateTime?
+  grantedScopes        String?
   encryptionKeyVersion String
 
   shopName        String?

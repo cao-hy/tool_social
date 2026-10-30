@@ -84,9 +84,10 @@ describe('StoreIntegrationsService helpers & routing rules', () => {
     });
   });
 
-  describe('shortenStoreUrls', () => {
-    it('skips already-shortened URLs, reuses DB cache, and creates Shopify redirect with collision retry', async () => {
-      const encryptedShopifyToken = encryptToken('shpat_test_secret_token_1234', testKeyring);
+  describe('shortenStoreUrls (Shopify 2026 Client Credentials)', () => {
+    it('skips already-shortened URLs, reuses DB cache + valid 24h token, and creates Shopify redirect with collision retry', async () => {
+      const encryptedClientSecret = encryptToken('shpss_test_client_secret_9999', testKeyring);
+      const encryptedCachedToken = encryptToken('shpat_cached_24h_token_1234', testKeyring);
       const shortLinksByTarget = new Map<
         string,
         {
@@ -116,10 +117,18 @@ describe('StoreIntegrationsService helpers & routing rules', () => {
               shopDomain: 'preaureum.myshopify.com',
               publicDomain: 'preaureum.com',
               shortPathPrefix: '/s/',
-              adminAccessToken: encryptedShopifyToken.ciphertext,
-              encryptionKeyVersion: encryptedShopifyToken.keyVersion,
+              clientId: 'client_id_preaureum_123',
+              clientSecret: encryptedClientSecret.ciphertext,
+              clientSecretMasked: 'shpss_tes...9999',
+              cachedAccessToken: encryptedCachedToken.ciphertext,
+              tokenExpiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000),
+              grantedScopes: 'read_online_store_navigation,write_online_store_navigation',
+              encryptionKeyVersion: encryptedClientSecret.keyVersion,
             },
           }),
+        },
+        storeShopifySetting: {
+          update: vi.fn(),
         },
         storeShortLink: {
           findUnique: vi.fn().mockImplementation(async ({ where }) => {
@@ -201,6 +210,7 @@ describe('StoreIntegrationsService helpers & routing rules', () => {
         'store-1',
         'SHOPIFY',
       );
+      expect(prismaMock.storeShopifySetting.update).not.toHaveBeenCalled();
       expect(releaseMock).toHaveBeenCalledTimes(1);
       expect(res.items).toHaveLength(3);
 
@@ -222,6 +232,100 @@ describe('StoreIntegrationsService helpers & routing rules', () => {
       expect(res.items[2]?.reused).toBe(false);
       expect(res.items[2]?.shortUrl).toMatch(/^https:\/\/preaureum\.com\/s\/[a-z0-9]{6}$/);
       expect(res.items[2]?.targetUrl).toBe('https://preaureum.com/products/new-ring?variant=123');
+    });
+
+    it('exchanges client_credentials automatically when cached token is expired and persists new encrypted token', async () => {
+      const encryptedClientSecret = encryptToken('shpss_fresh_secret_abcd', testKeyring);
+      const prismaMock = {
+        store: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'store-1',
+            workspaceId: 'ws-1',
+            name: 'PreAureum',
+            shopifySetting: {
+              enabled: true,
+              shopDomain: 'preaureum.myshopify.com',
+              publicDomain: 'preaureum.com',
+              shortPathPrefix: '/s/',
+              clientId: 'cid_2026',
+              clientSecret: encryptedClientSecret.ciphertext,
+              clientSecretMasked: 'shpss_fre...abcd',
+              cachedAccessToken: null,
+              tokenExpiresAt: new Date(Date.now() - 60_000),
+              grantedScopes: null,
+              encryptionKeyVersion: encryptedClientSecret.keyVersion,
+            },
+          }),
+        },
+        storeShopifySetting: {
+          update: vi.fn().mockResolvedValue({}),
+        },
+        storeShortLink: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          upsert: vi.fn().mockImplementation(async ({ create }) => ({
+            id: 'sl-auto',
+            ...create,
+          })),
+        },
+      };
+
+      const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.endsWith('/admin/oauth/access_token')) {
+          expect(String(init?.body)).toContain('grant_type=client_credentials');
+          expect(String(init?.body)).toContain('client_id=cid_2026');
+          return new Response(
+            JSON.stringify({
+              access_token: 'shpua_rotated_24h_token',
+              scope: 'read_online_store_navigation,write_online_store_navigation',
+              expires_in: 86399,
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+
+        const headers = init?.headers as Record<string, string>;
+        expect(headers['X-Shopify-Access-Token']).toBe('shpua_rotated_24h_token');
+        const parsedBody = JSON.parse(String(init?.body ?? '{}')) as {
+          variables?: { urlRedirect?: { path: string; target: string } };
+        };
+        return new Response(
+          JSON.stringify({
+            data: {
+              urlRedirectCreate: {
+                urlRedirect: {
+                  id: 'gid://shopify/UrlRedirect/1001',
+                  path: parsedBody.variables?.urlRedirect?.path ?? '/s/abc123',
+                  target: parsedBody.variables?.urlRedirect?.target ?? '/products/item',
+                },
+                userErrors: [],
+              },
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        );
+      });
+
+      const adapterFactoryMock = {
+        prepareTargetFetch: vi.fn().mockResolvedValue({
+          fetch: fetchMock,
+          proxy: { enabled: false },
+          release: vi.fn().mockResolvedValue(undefined),
+        }),
+      };
+
+      const service = new StoreIntegrationsService(
+        prismaMock as never,
+        testKeyring,
+        adapterFactoryMock as never,
+        { record: vi.fn() } as never,
+      );
+
+      const res = await service.shortenStoreUrls('ws-1', 'store-1', 'user-1', {
+        urls: ['https://preaureum.com/products/item'],
+      });
+
+      expect(prismaMock.storeShopifySetting.update).toHaveBeenCalledTimes(1);
+      expect(res.items[0]?.shortUrl).toMatch(/^https:\/\/preaureum\.com\/s\/[a-z0-9]{6}$/);
     });
   });
 });

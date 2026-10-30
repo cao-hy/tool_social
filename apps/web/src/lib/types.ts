@@ -85,7 +85,10 @@ export interface StoreShopifySummaryView {
   shopDomain: string | null;
   publicDomain: string | null;
   shortPathPrefix: string;
-  adminTokenMasked: string | null;
+  clientId: string | null;
+  clientSecretMasked: string | null;
+  grantedScopes: string | null;
+  tokenExpiresAt: string | null;
   shopName: string | null;
   lastCheckedAt: string | null;
   lastCheckStatus: string | null;

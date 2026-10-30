@@ -100,7 +100,8 @@ const updateStoreShopifySchema = z.object({
   shopDomain: z.string().trim().min(1, 'Vui lòng nhập Shop Admin Domain.').max(255),
   publicDomain: z.string().trim().max(255).nullable().optional(),
   shortPathPrefix: z.string().trim().max(32).nullable().optional(),
-  adminAccessToken: z.string().trim().max(500).nullable().optional(),
+  clientId: z.string().trim().max(255).nullable().optional(),
+  clientSecret: z.string().trim().max(500).nullable().optional(),
 });
 type UpdateStoreShopifyInput = z.infer<typeof updateStoreShopifySchema>;
 

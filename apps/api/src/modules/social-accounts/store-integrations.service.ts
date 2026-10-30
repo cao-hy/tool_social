@@ -24,7 +24,8 @@ import { AuditService, type AuditContext } from '../audit/audit.service';
 import { EventsService } from '../events/events.service';
 import { Optional } from '@nestjs/common';
 
-const SHOPIFY_ADMIN_API_VERSION = '2025-01';
+const SHOPIFY_ADMIN_API_VERSION = '2026-01';
+const SHOPIFY_TOKEN_REFRESH_BUFFER_MS = 10 * 60 * 1000;
 const SHORT_CODE_ALPHABET = 'abcdefghijkmnopqrstuvwxyz23456789';
 const DEFAULT_SHORT_CODE_LENGTH = 6;
 const MAX_REDIRECT_COLLISION_RETRIES = 5;
@@ -95,7 +96,10 @@ export interface StoreShopifySummary {
   shopDomain: string | null;
   publicDomain: string | null;
   shortPathPrefix: string;
-  adminTokenMasked: string | null;
+  clientId: string | null;
+  clientSecretMasked: string | null;
+  grantedScopes: string | null;
+  tokenExpiresAt: Date | null;
   shopName: string | null;
   lastCheckedAt: Date | null;
   lastCheckStatus: string | null;
@@ -164,7 +168,10 @@ export function formatStoreShopifySummary(
     shopDomain: string;
     publicDomain: string;
     shortPathPrefix: string;
-    adminTokenMasked: string | null;
+    clientId: string;
+    clientSecretMasked: string;
+    grantedScopes: string | null;
+    tokenExpiresAt: Date | null;
     shopName: string | null;
     lastCheckedAt: Date | null;
     lastCheckStatus: string | null;
@@ -178,7 +185,10 @@ export function formatStoreShopifySummary(
       shopDomain: null,
       publicDomain: null,
       shortPathPrefix: '/s/',
-      adminTokenMasked: null,
+      clientId: null,
+      clientSecretMasked: null,
+      grantedScopes: null,
+      tokenExpiresAt: null,
       shopName: null,
       lastCheckedAt: null,
       lastCheckStatus: null,
@@ -192,7 +202,10 @@ export function formatStoreShopifySummary(
     shopDomain: setting.shopDomain,
     publicDomain: setting.publicDomain,
     shortPathPrefix: setting.shortPathPrefix,
-    adminTokenMasked: setting.adminTokenMasked,
+    clientId: setting.clientId,
+    clientSecretMasked: setting.clientSecretMasked,
+    grantedScopes: setting.grantedScopes,
+    tokenExpiresAt: setting.tokenExpiresAt,
     shopName: setting.shopName,
     lastCheckedAt: setting.lastCheckedAt,
     lastCheckStatus: setting.lastCheckStatus,
@@ -335,10 +348,17 @@ export function cleanShopifyTargetUrl(rawUrl: string, cleanTracking = true): str
   return parsed.toString();
 }
 
-function maskShopifyToken(token: string): string {
-  const trimmed = token.trim();
-  if (trimmed.length <= 12) return 'shpat_***';
+function maskShopifySecret(secret: string): string {
+  const trimmed = secret.trim();
+  if (trimmed.length <= 12) return 'shpss_***';
   return `${trimmed.slice(0, 9)}...${trimmed.slice(-4)}`;
+}
+
+class ShopifyUnauthorizedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ShopifyUnauthorizedError';
+  }
 }
 
 function generateShortCode(length = DEFAULT_SHORT_CODE_LENGTH): string {
@@ -357,6 +377,7 @@ function stripWww(host: string): string {
 @Injectable()
 export class StoreIntegrationsService {
   private readonly proxyValidator = new ProxyEndpointValidator(dns);
+  private readonly inflightTokenRefresh = new Map<string, Promise<string>>();
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
@@ -619,7 +640,8 @@ export class StoreIntegrationsService {
       shopDomain: string;
       publicDomain?: string | null;
       shortPathPrefix?: string | null;
-      adminAccessToken?: string | null;
+      clientId?: string | null;
+      clientSecret?: string | null;
     },
     auditContext: AuditContext,
   ): Promise<StoreShopifySummary> {
@@ -635,34 +657,69 @@ export class StoreIntegrationsService {
       input.shortPathPrefix ?? existing?.shortPathPrefix ?? '/s/',
     );
 
-    let plainToken: string;
-    let encryptedTokenCiphertext: string;
-    let encryptionKeyVersion: string;
-    let adminTokenMasked: string;
-
-    if (input.adminAccessToken?.trim()) {
-      plainToken = input.adminAccessToken.trim();
-      const encrypted = encryptToken(plainToken, this.keyring);
-      encryptedTokenCiphertext = encrypted.ciphertext;
-      encryptionKeyVersion = encrypted.keyVersion;
-      adminTokenMasked = maskShopifyToken(plainToken);
-    } else if (existing?.adminAccessToken) {
-      plainToken = decryptToken(existing.adminAccessToken, this.keyring);
-      encryptedTokenCiphertext = existing.adminAccessToken;
-      encryptionKeyVersion = existing.encryptionKeyVersion;
-      adminTokenMasked = existing.adminTokenMasked ?? 'shpat_***';
-    } else {
+    const resolvedClientId = input.clientId?.trim() || existing?.clientId?.trim() || '';
+    if (!resolvedClientId) {
       throw AppError.validation(
-        'Vui lòng nhập Shopify Admin API Access Token (bắt đầu bằng shpat_...).',
+        'Vui lòng nhập Client ID của App trên Shopify Dev Dashboard ($ shopify dev).',
       );
     }
 
-    const shopInfo = await this.verifyShopifyShop({
+    let plainClientSecret: string;
+    let encryptedSecretCiphertext: string;
+    let encryptionKeyVersion: string;
+    let clientSecretMasked: string;
+
+    if (input.clientSecret?.trim()) {
+      plainClientSecret = input.clientSecret.trim();
+      const encrypted = encryptToken(plainClientSecret, this.keyring);
+      encryptedSecretCiphertext = encrypted.ciphertext;
+      encryptionKeyVersion = encrypted.keyVersion;
+      clientSecretMasked = maskShopifySecret(plainClientSecret);
+    } else if (existing?.clientSecret) {
+      plainClientSecret = decryptToken(existing.clientSecret, this.keyring);
+      encryptedSecretCiphertext = existing.clientSecret;
+      encryptionKeyVersion = existing.encryptionKeyVersion;
+      clientSecretMasked = existing.clientSecretMasked || 'shpss_***';
+    } else {
+      throw AppError.validation(
+        'Vui lòng nhập Client Secret (shpss_...) của App trên Shopify Dev Dashboard ($ shopify dev).',
+      );
+    }
+
+    const targetFetch = await this.adapterFactory.prepareTargetFetch(
       workspaceId,
       storeId,
-      shopDomain,
-      adminAccessToken: plainToken,
-    });
+      'SHOPIFY',
+    );
+    let tokenResult: {
+      accessToken: string;
+      expiresAt: Date;
+      grantedScopes: string | null;
+    };
+    let shopInfo: {
+      shopName: string;
+      myshopifyDomain: string;
+      primaryDomainHost: string | null;
+    };
+
+    try {
+      tokenResult = await this.exchangeShopifyClientCredentials({
+        fetchImpl: targetFetch.fetch,
+        shopDomain,
+        clientId: resolvedClientId,
+        clientSecret: plainClientSecret,
+      });
+
+      shopInfo = await this.verifyShopifyShopWithFetch({
+        fetchImpl: targetFetch.fetch,
+        shopDomain,
+        adminAccessToken: tokenResult.accessToken,
+      });
+    } finally {
+      await targetFetch.release();
+    }
+
+    const encryptedAccessToken = encryptToken(tokenResult.accessToken, this.keyring);
 
     const explicitPublicDomain = normalizePublicDomain(input.publicDomain);
     const resolvedPublicDomain =
@@ -683,9 +740,13 @@ export class StoreIntegrationsService {
         shopDomain: shopInfo.myshopifyDomain || shopDomain,
         publicDomain: resolvedPublicDomain,
         shortPathPrefix,
-        adminAccessToken: encryptedTokenCiphertext,
+        clientId: resolvedClientId,
+        clientSecret: encryptedSecretCiphertext,
+        clientSecretMasked,
+        cachedAccessToken: encryptedAccessToken.ciphertext,
+        tokenExpiresAt: tokenResult.expiresAt,
+        grantedScopes: tokenResult.grantedScopes,
         encryptionKeyVersion,
-        adminTokenMasked,
         shopName: shopInfo.shopName,
         lastCheckedAt: now,
         lastCheckStatus: 'OK',
@@ -696,9 +757,13 @@ export class StoreIntegrationsService {
         shopDomain: shopInfo.myshopifyDomain || shopDomain,
         publicDomain: resolvedPublicDomain,
         shortPathPrefix,
-        adminAccessToken: encryptedTokenCiphertext,
+        clientId: resolvedClientId,
+        clientSecret: encryptedSecretCiphertext,
+        clientSecretMasked,
+        cachedAccessToken: encryptedAccessToken.ciphertext,
+        tokenExpiresAt: tokenResult.expiresAt,
+        grantedScopes: tokenResult.grantedScopes,
         encryptionKeyVersion,
-        adminTokenMasked,
         shopName: shopInfo.shopName,
         lastCheckedAt: now,
         lastCheckStatus: 'OK',
@@ -719,6 +784,8 @@ export class StoreIntegrationsService {
         shopDomain: saved.shopDomain,
         publicDomain: saved.publicDomain,
         shortPathPrefix: saved.shortPathPrefix,
+        clientId: saved.clientId,
+        grantedScopes: saved.grantedScopes,
         shopName: saved.shopName,
       },
     });
@@ -784,15 +851,25 @@ export class StoreIntegrationsService {
     }
 
     const setting = store.shopifySetting;
-    const plainToken = decryptToken(setting.adminAccessToken, this.keyring);
     const now = new Date();
+    const targetFetch = await this.adapterFactory.prepareTargetFetch(
+      workspaceId,
+      storeId,
+      'SHOPIFY',
+    );
 
     try {
-      const shopInfo = await this.verifyShopifyShop({
-        workspaceId,
+      const freshAccessToken = await this.resolveValidShopifyAccessToken({
         storeId,
+        setting,
+        fetchImpl: targetFetch.fetch,
+        forceRefresh: true,
+      });
+
+      const shopInfo = await this.verifyShopifyShopWithFetch({
+        fetchImpl: targetFetch.fetch,
         shopDomain: setting.shopDomain,
-        adminAccessToken: plainToken,
+        adminAccessToken: freshAccessToken,
       });
 
       const updated = await this.prisma.storeShopifySetting.update({
@@ -848,6 +925,8 @@ export class StoreIntegrationsService {
         checkError: safeError,
         shopify: formatStoreShopifySummary(updated),
       };
+    } finally {
+      await targetFetch.release();
     }
   }
 
@@ -891,7 +970,6 @@ export class StoreIntegrationsService {
       throw AppError.validation('Custom slug chỉ áp dụng khi rút gọn 1 link đơn lẻ.');
     }
 
-    const plainToken = decryptToken(setting.adminAccessToken, this.keyring);
     const targetFetch = await this.adapterFactory.prepareTargetFetch(
       workspaceId,
       storeId,
@@ -899,6 +977,23 @@ export class StoreIntegrationsService {
     );
 
     try {
+      let currentAccessToken = await this.resolveValidShopifyAccessToken({
+        storeId,
+        setting,
+        fetchImpl: targetFetch.fetch,
+        forceRefresh: false,
+      });
+
+      const getFreshTokenOnUnauthorized = async () => {
+        currentAccessToken = await this.resolveValidShopifyAccessToken({
+          storeId,
+          setting,
+          fetchImpl: targetFetch.fetch,
+          forceRefresh: true,
+        });
+        return currentAccessToken;
+      };
+
       const uniqueRawUrls = [...new Set(input.urls.map((u) => u.trim()).filter(Boolean))];
       const resultsByRawUrl = new Map<string, ShortenedLinkItem>();
 
@@ -913,7 +1008,8 @@ export class StoreIntegrationsService {
                 storeId,
                 actorUserId,
                 setting,
-                adminAccessToken: plainToken,
+                adminAccessToken: currentAccessToken,
+                onUnauthorizedRefresh: getFreshTokenOnUnauthorized,
                 rawUrl,
                 cleanTracking,
                 customSlug,
@@ -977,12 +1073,14 @@ export class StoreIntegrationsService {
       shortPathPrefix: string;
     };
     adminAccessToken: string;
+    onUnauthorizedRefresh?: () => Promise<string>;
     rawUrl: string;
     cleanTracking: boolean;
     customSlug?: string;
   }): Promise<ShortenedLinkItem> {
-    const { fetchImpl, workspaceId, storeId, actorUserId, setting, adminAccessToken, rawUrl } =
-      params;
+    const { fetchImpl, workspaceId, storeId, actorUserId, setting, rawUrl } = params;
+    let activeAccessToken = params.adminAccessToken;
+    let refreshedOnce = false;
 
     const cleanedUrl = cleanShopifyTargetUrl(rawUrl, params.cleanTracking);
     const parsed = new URL(cleanedUrl);
@@ -1079,23 +1177,52 @@ export class StoreIntegrationsService {
         }
       `;
 
-      const data = await this.executeShopifyGraphql<{
+      type RedirectMutationData = {
         urlRedirectCreate?: {
           urlRedirect?: { id: string; path: string; target: string } | null;
           userErrors?: Array<{ field?: string[] | null; message: string }>;
         };
-      }>({
-        fetchImpl,
-        shopDomain: setting.shopDomain,
-        adminAccessToken,
-        query: mutation,
-        variables: {
-          urlRedirect: {
-            path: shortPath,
-            target: shopifyRedirectTarget,
+      };
+
+      let data: RedirectMutationData;
+      try {
+        data = await this.executeShopifyGraphql<RedirectMutationData>({
+          fetchImpl,
+          shopDomain: setting.shopDomain,
+          adminAccessToken: activeAccessToken,
+          query: mutation,
+          variables: {
+            urlRedirect: {
+              path: shortPath,
+              target: shopifyRedirectTarget,
+            },
           },
-        },
-      });
+          throwOnUnauthorized: Boolean(params.onUnauthorizedRefresh && !refreshedOnce),
+        });
+      } catch (err) {
+        if (
+          err instanceof ShopifyUnauthorizedError &&
+          params.onUnauthorizedRefresh &&
+          !refreshedOnce
+        ) {
+          refreshedOnce = true;
+          activeAccessToken = await params.onUnauthorizedRefresh();
+          data = await this.executeShopifyGraphql<RedirectMutationData>({
+            fetchImpl,
+            shopDomain: setting.shopDomain,
+            adminAccessToken: activeAccessToken,
+            query: mutation,
+            variables: {
+              urlRedirect: {
+                path: shortPath,
+                target: shopifyRedirectTarget,
+              },
+            },
+          });
+        } else {
+          throw err;
+        }
+      }
 
       const payload = data.urlRedirectCreate;
       const userErrors = payload?.userErrors ?? [];
@@ -1151,9 +1278,206 @@ export class StoreIntegrationsService {
     throw AppError.conflict(`Không tạo được mã rút gọn sau ${maxAttempts} lần thử: ${lastError}`);
   }
 
-  private async verifyShopifyShop(params: {
-    workspaceId: string;
+  private async resolveValidShopifyAccessToken(params: {
     storeId: string;
+    setting: {
+      shopDomain: string;
+      clientId: string;
+      clientSecret: string;
+      cachedAccessToken?: string | null;
+      tokenExpiresAt?: Date | null;
+    };
+    fetchImpl: typeof fetch;
+    forceRefresh: boolean;
+  }): Promise<string> {
+    const { storeId, setting, fetchImpl, forceRefresh } = params;
+
+    if (
+      !forceRefresh &&
+      setting.cachedAccessToken &&
+      setting.tokenExpiresAt &&
+      setting.tokenExpiresAt.getTime() - Date.now() > SHOPIFY_TOKEN_REFRESH_BUFFER_MS
+    ) {
+      try {
+        return decryptToken(setting.cachedAccessToken, this.keyring);
+      } catch {
+        // Fall through to re-exchange if keyring decryption fails
+      }
+    }
+
+    const existingPromise = this.inflightTokenRefresh.get(storeId);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const refreshPromise = (async () => {
+      const plainClientSecret = decryptToken(setting.clientSecret, this.keyring);
+      const exchanged = await this.exchangeShopifyClientCredentials({
+        fetchImpl,
+        shopDomain: setting.shopDomain,
+        clientId: setting.clientId,
+        clientSecret: plainClientSecret,
+      });
+
+      const encryptedAccessToken = encryptToken(exchanged.accessToken, this.keyring);
+      await this.prisma.storeShopifySetting.update({
+        where: { storeId },
+        data: {
+          cachedAccessToken: encryptedAccessToken.ciphertext,
+          tokenExpiresAt: exchanged.expiresAt,
+          ...(exchanged.grantedScopes ? { grantedScopes: exchanged.grantedScopes } : {}),
+        },
+      });
+
+      setting.cachedAccessToken = encryptedAccessToken.ciphertext;
+      setting.tokenExpiresAt = exchanged.expiresAt;
+
+      return exchanged.accessToken;
+    })();
+
+    this.inflightTokenRefresh.set(storeId, refreshPromise);
+    try {
+      return await refreshPromise;
+    } finally {
+      this.inflightTokenRefresh.delete(storeId);
+    }
+  }
+
+  private async exchangeShopifyClientCredentials(params: {
+    fetchImpl: typeof fetch;
+    shopDomain: string;
+    clientId: string;
+    clientSecret: string;
+  }): Promise<{
+    accessToken: string;
+    expiresAt: Date;
+    grantedScopes: string | null;
+  }> {
+    const endpoint = `https://${params.shopDomain}/admin/oauth/access_token`;
+    const body = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: params.clientId,
+      client_secret: params.clientSecret,
+    }).toString();
+
+    let response: Response;
+    try {
+      response = await params.fetchImpl(endpoint, {
+        method: 'POST',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15_000),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
+        },
+        body,
+      });
+    } catch (error) {
+      const msg = scrubSecretsFromText(
+        error instanceof Error ? error.message : 'Lỗi kết nối mạng tới Shopify OAuth.',
+      );
+      throw AppError.conflict(`Không thể kết nối tới Shopify OAuth (${params.shopDomain}): ${msg}`);
+    }
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location') ?? '';
+      const suggestedMatch = /([a-z0-9-]+\.myshopify\.com)/i.exec(location);
+      const hint = suggestedMatch?.[1]
+        ? ` Hãy đổi Shop Admin Domain thành "${suggestedMatch[1].toLowerCase()}".`
+        : '';
+      throw AppError.validation(
+        `Shopify trả về HTTP ${response.status} Redirect cho "${params.shopDomain}".${hint}`,
+      );
+    }
+
+    if (response.status === 404) {
+      throw AppError.validation(
+        `Không tìm thấy cửa hàng Shopify "${params.shopDomain}" (HTTP 404). Hãy kiểm tra lại tên miền *.myshopify.com.`,
+      );
+    }
+
+    const rawText = await response.text();
+    let parsedJson: {
+      access_token?: string;
+      scope?: string;
+      expires_in?: number;
+      error?: string;
+      error_description?: string;
+      errors?: string | Record<string, unknown>;
+    } = {};
+    try {
+      parsedJson = JSON.parse(rawText) as typeof parsedJson;
+    } catch {
+      // Non-JSON error page from Shopify
+    }
+
+    if (!response.ok) {
+      const rawCode = [
+        parsedJson.error,
+        parsedJson.error_description,
+        typeof parsedJson.errors === 'string' ? parsedJson.errors : '',
+        rawText.slice(0, 240),
+      ]
+        .filter(Boolean)
+        .join(' ');
+
+      if (/app_not_installed/i.test(rawCode)) {
+        throw AppError.validation(
+          `App chưa được cài đặt lên Store "${params.shopDomain}" (app_not_installed). Trên trang $ shopify dev → chọn App → Home → bấm "Install app" lên đúng Store này rồi thử lại.`,
+        );
+      }
+      if (/shop_not_permitted/i.test(rawCode)) {
+        throw AppError.validation(
+          `Shopify từ chối "shop_not_permitted": App và Store "${params.shopDomain}" không nằm cùng 1 Organization. Hãy kiểm tra góc dưới bên trái trang $ shopify dev đang chọn đúng Store này rồi tạo App trong đó.`,
+        );
+      }
+      if (
+        /invalid_client|unauthorized|invalid api key/i.test(rawCode) ||
+        response.status === 401 ||
+        response.status === 403
+      ) {
+        throw AppError.validation(
+          `Client ID hoặc Client Secret không chính xác (HTTP ${response.status}). Hãy mở $ shopify dev → chọn App → Settings để copy đúng Client ID và Client Secret.`,
+        );
+      }
+
+      throw AppError.validation(
+        `Shopify từ chối cấp Access Token (HTTP ${response.status}): ${scrubSecretsFromText(rawCode.slice(0, 200) || 'Lỗi không xác định')}`,
+      );
+    }
+
+    const accessToken = parsedJson.access_token?.trim();
+    if (!accessToken) {
+      throw AppError.conflict('Shopify OAuth không trả về access_token hợp lệ.');
+    }
+
+    const grantedScopes = parsedJson.scope?.trim() || null;
+    if (grantedScopes) {
+      const scopeSet = new Set(
+        grantedScopes
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      );
+      if (!scopeSet.has('write_online_store_navigation')) {
+        throw AppError.validation(
+          `App trên $ shopify dev chưa bật quyền "write_online_store_navigation" (quyền hiện tại: ${grantedScopes}). Hãy vào App → Versions → thêm "read_online_store_navigation" & "write_online_store_navigation" → bấm Release → cập nhật lên Store.`,
+        );
+      }
+    }
+
+    const expiresInSeconds = Math.max(300, Number(parsedJson.expires_in) || 86_399);
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+
+    return {
+      accessToken,
+      expiresAt,
+      grantedScopes,
+    };
+  }
+
+  private async verifyShopifyShopWithFetch(params: {
+    fetchImpl: typeof fetch;
     shopDomain: string;
     adminAccessToken: string;
   }): Promise<{
@@ -1161,49 +1485,40 @@ export class StoreIntegrationsService {
     myshopifyDomain: string;
     primaryDomainHost: string | null;
   }> {
-    const targetFetch = await this.adapterFactory.prepareTargetFetch(
-      params.workspaceId,
-      params.storeId,
-      'SHOPIFY',
-    );
-    try {
-      const query = `
-        query SocialHubVerifyShop {
-          shop {
-            name
-            myshopifyDomain
-            primaryDomain {
-              host
-              url
-            }
+    const query = `
+      query SocialHubVerifyShop {
+        shop {
+          name
+          myshopifyDomain
+          primaryDomain {
+            host
+            url
           }
         }
-      `;
-      const data = await this.executeShopifyGraphql<{
-        shop?: {
-          name: string;
-          myshopifyDomain: string;
-          primaryDomain?: { host?: string | null; url?: string | null } | null;
-        };
-      }>({
-        fetchImpl: targetFetch.fetch,
-        shopDomain: params.shopDomain,
-        adminAccessToken: params.adminAccessToken,
-        query,
-      });
-
-      if (!data.shop) {
-        throw AppError.validation('Không đọc được thông tin cửa hàng từ Shopify Admin API.');
       }
-
-      return {
-        shopName: data.shop.name,
-        myshopifyDomain: data.shop.myshopifyDomain.toLowerCase(),
-        primaryDomainHost: data.shop.primaryDomain?.host?.toLowerCase() ?? null,
+    `;
+    const data = await this.executeShopifyGraphql<{
+      shop?: {
+        name: string;
+        myshopifyDomain: string;
+        primaryDomain?: { host?: string | null; url?: string | null } | null;
       };
-    } finally {
-      await targetFetch.release();
+    }>({
+      fetchImpl: params.fetchImpl,
+      shopDomain: params.shopDomain,
+      adminAccessToken: params.adminAccessToken,
+      query,
+    });
+
+    if (!data.shop) {
+      throw AppError.validation('Không đọc được thông tin cửa hàng từ Shopify Admin API.');
     }
+
+    return {
+      shopName: data.shop.name,
+      myshopifyDomain: data.shop.myshopifyDomain.toLowerCase(),
+      primaryDomainHost: data.shop.primaryDomain?.host?.toLowerCase() ?? null,
+    };
   }
 
   private async executeShopifyGraphql<T>(params: {
@@ -1212,6 +1527,7 @@ export class StoreIntegrationsService {
     adminAccessToken: string;
     query: string;
     variables?: Record<string, Prisma.JsonValue | Record<string, unknown>>;
+    throwOnUnauthorized?: boolean;
   }): Promise<T> {
     const endpoint = `https://${params.shopDomain}/admin/api/${SHOPIFY_ADMIN_API_VERSION}/graphql.json`;
     let response: Response;
@@ -1248,9 +1564,13 @@ export class StoreIntegrationsService {
       );
     }
 
+    if (response.status === 401 && params.throwOnUnauthorized) {
+      throw new ShopifyUnauthorizedError('Shopify access token expired or revoked');
+    }
+
     if (response.status === 401 || response.status === 403) {
       throw AppError.validation(
-        `Shopify từ chối xác thực (HTTP ${response.status}). Hãy kiểm tra lại Admin API Access Token (shpat_...) và đảm bảo Custom App đã được Install trên Store "${params.shopDomain}".`,
+        `Shopify từ chối xác thực (HTTP ${response.status}). Hãy kiểm tra lại Client ID / Client Secret và đảm bảo App trên $ shopify dev đã được Install lên Store "${params.shopDomain}".`,
       );
     }
 
@@ -1278,7 +1598,7 @@ export class StoreIntegrationsService {
           : json.errors.map((err) => err.message || 'GraphQL error').join('; ');
       if (/access denied|write_online_store_navigation|write_content/i.test(rawMessage)) {
         throw AppError.validation(
-          'Token Shopify thiếu quyền tạo URL Redirect. Trong Shopify Admin → Settings → Apps and sales channels → Develop apps → Configuration, hãy tích bật quyền "write_online_store_navigation" (URL Redirects) và "read_online_store_navigation", bấm Save rồi Install lại.',
+          'App Shopify thiếu quyền tạo URL Redirect. Trên $ shopify dev → chọn App → Versions → thêm quyền "write_online_store_navigation" và "read_online_store_navigation" → bấm Release → Install/Update lại lên Store.',
         );
       }
       throw AppError.validation(`Lỗi Shopify GraphQL: ${scrubSecretsFromText(rawMessage)}`);
