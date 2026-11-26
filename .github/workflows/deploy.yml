@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: production-deploy
-  cancel-in-progress: false
+  group: production-deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -17,6 +17,9 @@ permissions:
 jobs:
   verify:
     name: Verify
+    # Chỉ tự động chạy khi kích hoạt bằng tay (Run workflow) hoặc khi bật biến AUTO_DEPLOY='true' trên GitHub.
+    # Khi chưa cần deploy lên VPS, push code lên main sẽ tự động Skip trong 0 giây mà không cần sửa lại code.
+    if: github.event_name == 'workflow_dispatch' || vars.AUTO_DEPLOY == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -126,6 +129,9 @@ jobs:
     name: Deploy
     runs-on: ubuntu-latest
     needs: build-images
+    concurrency:
+      group: production-vps-ssh-deploy
+      cancel-in-progress: false
     environment: production
     steps:
       - name: Checkout

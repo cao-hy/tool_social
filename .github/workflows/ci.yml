@@ -107,6 +107,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Quét secret bị commit
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -120,18 +125,13 @@ jobs:
       - name: Kiểm tra lỗ hổng dependency
         run: npm run security:audit
 
-      - name: Quét secret bị commit
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   docker:
     name: Build Docker image
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Build image tốn thời gian; chỉ chạy trên PR và nhánh chính, không chạy
-    # cho mọi push nhánh phụ.
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    # Chỉ build thử Docker image trên Pull Request (hoặc khi bật biến VERIFY_DOCKER_ON_PUSH=true)
+    # để tránh build trùng lặp 7-8 phút với deploy.yml khi push lên main.
+    if: github.event_name == 'pull_request' || vars.VERIFY_DOCKER_ON_PUSH == 'true'
 
     steps:
       - uses: actions/checkout@v4
