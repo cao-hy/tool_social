@@ -15,9 +15,9 @@ import type { ReactNode } from 'react';
 
 export const PRODUCT_NAME = 'SocialHub_B6';
 export const OPERATOR_NAME = 'b6-teams';
-export const PUBLIC_DOMAIN = 'https://social.b6-team.site';
-export const PUBLIC_DOMAIN_LABEL = 'social.b6-team.site';
-export const SUPPORT_EMAIL = 'support@b6-team.site';
+export const PUBLIC_DOMAIN = 'https://social.b6-team.com';
+export const PUBLIC_DOMAIN_LABEL = 'social.b6-team.com';
+export const SUPPORT_EMAIL = 'support@b6-team.com';
 export const LOGO_PATH = '/logo_b6.png';
 
 export const publicNavLinks = [
